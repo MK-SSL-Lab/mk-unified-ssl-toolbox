@@ -2,6 +2,7 @@ import os
 import re
 import numpy as np
 import torch
+import logging
 import torch.nn as nn
 from tqdm import tqdm
 from datetime import datetime
@@ -10,7 +11,7 @@ from torch.nn.utils.clip_grad import clip_grad_norm_
 
 from AK_SSL.multimodal.models import *
 from AK_SSL.vision.models.modules.losses.nt_xent import NT_Xent
-
+from AK_SSL.utils import configure_logging  
 
 class Trainer:
 
@@ -19,6 +20,8 @@ class Trainer:
         method: str,
         image_encoder: nn.Module,
         text_encoder: nn.Module,
+        configure_logger: bool = False,
+        log_level: int = logging.INFO,
         mixed_precision_training: bool = True,
         save_dir: str = ".",
         checkpoint_interval: int = 10,
@@ -50,12 +53,26 @@ class Trainer:
                       or used to customize the training process.
         """
 
+        if configure_logger:
+            configure_logging()
+
+
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.setLevel(log_level)
+        self.logger.info("Multimodal Trainer initialized.")
+
+        self.logger.setLevel(logging.INFO if verbose else logging.WARNING)
+
+
         self.method = method
         self.checkpoint_interval = checkpoint_interval
         self.reload_checkpoint = reload_checkpoint
-        self.verbose = verbose
         self.mixed_precision_training = mixed_precision_training
 
+
+
+
+        
         self.save_dir = save_dir + f"/{self.method}/"
 
         if not os.path.exists(self.save_dir):
@@ -64,12 +81,17 @@ class Trainer:
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.num_workers = os.cpu_count()
 
-        if self.verbose:
-            print("----------------AK_SSL: Multimodal----------------")
-            print("Number of workers:", self.num_workers)
-            print("Device:", self.device)
-            print("--------------------------------------")
-            print(f"Method: {self.method}")
+
+
+        self.logger.info(
+            "\n"
+            "---------------- AK_SSL: Multimodal ----------------\n"
+            f"Number of workers : {self.num_workers}\n"
+            f"Device            : {self.device}\n"
+            f"Method            : {self.method}\n"
+            "----------------------------------------------------"
+        )
+
 
         match self.method.lower():
             case "clip":
@@ -79,19 +101,19 @@ class Trainer:
                     device=self.device,
                     **kwargs,
                 )
-                if self.verbose:
-                    print("Embedding Dimension:", self.model.embed_dim)
-                    print(
-                        "Dimension of the image features:", self.model.image_feature_dim
-                    )
-                    print(
-                        "Dimension of the text features:", self.model.text_feature_dim
-                    )
-                    print(
-                        f"Loss Function:{'SigLIP loss' if self.model.use_siglip else 'Contrastive loss'}"
-                    )
-                    print("Initial Tau", self.model.init_tau)
-                    print("Initial Bias", self.model.init_bias)
+
+
+                self.logger.info(
+                    "\n"
+                    "----------------CLIP Configuration----------------\n"
+                    f"Embedding Dimension           : {self.model.embed_dim}\n"
+                    f"Dimension of image features   : {self.model.image_feature_dim}\n"
+                    f"Dimension of text features    : {self.model.text_feature_dim}\n"
+                    f"Loss Function                 : {'SigLIP loss' if self.model.use_siglip else 'Contrastive loss'}\n"
+                    f"Initial Tau                   : {self.model.init_tau}\n"
+                    f"Initial Bias                  : {self.model.init_bias}"
+                )
+
 
             case "albef":
                 self.model = ALBEF(
@@ -100,19 +122,21 @@ class Trainer:
                     device=self.device,
                     **kwargs,
                 )
-                if self.verbose:
-                    print("MLM Probability:", self.model.mlm_probability)
-                    print("Embedding Dimension:", self.model.embed_dim)
-                    print(
-                        "Dimension of the image features:", self.model.image_feature_dim
-                    )
-                    print(
-                        "Dimension of the text features:", self.model.text_feature_dim
-                    )
-                    print("Temperature:", self.model.temp)
-                    print("Queue Size:", self.model.queue_size)
-                    print("Momentum:", self.model.momentum)
-                    print("Alpha:", self.model.alpha)
+
+
+
+                self.logger.info(
+                    "\n"
+                    "---------------- ALBEF Configuration ----------------\n"
+                    f"MLM Probability              : {self.model.mlm_probability}\n"
+                    f"Embedding Dimension          : {self.model.embed_dim}\n"
+                    f"Dimension of image features  : {self.model.image_feature_dim}\n"
+                    f"Dimension of text features   : {self.model.text_feature_dim}\n"
+                    f"Temperature                  : {self.model.temp}\n"
+                    f"Queue Size                   : {self.model.queue_size}\n"
+                    f"Momentum                     : {self.model.momentum}\n"
+                    f"Alpha                        : {self.model.alpha}"
+                )
 
             case "simvlm":
                 self.model = SimVLM(
@@ -120,19 +144,21 @@ class Trainer:
                     transformer_decoder=text_encoder,
                     **kwargs,
                 )
-                if self.verbose:
-                    print("Vocabulary Size:", self.model.vocab_size)
-                    print("Dimension of Features:", self.model.feature_dim)
-                    print("Maximum Sequence Length:", self.model.max_seq_len)
-                    print(
-                        "Maximum Truncation Text Length:", self.model.max_trunc_txt_len
-                    )
-                    print("Prefix Text Length:", self.model.prefix_txt_len)
-                    print("Target Text Length:", self.model.target_txt_len)
-                    print("Padding Index:", self.model.pad_idx)
-                    print("Resolution of Images:", self.model.image_resolution)
-                    print("Patch Size:", self.model.patch_size)
-                    print("Number of Channels:", self.model.num_channels)
+
+                self.logger.info(
+                    "\n"
+                    "---------------- SimVLM Configuration ----------------\n"
+                    f"Vocabulary Size               : {self.model.vocab_size}\n"
+                    f"Dimension of Features         : {self.model.feature_dim}\n"
+                    f"Maximum Sequence Length       : {self.model.max_seq_len}\n"
+                    f"Max Truncation Text Length    : {self.model.max_trunc_txt_len}\n"
+                    f"Prefix Text Length            : {self.model.prefix_txt_len}\n"
+                    f"Target Text Length            : {self.model.target_txt_len}\n"
+                    f"Padding Index                 : {self.model.pad_idx}\n"
+                    f"Resolution of Images          : {self.model.image_resolution}\n"
+                    f"Patch Size                    : {self.model.patch_size}\n"
+                    f"Number of Channels            : {self.model.num_channels}"
+                )
 
             case "slip":
                 self.model = SLIP(
@@ -141,49 +167,56 @@ class Trainer:
                     device=self.device,
                     **kwargs,
                 )
-                if self.verbose:
-                    print("Embedding Dimension:", self.model.embed_dim)
-                    print(
-                        "Dimension of the image features:", self.model.image_feature_dim
-                    )
-                    print(
-                        "Dimension of the text features:", self.model.text_feature_dim
-                    )
-                    print("Dimension of the MLP", self.model.mlp_dim)
+
+                self.logger.info(
+                    "\n"
+                    "---------------- SLIP Configuration ----------------\n"
+                    f"Embedding Dimension           : {self.model.embed_dim}\n"
+                    f"Dimension of image features   : {self.model.image_feature_dim}\n"
+                    f"Dimension of text features    : {self.model.text_feature_dim}\n"
+                    f"Dimension of the MLP          : {self.model.mlp_dim}"
+                )
 
             case "uniter":
                 self.model = UNITER(
                     image_encoder=image_encoder, text_encoder=text_encoder, **kwargs
                 )
-                if self.verbose:
-                    print("Hidden Size:", self.model.hidden_size)
-                    print("Number of Answers:", self.model.num_answer)
-                    print(
-                        "Attention Dropout Probability:",
-                        self.model.attention_probs_dropout_prob,
-                    )
-                    print("Initializer Range:", self.model.initializer_range)
-                    print("Pooler:", self.model.pooler)
-                    print("Encoder:", self.model.encoder)
+
+                self.logger.info(
+                    "\n"
+                    "---------------- UNITER Configuration ----------------\n"
+                    f"Hidden Size                    : {self.model.hidden_size}\n"
+                    f"Number of Answers              : {self.model.num_answer}\n"
+                    f"Attention Dropout Probability  : {self.model.attention_probs_dropout_prob}\n"
+                    f"Initializer Range              : {self.model.initializer_range}\n"
+                    f"Pooler                         : {self.model.pooler}\n"
+                    f"Encoder                        : {self.model.encoder}"
+                )
 
             case "vse":
                 self.model = VSE(
                     image_encoder=image_encoder, text_encoder=text_encoder, **kwargs
                 )
-                if self.verbose:
-                    print("Margin:", self.model.margin)
+
+                self.logger.info(
+                    "\n"
+                    "---------------- VSE Configuration ----------------\n"
+                    f"Margin : {self.model.margin}"
+                )
 
             case _:
+                self.logger.error(f"Unsupported method: {self.method}")
                 raise ValueError(f"Method {self.method} not supported")
 
         self.model = self.model.to(self.device)
 
-        if self.verbose:
-            print(
-                "Model parameters:",
-                f"{np.sum([int(np.prod(p.shape)) for p in self.model.parameters()]):,}",
-            )
-            print("--------------------------------------")
+        self.logger.info(
+            "\n"
+            "---------------- Model Parameters ----------------\n"
+            f"Total Parameters : {np.sum([int(np.prod(p.shape)) for p in self.model.parameters()]):,}\n"
+            "--------------------------------------------------"
+        )
+
 
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.writer = SummaryWriter("{}/Logs/{}".format(self.save_dir, self.timestamp))
@@ -573,8 +606,15 @@ class Trainer:
 
     def load_checkpoint(self, checkpont_dir: str):
         self.model.load_state_dict(torch.load(checkpont_dir))
-        if self.verbose:
-            print("Checkpoint loaded.")
+
+
+        self.logger.info(
+            "\n"
+            "---------------- Checkpoint ----------------\n"
+            "Checkpoint loaded.\n"
+            "--------------------------------------------"
+        )
+
 
     def _reload_latest_checkpoint(self):
         checkpoints = os.listdir(self.save_dir)
@@ -591,9 +631,16 @@ class Trainer:
         match = re.search(r"epoch(\d+)", sorted_checkpoints[-1])
         if match:
             epoch = int(match.group(1))
-            if self.verbose:
-                print(f"Starting Epoch: {epoch}")
+
+            self.logger.info(
+                "\n"
+                "---------------- Checkpoint Reload ----------------\n"
+                f"Starting Epoch : {epoch}\n"
+                "---------------------------------------------------"
+            )
+
         else:
+            self.logger.error("No epoch number found in the checkpoint name.")
             raise ValueError("No epoch number found in the checkpoint name.")
 
         return epoch
