@@ -20,7 +20,7 @@ class Trainer:
         method: str,
         image_encoder: nn.Module,
         text_encoder: nn.Module,
-        configure_logger: bool = False,
+        configure_logger: bool = True,
         log_level: int = logging.INFO,
         mixed_precision_training: bool = True,
         save_dir: str = ".",
