@@ -2,6 +2,7 @@ import os
 import re
 import torch
 import numpy as np
+import os
 from torch import nn
 from tqdm.auto import tqdm
 from datetime import datetime
@@ -9,6 +10,7 @@ from torch.utils.data import Subset
 from torcheval.metrics.functional import multiclass_accuracy
 
 from torch.utils.tensorboard import SummaryWriter
+
 
 
 from AK_SSL.vision.models import *
@@ -73,12 +75,14 @@ class Trainer:
         self.verbose = verbose
         self.mixed_precision_training = mixed_precision_training
 
-        self.save_dir = save_dir + f"/{self.method}/"
+        self.save_dir = os.path.join(save_dir, self.method)
+        
 
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir)
 
-        self.checkpoint_path = self.save_dir + "Pretext/"
+
+        self.checkpoint_path = os.path.join(self.save_dir , "Pretext")
 
         if not os.path.exists(self.checkpoint_path):
             os.makedirs(self.checkpoint_path)
