@@ -293,12 +293,8 @@ class Trainer:
                 )
 
             case _:
-                self.logger.error(
-                    "\n"
-                    "---------------- Configuration Error ----------------\n"
-                    f"Method '{self.method}' not supported.\n"
-                    "-----------------------------------------------------"
-                )
+                self.logger.error(f"Unsupported method: {self.method}")
+                
                 raise ValueError(f"Method {self.method} not supported")
 
         self.model = self.model.to(self.device)
@@ -411,6 +407,8 @@ class Trainer:
                     weight_decay=weight_decay,
                 )
             case _:
+                self.logger.error(f"Unsupported Optimizer: {optimizer}")
+                
                 raise ValueError(f"Optimizer {optimizer} not supported")
 
         train_loader = torch.utils.data.DataLoader(
@@ -491,6 +489,9 @@ class Trainer:
                 )
             case "finetune":
                 if not 0 <= fine_tuning_data_proportion <= 1:
+
+                    self.logger.error(f"The fine_tuning_data_proportion parameter must be between 0 and 1.")
+                    
                     raise ValueError(
                         "The fine_tuning_data_proportion parameter must be between 0 and 1."
                     )
@@ -523,6 +524,9 @@ class Trainer:
                     net.parameters(), lr=learning_rate, weight_decay=weight_decay
                 )
             case _:
+
+                self.logger.error(f"Unsupported Optimizer: {optimizer}")
+
                 raise ValueError(f"Optimizer {optimizer} not supported")
 
         net = net.to(self.device)
@@ -623,7 +627,7 @@ class Trainer:
             "\n"
             "---------------- Save Backbone ----------------\n"
             "Backbone saved.\n"
-            f"Backbone file path : {self.save_dir + 'backbone.pth'}\n"
+            f"Backbone file path : {os.path.join(self.save_dir, 'backbone.pth')}\n"
             "------------------------------------------------"
         )
 
@@ -636,6 +640,10 @@ class Trainer:
         )
 
         if len(sorted_checkpoints) == 0:
+
+
+            self.logger.error(f"No checkpoints found in the directory")
+            
             raise ValueError("No checkpoints found in the directory")
 
         self.load_checkpoint(sorted_checkpoints[-1])
@@ -653,6 +661,8 @@ class Trainer:
 
 
         else:
+            self.logger.error(f"No epoch number found in the checkpoint name.")
+            
             raise ValueError("No epoch number found in the checkpoint name.")
 
         return epoch

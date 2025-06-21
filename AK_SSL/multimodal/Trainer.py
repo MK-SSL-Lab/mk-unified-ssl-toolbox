@@ -206,6 +206,7 @@ class Trainer:
 
             case _:
                 self.logger.error(f"Unsupported method: {self.method}")
+                
                 raise ValueError(f"Method {self.method} not supported")
 
         self.model = self.model.to(self.device)
@@ -420,6 +421,8 @@ class Trainer:
                     weight_decay=weight_decay,
                 )
             case _:
+                self.logger.error(f"Unsupported Optimizer: {optimizer}")
+                
                 raise ValueError(f"Optimizer {optimizer} not supported")
 
         if self.reload_checkpoint:
@@ -597,6 +600,8 @@ class Trainer:
                         torch.save(self.model.state_dict(), model_path)
 
             case _:
+                self.logger.error(f"Unsupported method: {self.method}")
+                
                 raise ValueError(f"Method {self.method} not supported")
 
         model_path = self.save_dir + "{}_model_{}_epoch{}.pth".format(
@@ -624,6 +629,8 @@ class Trainer:
         )
 
         if len(sorted_checkpoints) == 0:
+            self.logger.error(f"No checkpoints found in the directory")
+            
             raise ValueError("No checkpoints found in the directory")
 
         self.load_checkpoint(sorted_checkpoints[-1])
@@ -641,6 +648,7 @@ class Trainer:
 
         else:
             self.logger.error("No epoch number found in the checkpoint name.")
+            
             raise ValueError("No epoch number found in the checkpoint name.")
 
         return epoch
