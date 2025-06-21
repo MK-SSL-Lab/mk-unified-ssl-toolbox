@@ -73,7 +73,7 @@ class Trainer:
 
 
         
-        self.save_dir = save_dir + f"/{self.method}/"
+        self.save_dir = os.path.join(save_dir, self.method)
 
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir)
