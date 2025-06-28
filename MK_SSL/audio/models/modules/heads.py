@@ -1,3 +1,7 @@
+from typing import List, Optional
+
+
+
 class COLAProjectionHead(ProjectionHead):
     """
     Description:
@@ -67,3 +71,63 @@ class COLAProjectionHead(ProjectionHead):
             )
 
         super().__init__(layers)
+
+
+
+
+
+class SpeechSimCLRProjectionHead(ProjectionHead):
+    """
+    Description:
+        Initialize a new SpeechSimCLRProjectionHead instance.
+        Uses LayerNorm instead of BatchNorm as recommended for speech models.
+
+    Args:
+        input_dim: Number of input dimensions.
+        hidden_dim: Number of hidden dimensions.
+        output_dim: Number of output dimensions.
+        num_layers: Number of hidden layers (2 for v1, 3+ for v2).
+        batch_norm: Whether or not to use LayerNorm (applied across features).
+    """
+
+    def __init__(
+        self,
+        input_dim: int = 768,
+        hidden_dim: int = 768,
+        output_dim: int = 128,
+        num_layers: int = 2,
+        batch_norm: bool = True,
+        **kwargs,
+    ):
+        layers: List[Tuple[int, int, Optional[nn.Module], Optional[nn.Module]]] = []
+
+        layers.append(
+            (
+                input_dim,
+                hidden_dim,
+                nn.LayerNorm(hidden_dim) if batch_norm else None,
+                nn.ReLU(inplace=True),
+            )
+        )
+
+        for _ in range(2, num_layers):
+            layers.append(
+                (
+                    hidden_dim,
+                    hidden_dim,
+                    nn.LayerNorm(hidden_dim) if batch_norm else None,
+                    nn.ReLU(inplace=True),
+                )
+            )
+
+        layers.append(
+            (
+                hidden_dim,
+                output_dim,
+                nn.LayerNorm(output_dim) if batch_norm else None,
+                None,
+            )
+        )
+
+        super().__init__(layers)
+

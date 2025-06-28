@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Union
+from MK_SSL.audio.models.modules.heads import COLAProjectionHead
 
 class COLA(nn.Module):
     """
