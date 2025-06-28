@@ -9,9 +9,9 @@ from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn.utils.clip_grad import clip_grad_norm_
 
-from AK_SSL.multimodal.models import *
-from AK_SSL.vision.models.modules.losses.nt_xent import NT_Xent
-from AK_SSL.utils import configure_logging  
+from MK_SSL.multimodal.models import *
+from MK_SSL.vision.models.modules.losses.nt_xent import NT_Xent
+from MK_SSL.utils import configure_logging  
 
 class Trainer:
 
