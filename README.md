@@ -57,8 +57,5 @@ Pretrained checkpoints and their benchmarks will be published here.
 
 Contributions are welcome! If you'd like to add a new model or feature, please open an issue or pull request.
 
-## 📖 Citation
-
-Coming soon — please cite our paper when it's released.
 
 ---
