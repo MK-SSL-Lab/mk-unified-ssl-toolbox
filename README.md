@@ -1,2 +1,64 @@
-# mk-unified-ssl-toolbox
- A Unified Toolbox for Self-Supervised Learning Across Modalities
+<p align="center">
+  <img src="[docs/assets/logo.png](https://s33.picofile.com/file/8485413726/MK_SSL_LOGO.png)" alt="Project Logo" width="300"/>
+</p>
+
+# MK-SSL
+
+**MK-SSL** is a modular and extensible Self-Supervised Learning (SSL) toolbox focused on audio and multimodal representation learning.
+
+> 🚧 This project is under active development. More details and documentation coming soon!
+
+## 🔧 Installation
+
+```bash
+# (Coming soon)
+```
+
+## 📂 Project Structure
+
+```
+AK_SSL/
+│
+├── audio/
+│   ├── models/
+│   ├── datasets/
+│   └── ...
+├── vision/
+├── multimodal/
+├── trainer/
+├── configs/
+└── ...
+```
+
+## 📜 License
+
+This project is released under the MIT License.
+
+---
+
+Stay tuned for more updates!
+
+---
+
+## 🧪 Usage Examples (Coming Soon)
+
+```python
+from AK_SSL.audio.models import SimCLRSpeech
+
+model = SimCLRSpeech(variant="base")
+# model.forward(...)
+```
+
+## 📦 Model Zoo (Coming Soon)
+
+Pretrained checkpoints and their benchmarks will be published here.
+
+## 🙌 Contributing
+
+Contributions are welcome! If you'd like to add a new model or feature, please open an issue or pull request.
+
+## 📖 Citation
+
+Coming soon — please cite our paper when it's released.
+
+---
