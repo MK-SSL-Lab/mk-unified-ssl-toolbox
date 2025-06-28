@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from AK_SSL.multimodal.models.clip import CLIP
-from AK_SSL.vision.models.modules.transformations import SimCLRViewTransform
+from MK_SSL.multimodal.models.clip import CLIP
+from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
 
 
 class SLIP(nn.Module):

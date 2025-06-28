@@ -14,10 +14,10 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 
-from AK_SSL.vision.models import *
-from AK_SSL.vision.models.modules.losses import *
-from AK_SSL.vision.models.modules.transformations import *
-from AK_SSL.utils import configure_logging  
+from MK_SSL.vision.models import *
+from MK_SSL.vision.models.modules.losses import *
+from MK_SSL.vision.models.modules.transformations import *
+from MK_SSL.utils import configure_logging  
 
 
 class Trainer:

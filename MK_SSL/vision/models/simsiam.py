@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from AK_SSL.vision.models.modules.heads import (
+from MK_SSL.vision.models.modules.heads import (
     SimSiamPredictionHead,
     SimSiamProjectionHead,
 )
