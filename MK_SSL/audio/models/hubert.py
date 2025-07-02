@@ -3,8 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional
 
-from MK_SSL.audio.models.modules.backbones.wav2vec_feature_extractor import ConvFeatureExtractor
-from MK_SSL.audio.models.modules.encoders import TransformerEncoder
+from MK_SSL.audio.models.modules.feature_extractors import ConvFeatureExtractor
+from MK_SSL.audio.models.modules.backbones import TransformerEncoder
 
 
 class HuBERT(nn.Module):

@@ -155,8 +155,8 @@ class TransformerEncoder(nn.Module):
         Returns:
             List[Tensor]: Outputs of each transformer layer.
         """
-        x = self.embed(x)
-        x = self.dropout(x)
+        # x = self.embed(x)
+        # x = self.dropout(x)
         x = x + self.positional_encoding(x)
 
         features = []
