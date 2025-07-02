@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Union
 from MK_SSL.audio.models.modules.heads import COLAProjectionHead
+from MK_SSL.audio.models.modules.encoders import COLAEncoder
 
 class COLA(nn.Module):
     """
@@ -29,8 +30,8 @@ class COLA(nn.Module):
 
     def __init__(
         self,
-        backbone: nn.Module,
         feature_size: int,
+        backbone: nn.Module = COLAEncoder(),
         projection_dim: int = 512,
         projection_num_layers: int = 1,
         projection_batch_norm: bool = True,
