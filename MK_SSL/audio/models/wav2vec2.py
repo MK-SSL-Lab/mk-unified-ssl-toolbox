@@ -6,7 +6,7 @@ from torch import Tensor
 from typing import Optional, Tuple
 
 from MK_SSL.audio.models.modules.feature_extractors import ConvFeatureExtractor
-from MK_SSL.audio.models.modules.encoders import TransformerEncoder
+from MK_SSL.audio.models.modules.backbones import TransformerEncoder
 from MK_SSL.audio.models.modules.quantizer import GumbelVectorQuantizer
 from MK_SSL.audio.models.modules.heads import Wav2Vec2FeatureProjectionHead
 
