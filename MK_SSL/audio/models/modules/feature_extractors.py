@@ -1,6 +1,11 @@
 import torch
 import torch.nn as nn
+
 from torch import Tensor
+
+import torchaudio
+import torchaudio.transforms as T
+
 from typing import List, Tuple, Optional
 
 
@@ -75,3 +80,49 @@ class ConvFeatureExtractor(nn.Module):
                     lengths = ((lengths - module.kernel_size[0]) // module.stride[0]) + 1
 
         return x.transpose(1, 2), lengths  # (B, T', C)
+
+
+class FBANKFeatureExtractor(nn.Module):
+    """
+    Extracts 80-dimensional log Mel filterbank (FBANK) features from raw waveform.
+
+    Includes CMVN (Cepstral Mean and Variance Normalization) per utterance.
+
+    Args:
+        sample_rate (int): Audio sampling rate (default: 16000).
+        n_mels (int): Number of Mel filterbanks (default: 80).
+        cmvn_eps (float): Epsilon for CMVN stability.
+    """
+    def __init__(self, sample_rate: int = 16000, n_mels: int = 80, cmvn_eps: float = 1e-5):
+        super().__init__()
+        self.fbank = T.MelSpectrogram(
+            sample_rate=sample_rate,
+            n_fft=400,
+            win_length=400,
+            hop_length=160,
+            n_mels=n_mels,
+            center=True,
+            power=2.0,
+        )
+        self.log = T.AmplitudeToDB(stype="power", top_db=80)
+        self.cmvn_eps = cmvn_eps
+
+    def forward(self, waveforms: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            waveforms (torch.Tensor): Tensor of shape (B, T).
+
+        Returns:
+            torch.Tensor: FBANK features of shape (B, T', 80).
+        """
+        with torch.no_grad():
+            feats = self.fbank(waveforms)              # (B, 80, T')
+            feats = self.log(feats)                    # log scale
+            feats = feats.transpose(1, 2)              # -> (B, T', 80)
+
+            # Apply CMVN per sample
+            mean = feats.mean(dim=1, keepdim=True)
+            std = feats.std(dim=1, keepdim=True) + self.cmvn_eps
+            feats = (feats - mean) / std
+
+        return feats

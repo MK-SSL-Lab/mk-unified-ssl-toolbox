@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 import torchaudio.transforms as T
-from efficientnet_pytorch import EfficientNet
-
+import torchaudio
+from torchvision.models import efficientnet_b0
 from typing import Optional, Tuple, List
 
 
@@ -60,7 +60,6 @@ class TransformerEncoder(nn.Module):
 
     def __init__(
         self,
-        in_features: int,
         embed_dim: int,
         num_layers: int,
         num_heads: int,
@@ -76,8 +75,6 @@ class TransformerEncoder(nn.Module):
     ):
         super().__init__()
 
-        self.embed = nn.Linear(in_features, embed_dim)
-        self.dropout = nn.Dropout(dropout_input)
 
         self.positional_encoding = PositionalConvEmbedding(
             embed_dim=embed_dim,
@@ -120,8 +117,7 @@ class TransformerEncoder(nn.Module):
         Returns:
             Tensor: Output tensor of shape (B, T, C).
         """
-        x = self.embed(x)
-        x = self.dropout(x)
+
         x = x + self.positional_encoding(x)
 
         if lengths is not None:
@@ -178,24 +174,79 @@ class TransformerEncoder(nn.Module):
         return features
 
 
+class EfficientNetAudioEncoder(nn.Module):
+    """Encoder backbone for COLA (Contrastive Learning of Audio).
 
+    Converts raw waveform to a 1280-D latent vector using EfficientNet-B0
+    applied to log-mel spectrograms.
 
-class COLAEncoder(nn.Module):
-    def __init__(self):
+    Args:
+        sample_rate (int, optional): Input audio sampling rate. Defaults to 16 kHz.
+        n_mels (int, optional): Number of mel filter-bank bins. Defaults to 64.
+        mel_win_len (int, optional): STFT window length in milliseconds. Defaults to 25.
+        mel_hop_len (int, optional): STFT hop length in milliseconds. Defaults to 10.
+        f_min (int, optional): Minimum mel frequency (Hz). Defaults to 60.
+        f_max (int, optional): Maximum mel frequency (Hz). Defaults to 7800.
+
+    Shape:
+        * **Input** : `(B, 1, T)` — raw waveform in the range **[-1, 1]**.
+        * **Output**: `(B, 1280)` — latent embedding after global max-pooling.
+
+    """
+
+    def __init__(
+        self,
+        sample_rate: int = 16_000,
+        n_mels: int = 64,
+        mel_win_len: int = 25,
+        mel_hop_len: int = 10,
+        f_min: int = 60,
+        f_max: int = 7_800,
+    ):
         super().__init__()
-        self.backbone = EfficientNet.from_name('efficientnet-b0')
-        self.embedding_dim = 1280  # Output dimension of B0
-        self.pool = nn.AdaptiveMaxPool2d((1, 1))  # Match global max-pooling in paper
 
-    def forward(self, x):
-        """
+        # --- Time–frequency front-end ---
+        self.mel = torchaudio.transforms.MelSpectrogram(
+            sample_rate=sample_rate,
+            n_fft=int(sample_rate * mel_win_len / 1_000),
+            hop_length=int(sample_rate * mel_hop_len / 1_000),
+            n_mels=n_mels,
+            f_min=f_min,
+            f_max=f_max,
+            power=2.0,  # magnitude-squared (as in the paper)
+        )
+        self.log1p = torch.log1p
+
+        # --- EfficientNet-B0 backbone ---
+        eff = efficientnet_b0(weights=None)  # torchvision ≥ 0.15
+        # Replace first conv to accept 1 channel (copy weights’ mean)
+        old_conv = eff.features[0][0]
+        new_conv = nn.Conv2d(
+            1,
+            old_conv.out_channels,
+            kernel_size=old_conv.kernel_size,
+            stride=old_conv.stride,
+            padding=old_conv.padding,
+            bias=False,
+        )
+        with torch.no_grad():
+            new_conv.weight[:] = old_conv.weight.mean(dim=1, keepdim=True)
+        eff.features[0][0] = new_conv
+        self.encoder = eff.features  # drop classifier
+
+        self.pool = nn.AdaptiveMaxPool2d((1, 1))
+
+    def forward(self, wave: torch.Tensor) -> torch.Tensor:  # (B, 1, T)
+        """Forward pass.
+
         Args:
-            x: torch.Tensor, shape (B, 1, N_mels, T)
+            wave (torch.Tensor): Raw audio, shape `(B, 1, T)`.
 
         Returns:
-            h: torch.Tensor, shape (B, 1280)
+            torch.Tensor: Latent embedding of shape `(B, 1280)`.
         """
-        x = x.repeat(1, 3, 1, 1)  # EfficientNet expects 3 channels
-        feats = self.backbone.extract_features(x)
-        pooled = self.pool(feats).flatten(1)
+        mel = self.mel(wave.squeeze(1))          # (B, n_mels, time)
+        mel = self.log1p(mel).unsqueeze(1)       # (B, 1, n_mels, time)
+        feats = self.encoder(mel)                # (B, C, H, W)
+        pooled = self.pool(feats).flatten(1)     # (B, C)
         return pooled

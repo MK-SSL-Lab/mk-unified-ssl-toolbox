@@ -18,7 +18,6 @@ class Wav2Vec2(nn.Module):
 
     Args:
         variant (str): Model variant to use. One of {"base", "large", "large_lv60k"}.
-        encoder (nn.Module, optional): Custom encoder module. If None, a default TransformerEncoder is created.
         quantizer_groups (int): Number of groups in the codebook quantizer.
         quantizer_vars (int): Number of total codebook entries.
         quantizer_temp (float): Initial temperature for the Gumbel softmax quantizer.
@@ -27,7 +26,6 @@ class Wav2Vec2(nn.Module):
     def __init__(
         self,
         variant: str = "large",
-        encoder: nn.Module = None,
         quantizer_num_groups: int = 2,
         quantizer_num_entries_per_codebook: int = 320,
         quantizer_temp: float = 2.0,
@@ -45,24 +43,21 @@ class Wav2Vec2(nn.Module):
             conv_layers=config["conv_layers"],
             conv_bias=config["conv_bias"],
         )
-        if encoder is not None:
-            self.encoder = encoder
-        else:   
-            self.encoder = TransformerEncoder(
-                in_features=config["encoder_embed_dim"] ,
-                embed_dim=config["encoder_embed_dim"],
-                num_layers=config["encoder_num_layers"],
-                num_heads=config["encoder_num_heads"],
-                ff_interm_features=config["encoder_ff_interm_features"],
-                dropout_input=config["encoder_projection_dropout"],
-                attention_dropout=config["encoder_attention_dropout"],
-                ff_dropout=config["encoder_ff_interm_dropout"],
-                final_dropout=config["encoder_dropout"],
-                layer_norm_first=config["encoder_layer_norm_first"],
-                layer_drop=config["encoder_layer_drop"],
-                pos_conv_kernel=config["encoder_pos_conv_kernel"],
-                pos_conv_groups=config["encoder_pos_conv_groups"],
-            )
+
+        self.encoder = TransformerEncoder(
+            embed_dim=config["encoder_embed_dim"],
+            num_layers=config["encoder_num_layers"],
+            num_heads=config["encoder_num_heads"],
+            ff_interm_features=config["encoder_ff_interm_features"],
+            dropout_input=config["encoder_projection_dropout"],
+            attention_dropout=config["encoder_attention_dropout"],
+            ff_dropout=config["encoder_ff_interm_dropout"],
+            final_dropout=config["encoder_dropout"],
+            layer_norm_first=config["encoder_layer_norm_first"],
+            layer_drop=config["encoder_layer_drop"],
+            pos_conv_kernel=config["encoder_pos_conv_kernel"],
+            pos_conv_groups=config["encoder_pos_conv_groups"],
+        )
 
         self.quantizer = GumbelVectorQuantizer(
             dim=config["conv_layers"][-1][0],

@@ -106,6 +106,29 @@ class COLAProjectionHead(ProjectionHead):
         super().__init__(layers)
 
 
+class InputSpeechSimCLRProjectionHead(ProjectionHead):
+    """
+    Projects input features (e.g., FBANK with dim=80) to Transformer embed_dim.
+
+    Args:
+        input_dim (int): Input feature size (e.g., 80).
+        output_dim (int): Embedding dimension (e.g., 256).
+        use_layer_norm (bool): Whether to apply LayerNorm.
+        dropout (float): Dropout rate.
+    """
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        use_layer_norm: bool = True,
+        dropout: float = 0.0,
+    ):
+        norm = nn.LayerNorm(output_dim) if use_layer_norm else None
+        super().__init__([(input_dim, output_dim, norm, None)])
+        self.post_dropout = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.post_dropout(super().forward(x))
 
 
 
