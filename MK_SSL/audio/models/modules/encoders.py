@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 import torchaudio.transforms as T
+from efficientnet_pytorch import EfficientNet
 
 from typing import Optional, Tuple, List
 
@@ -175,3 +176,26 @@ class TransformerEncoder(nn.Module):
                 break
 
         return features
+
+
+
+
+class COLAEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.backbone = EfficientNet.from_name('efficientnet-b0')
+        self.embedding_dim = 1280  # Output dimension of B0
+        self.pool = nn.AdaptiveMaxPool2d((1, 1))  # Match global max-pooling in paper
+
+    def forward(self, x):
+        """
+        Args:
+            x: torch.Tensor, shape (B, 1, N_mels, T)
+
+        Returns:
+            h: torch.Tensor, shape (B, 1280)
+        """
+        x = x.repeat(1, 3, 1, 1)  # EfficientNet expects 3 channels
+        feats = self.backbone.extract_features(x)
+        pooled = self.pool(feats).flatten(1)
+        return pooled

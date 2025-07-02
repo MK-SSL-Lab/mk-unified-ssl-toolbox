@@ -1,0 +1,106 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Tuple, List, Optional
+
+
+class AudioCLIPPretraining(nn.Module):
+    """
+    AudioCLIP-style contrastive pretraining for joint audio, image, and text embeddings.
+    """
+
+    def __init__(
+        self,
+        audio_encoder: nn.Module,
+        image_encoder: nn.Module,
+        text_encoder: nn.Module,
+        temperature_init: float = 0.07,
+        text_template: str = "{}",
+    ):
+        """
+        Initializes the AudioCLIP pretraining module.
+
+        Args:
+            audio_encoder (nn.Module): Audio encoder module.
+            Defaults to ESResNeXt (ResNeXt-50-based model pretrained on AudioSet).
+            image_encoder (nn.Module): Image encoder module.
+                Defaults to ResNet-50 (CLIP version with QKV-attention layer).
+            text_encoder (nn.Module): Text encoder module.
+                Defaults to a 12-layer Transformer (CLIP version with BPE tokenizer, vocab size 49,408).
+            temperature_init (float, optional): Initial temperature scaling factor.
+                Defaults to 0.07.
+            text_template (str, optional): Template for formatting text input.
+                Defaults to "{}".
+        """
+
+        super().__init__()
+        self.audio_encoder = audio_encoder
+        self.image_encoder = image_encoder
+        self.text_encoder = text_encoder
+        self.temperature = nn.Parameter(torch.tensor(temperature_init))
+        self.text_template = text_template
+
+    def forward(
+        self,
+        audio_input: Optional[torch.Tensor] = None,
+        image_input: Optional[torch.Tensor] = None,
+        text_input: Optional[List[str]] = None,
+    ) -> Tuple[
+        Optional[torch.Tensor],  # audio_emb
+        Optional[torch.Tensor],  # image_emb
+        Optional[torch.Tensor],  # text_emb
+        Optional[torch.Tensor],  # sim_text_audio
+        Optional[torch.Tensor],  # sim_text_image
+        Optional[torch.Tensor],  # sim_audio_image
+    ]:
+        """
+        Forward pass for contrastive learning over available modality pairs.
+
+        Args:
+            audio_input (Optional[Tensor]): Audio input batch.
+            image_input (Optional[Tensor]): Image input batch.
+            text_input (Optional[List[str]]): Raw text inputs.
+
+        Returns:
+            Tuple of:
+                - audio_emb: Normalized audio embeddings.
+                - image_emb: Normalized image embeddings.
+                - text_emb: Normalized text embeddings.
+                - sim_text_audio: Similarity (text, audio).
+                - sim_text_image: Similarity (text, image).
+                - sim_audio_image: Similarity (audio, image).
+        """
+        audio_emb = image_emb = text_emb = None
+        sim_text_audio = sim_text_image = sim_audio_image = None
+
+        #encoder
+        if audio_input is not None:
+            audio_emb = F.normalize(self.audio_encoder(audio_input), dim=-1)
+
+        if image_input is not None:
+            image_emb = F.normalize(self.image_encoder(image_input), dim=-1)
+
+        if text_input is not None:
+            formatted_text = [self.text_template.format(t) for t in text_input]
+            text_emb = F.normalize(self.text_encoder(formatted_text), dim=-1)
+
+
+
+        #similarity matrix
+        if text_emb is not None and audio_emb is not None:
+            sim_text_audio = self.temperature * torch.matmul(text_emb, audio_emb.T)
+
+        if text_emb is not None and image_emb is not None:
+            sim_text_image = self.temperature * torch.matmul(text_emb, image_emb.T)
+
+        if audio_emb is not None and image_emb is not None:
+            sim_audio_image = self.temperature * torch.matmul(audio_emb, image_emb.T)
+
+        return (
+            audio_emb,
+            image_emb,
+            text_emb,
+            sim_text_audio,
+            sim_text_image,
+            sim_audio_image,
+        )
