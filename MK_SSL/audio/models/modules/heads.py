@@ -1,5 +1,38 @@
-from typing import List, Optional
+import torch
+import torch.nn as nn
+from typing import List, Optional, Tuple
 
+
+class ProjectionHead(nn.Module):
+    """
+    Description:
+        Base class for all projection and prediction heads.
+
+    Args:
+        blocks:
+            List of tuples, each denoting one block of the projection head MLP.
+            Each tuple reads (in_features, out_features, batch_norm_layer,
+            non_linearity_layer).
+
+    """
+
+    def __init__(
+        self, blocks: List[Tuple[int, int, Optional[nn.Module], Optional[nn.Module]]]
+    ):
+        super().__init__()
+
+        layers = []
+        for input_dim, output_dim, batch_norm, non_linearity in blocks:
+            use_bias = not bool(batch_norm)
+            layers.append(nn.Linear(input_dim, output_dim, bias=use_bias))
+            if batch_norm:
+                layers.append(batch_norm)
+            if non_linearity:
+                layers.append(non_linearity)
+        self.layers = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor):
+        return self.layers(x)
 
 
 class COLAProjectionHead(ProjectionHead):
@@ -131,3 +164,21 @@ class SpeechSimCLRProjectionHead(ProjectionHead):
 
         super().__init__(layers)
 
+
+
+class Wav2Vec2FeatureProjectionHead(ProjectionHead):
+    """Maps ConvFeatureExtractor output to Transformer embed_dim for wav2vec 2.0."""
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        use_layer_norm: bool = True,
+        dropout: float = 0.0,
+    ):
+        norm = nn.LayerNorm(output_dim) if use_layer_norm else None
+        super().__init__([(input_dim, output_dim, norm, None)])
+        self.post_dropout = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:     # (B, T, C_in) → (B, T, C_out)
+        x = super().forward(x)
+        return self.post_dropout(x)
