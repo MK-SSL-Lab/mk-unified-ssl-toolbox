@@ -1,7 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision.models.resnet import ResNeXt
 from transformers import BertModel, BertConfig
+from torchvision.models import resnet50
+
 
 
 class ConvBlock(nn.Module):
@@ -92,3 +95,166 @@ class BERTTextEncoder(nn.Module):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         cls_representation = outputs.last_hidden_state[:, 0, :]  # [CLS] token
         return cls_representation
+
+
+
+
+
+class TimeFrequencyFrontEnd(nn.Module):
+    def __init__(self, in_channels=1, out_channels=64, kernel_size=(3, 3), stride=(1,1), padding=(1,1)):
+        super().__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        # x: (batch, 1, time, freq)
+        x = self.conv(x)
+        x = self.bn(x)
+        return self.act(x)
+
+class ESResNeXt(nn.Module):
+    def __init__(self, base_width=4, cardinality=32, layers=(3, 4, 6, 3), num_classes=512):
+        super().__init__()
+        self.front_end = TimeFrequencyFrontEnd()
+        self.backbone = ResNeXt(
+            block=ResNeXt.Bottleneck,
+            layers=layers,
+            groups=cardinality,
+            width_per_group=base_width,
+            replace_stride_with_dilation=[False, False, False],
+            norm_layer=nn.BatchNorm2d
+        )
+        # Modify first conv to accept mono-channel spec
+        self.backbone.conv1 = nn.Conv2d(
+            in_channels=64,  # after front end
+            out_channels=64,
+            kernel_size=7,
+            stride=2,
+            padding=3,
+            bias=False
+        )
+        self.pool = nn.AdaptiveAvgPool2d((1,1))
+        self.fc = nn.Linear(2048, num_classes)  # project to CLIP embed dim
+
+    def forward(self, x):
+        x = self.front_end(x)          # → (B, 64, T, F)
+        x = self.backbone.conv1(x)
+        x = self.backbone.bn1(x)
+        x = self.backbone.relu(x)
+        x = self.backbone.maxpool(x)
+
+        x = self.backbone.layer1(x)
+        x = self.backbone.layer2(x)
+        x = self.backbone.layer3(x)
+        x = self.backbone.layer4(x)
+
+        x = self.pool(x).flatten(1)   # → (B, 2048)
+        x = self.fc(x)                # → (B, 512)
+        x = F.normalize(x, p=2, dim=1)
+        return x
+
+
+
+class AttentionPool2d(nn.Module):
+    def __init__(self, spacial_dim: int, embed_dim: int, num_heads: int):
+        super().__init__()
+        self.positional_embedding = nn.Parameter(torch.randn(spacial_dim**2 + 1, embed_dim) / embed_dim**0.5)
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
+        self.c_proj = nn.Linear(embed_dim, embed_dim)
+        self.num_heads = num_heads
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        x = x.reshape(B, C, H * W).permute(0, 2, 1)  # (B, HW, C)
+        cls_token = x.mean(dim=1, keepdim=True)  # (B, 1, C)
+        x = torch.cat([cls_token, x], dim=1)  # (B, HW+1, C)
+        x = x + self.positional_embedding[: x.size(1), :]
+
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+
+        attn = F.multi_head_attention_forward(
+            query=q,
+            key=k,
+            value=v,
+            embed_dim_to_check=q.shape[-1],
+            num_heads=self.num_heads,
+            in_proj_weight=None,
+            in_proj_bias=None,
+            bias_k=None,
+            bias_v=None,
+            add_zero_attn=False,
+            dropout_p=0.0,
+            out_proj_weight=self.c_proj.weight,
+            out_proj_bias=self.c_proj.bias,
+            training=self.training,
+            need_weights=False
+        )
+        return attn[0][:, 0]  # return [CLS] token output
+
+
+class CLIPResNetImageEncoder(nn.Module):
+    def __init__(self, embed_dim=512, num_heads=8):
+        super().__init__()
+        base = resnet50(pretrained=False)
+        self.stem = nn.Sequential(base.conv1, base.bn1, base.relu, base.maxpool)
+        self.layer1 = base.layer1
+        self.layer2 = base.layer2
+        self.layer3 = base.layer3
+        self.layer4 = base.layer4
+        self.attnpool = AttentionPool2d(spacial_dim=7, embed_dim=2048, num_heads=num_heads)
+        self.fc = nn.Linear(2048, embed_dim)
+
+    def forward(self, x):
+        x = self.stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.attnpool(x)
+        x = self.fc(x)
+        return F.normalize(x, dim=-1)
+
+
+class TransformerLayer(nn.Module):
+    def __init__(self, embed_dim, num_heads, mlp_dim, dropout=0.0):
+        super().__init__()
+        self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout)
+        self.ln1 = nn.LayerNorm(embed_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, mlp_dim),
+            nn.GELU(),
+            nn.Linear(mlp_dim, embed_dim),
+        )
+        self.ln2 = nn.LayerNorm(embed_dim)
+
+    def forward(self, x):
+        attn_out, _ = self.attn(x, x, x)
+        x = self.ln1(x + attn_out)
+        mlp_out = self.mlp(x)
+        return self.ln2(x + mlp_out)
+
+
+class CLIPTextEncoder(nn.Module):
+    def __init__(self, vocab_size, embed_dim=512, max_len=77, num_layers=12, num_heads=8, mlp_dim=2048):
+        super().__init__()
+        self.token_embedding = nn.Embedding(vocab_size, embed_dim)
+        self.pos_embedding = nn.Parameter(torch.empty(max_len, embed_dim).normal_(std=embed_dim**-0.5))
+        self.transformer = nn.Sequential(
+            *[TransformerLayer(embed_dim, num_heads, mlp_dim) for _ in range(num_layers)]
+        )
+        self.ln_final = nn.LayerNorm(embed_dim)
+        self.fc = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, token_ids):
+        x = self.token_embedding(token_ids) + self.pos_embedding[:token_ids.shape[1]]
+        x = x.permute(1, 0, 2)  # for multi-head attention (T, B, C)
+        x = self.transformer(x)
+        x = x.permute(1, 0, 2)  # (B, T, C)
+        x = self.ln_final(x)
+        x = x[torch.arange(x.shape[0]), token_ids.argmax(dim=-1)]  # get <EOT> or max token
+        return F.normalize(self.fc(x), dim=-1)
