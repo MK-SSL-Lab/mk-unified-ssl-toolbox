@@ -1,69 +1,103 @@
 import torch
 import torch.nn as nn
- 
-from MK_SSL.audio.models.modules.heads import SpeechSimCLRProjectionHead
+from typing import Optional, Tuple
 
-
+from MK_SSL.audio.models.modules.heads import InputSpeechSimCLRProjectionHead, SpeechSimCLRProjectionHead
+from MK_SSL.audio.models.modules.feature_extractors import FBANKFeatureExtractor
+from MK_SSL.audio.models.modules.backbones import TransformerEncoder
 
 class SimCLRSpeech(nn.Module):
     """
     SimCLR for Speech: A framework for contrastive learning of speech representations.
-    Based on: https://arxiv.org/abs/2010.13991 (Speech SimCLR)
     """
 
     def __init__(
         self,
-        backbone: nn.Module,
-        feature_size: int,
+        embed_dim: int = 768,
         projection_dim: int = 128,
         projection_num_layers: int = 2,
         projection_batch_norm: bool = True,
+        backbone: Optional[nn.Module] = None,
+        sample_rate: int = 16000,
+        use_input_proj: bool = True,
+        input_proj_dropout: float = 0.0,
         **kwargs
     ):
         """
         Args:
-            backbone (nn.Module): Backbone model (e.g., Transformer) to extract speech features.
-            feature_size (int): Dimensionality of the backbone output features.
-            projection_dim (int): Output dimension of the projection head.
-            projection_num_layers (int): Number of layers in the projection head.
-            projection_batch_norm (bool): Whether to use BatchNorm/LayerNorm in the projection head.
+            embed_dim (int): Dimension of Transformer input/output.
+            projection_dim (int): Output dimension of projection head.
+            projection_num_layers (int): Number of layers in projection head.
+            projection_batch_norm (bool): Use LayerNorm in projection head.
+            backbone (nn.Module): Transformer encoder backbone.
+            sample_rate (int): Audio sample rate for FBANK extraction.
+            use_input_proj (bool): Whether to apply a learnable input projection.
+            input_proj_dropout (float): Dropout after input projection.
         """
         super().__init__()
-        self.feature_size = feature_size
-        self.projection_dim = projection_dim
-        self.projection_num_layers = projection_num_layers
-        self.projection_batch_norm = projection_batch_norm
-        self.backbone = backbone
-        self.projection_head = SpeechSimCLRProjectionHead(
-            input_dim=self.feature_size,
-            hidden_dim=self.feature_size,
-            output_dim=self.projection_dim,
-            num_layers=self.projection_num_layers,
-            batch_norm=self.projection_batch_norm,
-        )
-        self.encoder = nn.Sequential(self.backbone, self.projection_head)
+        self.fbank = FBANKFeatureExtractor(sample_rate=sample_rate)
 
-    def forward(self, x0: torch.Tensor, x1: torch.Tensor = None):
+        if embed_dim != 80 and use_input_proj:
+            self.input_proj = InputSpeechSimCLRProjectionHead(
+                input_dim=80,
+                output_dim=embed_dim,
+                use_layer_norm=True,
+                dropout=input_proj_dropout,
+            )
+        else:
+            self.input_proj = nn.Identity()
+
+
+        if backbone is not None:
+            self.backbone = backbone
+
+        else:
+            self.backbone = TransformerEncoder(
+                embed_dim=embed_dim,
+                num_layers=3,
+                num_heads=12,
+                ff_interm_features=3072,
+                dropout_input=0.1,
+                attention_dropout=0.1,
+                ff_dropout=0.1,
+                final_dropout=0.1,
+                layer_norm_first=True,   # the paper switched all BatchNorm to LayerNorm; Pre-LN is fine
+                layer_drop=0.0,
+                pos_conv_kernel=None,    # not used in the paper; standard sinusoidal positional enc. suffices
+                pos_conv_groups=None,
+            )
+
+        self.projection_head = SpeechSimCLRProjectionHead(
+            input_dim=embed_dim,
+            hidden_dim=embed_dim,
+            output_dim=projection_dim,
+            num_layers=projection_num_layers,
+            batch_norm=projection_batch_norm,
+        )
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """Returns pooled projection from input audio."""
+        x = self.fbank(x)                  # (B, T, 80)
+        x = self.input_proj(x)            # (B, T, embed_dim)
+        x = self.backbone(x)              # (B, T, embed_dim)
+        x = x.mean(dim=1)                 # mean pooling → (B, embed_dim)
+        return self.projection_head(x)    # (B, projection_dim)
+
+    def forward(self, x0: torch.Tensor, x1: Optional[torch.Tensor] = None):
         """
         Forward pass for SimCLR.
-        
+
         Args:
-            x0 (torch.Tensor): First augmented input tensor of shape (B, T, F).
-            x1 (torch.Tensor, optional): Second augmented input tensor of shape (B, T, F). Defaults to None.
+            x0 (torch.Tensor): First audio sample (B, T).
+            x1 (torch.Tensor, optional): Second audio sample (B, T).
 
         Returns:
-            torch.Tensor or Tuple[torch.Tensor, torch.Tensor]: Projected representations.
+            torch.Tensor or Tuple[torch.Tensor, torch.Tensor]
         """
-        f0 = self.backbone(x0)           # (B, T, D)
-        f0_pooled = f0.mean(dim=1)       # (B, D)
-        out0 = self.projection_head(f0_pooled)
+        out0 = self.encode(x0)
 
         if x1 is None:
             return out0
 
-        f1 = self.backbone(x1)
-        f1_pooled = f1.mean(dim=1)
-        out1 = self.projection_head(f1_pooled)
-
+        out1 = self.encode(x1)
         return out0, out1
-
