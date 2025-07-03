@@ -3,7 +3,9 @@ import torch
 import torch.nn as nn
 
 from MK_SSL.vision.models.modules.heads import SimCLRProjectionHead, BYOLPredictionHead
-
+from MK_SSL.vision.models.modules.losses import InfoNCE_MoCoV3
+from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
+from MK_SSL.vision.models.utils.registry import register_method
 
 class MoCov3(nn.Module):
     """
@@ -187,3 +189,36 @@ class MoCoV2(nn.Module):
         self._dequeue_and_enqueue(k)
 
         return logits, labels
+
+register_method(
+    name= "mocov2",
+    model_cls= MoCoV2,
+    loss_fn= nn.CrossEntropyLoss,
+    transformation= SimCLRViewTransform,
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- MoCoV2 Configuration ----------------\n"
+        f"Projection Dimension                        : {model.projection_dim}\n"
+        f"Number of negative keys                     : {model.K}\n"
+        f"Momentum for updating the key encoder       : {model.m}\n"
+        "Loss                                        : InfoNCE Loss\n"
+        "Transformation                              : SimCLRViewTransform"
+    )
+)
+
+register_method(
+    name= "mocov3",
+    model_cls= MoCov3,
+    loss_fn= InfoNCE_MoCoV3,
+    transformation= SimCLRViewTransform,
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- MoCoV3 Configuration ----------------\n"
+        f"Projection Dimension         : {model.projection_dim}\n"
+        f"Projection Hidden Dimension  : {model.hidden_dim}\n"
+        f"Moving average decay         : {model.moving_average_decay}\n"
+        "Loss                         : InfoNCE Loss\n"
+        "Transformation               : SimCLRViewTransform\n"
+        "Transformation prime         : SimCLRViewTransform"
+    )
+)

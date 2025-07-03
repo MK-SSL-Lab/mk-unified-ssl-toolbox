@@ -3,7 +3,9 @@ import copy
 import torch.nn as nn
 
 from MK_SSL.vision.models.modules.heads import SwAVProjectionHead
-
+from MK_SSL.vision.models.modules.losses import SwAVLoss
+from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
+from MK_SSL.vision.models.utils.registry import register_method
 
 class SwAV(nn.Module):
     """
@@ -112,3 +114,21 @@ class SwAV(nn.Module):
             z_c.append(z)
             c_c.append(self.prototypes(z))
         return (c1, c2, c_c), (q1, q2)
+
+
+register_method(
+    name= "swav",
+    model_cls= SwAV,
+    loss_fn= SwAVLoss,
+    transformation= SimCLRViewTransform,
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- SwAV Configuration ----------------\n"
+        f"Projection Dimension         : {model.projection_dim}\n"
+        f"Projection Hidden Dimension  : {model.hidden_dim}\n"
+        f"Number of crops              : {model.num_crops}\n"
+        "Loss                         : SwAV Loss\n"
+        "Transformation global        : SimCLRViewTransform\n"
+        "Transformation local         : SimCLRViewTransform"
+    )
+)

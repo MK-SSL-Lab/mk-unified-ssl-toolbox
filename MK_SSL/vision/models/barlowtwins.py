@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 
 from MK_SSL.vision.models.modules.heads import BarlowTwinsProjectionHead
-
-
+from MK_SSL.vision.models.utils.registry import register_method
+from MK_SSL.vision.models.modules.losses import BarlowTwinsLoss
+from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
 class BarlowTwins(nn.Module):
     """
     Barlow Twins
@@ -50,3 +51,20 @@ class BarlowTwins(nn.Module):
         out1 = self.projection_head(f1)
 
         return out0, out1
+
+
+register_method(
+    name= "barlowtwins",
+    model_cls= BarlowTwins,
+    loss_fn= BarlowTwinsLoss,
+    transformation= SimCLRViewTransform,
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- BarlowTwins Configuration ----------------\n"
+        f"Projection Dimension         : {model.projection_dim}\n"
+        f"Projection Hidden Dimension  : {model.hidden_dim}\n"
+        "Loss                         : BarlowTwins Loss\n"
+        "Transformation               : SimCLRViewTransform\n"
+        "Transformation prime         : SimCLRViewTransform"
+    )
+)

@@ -3,6 +3,9 @@ import copy
 import torch.nn as nn
 
 from MK_SSL.vision.models.modules.heads import BYOLPredictionHead, BYOLProjectionHead
+from MK_SSL.vision.models.modules.losses import BYOLLoss
+from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
+from MK_SSL.vision.models.utils.registry import register_method
 
 
 class BYOL(nn.Module):
@@ -66,3 +69,21 @@ class BYOL(nn.Module):
             z0_t, z1_t = self.target_encoder(x0), self.target_encoder(x1)
 
         return (p0_o, z0_t), (p1_o, z1_t)
+
+
+register_method(
+    name= "byol",
+    model_cls= BYOL,
+    loss_fn= BYOLLoss,
+    transformation= SimCLRViewTransform,
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- BYOL Configuration ----------------\n"
+        f"Projection Dimension         : {model.projection_dim}\n"
+        f"Projection Hidden Dimension  : {model.hidden_dim}\n"
+        f"Moving average decay         : {model.moving_average_decay}\n"
+        "Loss                         : BYOL Loss\n"
+        "Transformation               : SimCLRViewTransform\n"
+        "Transformation prime         : SimCLRViewTransform"
+    )
+)

@@ -3,6 +3,9 @@ import copy
 import torch.nn as nn
 
 from MK_SSL.vision.models.modules.heads import DINOProjectionHead
+from MK_SSL.vision.models.modules.losses import DINOLoss
+from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
+from MK_SSL.vision.models.utils.registry import register_method
 
 
 class DINO(nn.Module):
@@ -101,3 +104,30 @@ class DINO(nn.Module):
         z_t = [z1_t, z2_t]
 
         return z_s, z_t
+
+
+
+register_method(
+    name= "dino",
+    model_cls= DINO,
+    loss_fn= DINOLoss,
+    transformation= SimCLRViewTransform,
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- DINO Configuration ----------------\n"
+        f"Projection Dimension                          : {model.projection_dim}\n"
+        f"Projection Hidden Dimension                   : {model.hidden_dim}\n"
+        f"Bottleneck Dimension                          : {model.projection_dim}\n"
+        f"Student Temp                                  : {model.temp_student}\n"
+        f"Teacher Temp                                  : {model.temp_teacher}\n"
+        f"Last layer normalization                      : {model.norm_last_layer}\n"
+        f"Center Momentum                               : {loss.center_momentum}\n"
+        f"Teacher Momentum                              : {model.momentum_teacher}\n"
+        f"Number of crops                               : {model.num_crops}\n"
+        f"Using batch normalization in projection head  : {model.use_bn_in_head}\n"
+        "Loss                                          : DINO Loss\n"
+        "Transformation global_1                       : SimCLRViewTransform\n"
+        "Transformation global_2                       : SimCLRViewTransform\n"
+        "Transformation local                          : SimCLRViewTransform"
+    )
+)
