@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple
+from typing import Tuple , Optional
 from MK_SSL.multimodal.models.modules.encoders import CNN14
 from MK_SSL.multimodal.models.modules.encoders import BERTTextEncoder
 
@@ -16,8 +16,8 @@ class CLAPContrastivePretraining(nn.Module):
         self,
         audio_embedding_dim: int,
         text_embedding_dim: int,
-        audio_encoder: nn.Module = CNN14(),
-        text_encoder: nn.Module = BERTTextEncoder(),
+        audio_encoder: Optional[nn.Module] = None,
+        text_encoder: Optional[nn.Module] = None,
         projection_dim: int = 1024,
         temperature_init: float = 0.007,
     ):
@@ -41,6 +41,17 @@ class CLAPContrastivePretraining(nn.Module):
         self.audio_proj = nn.Linear(audio_embedding_dim, projection_dim)
         self.text_proj = nn.Linear(text_embedding_dim, projection_dim)
         self.temperature = nn.Parameter(torch.tensor(temperature_init))
+
+        if audio_encoder is not None:
+            self.audio_encoder = audio_encoder
+        else:
+            self.audio_encoder = CNN14()
+        
+        if self.text_encoder is not None: 
+            self.text_encoder = text_encoder
+        else: 
+            self.text_encoder = BERTTextEncoder()
+
 
     def forward(
         self,

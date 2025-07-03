@@ -2,7 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, List, Optional
-
+from MK_SSL.multimodal.models.modules.encoders import AudioResNeXtStem
+from MK_SSL.multimodal.models.modules.encoders import AttentionPool2d
+from MK_SSL.multimodal.models.modules.encoders import TransformerLayer
 
 class AudioCLIPPretraining(nn.Module):
     """
@@ -11,9 +13,9 @@ class AudioCLIPPretraining(nn.Module):
 
     def __init__(
         self,
-        audio_encoder: nn.Module,
-        image_encoder: nn.Module,
-        text_encoder: nn.Module,
+        audio_encoder: Optional[nn.Module] = None,
+        image_encoder: Optional[nn.Module] = None,
+        text_encoder: Optional[nn.Module] = None,
         temperature_init: float = 0.07,
         text_template: str = "{}",
     ):
@@ -39,6 +41,26 @@ class AudioCLIPPretraining(nn.Module):
         self.text_encoder = text_encoder
         self.temperature = nn.Parameter(torch.tensor(temperature_init))
         self.text_template = text_template
+
+        if audio_encoder is not None:
+            self.audio_encoder = audio_encoder
+        else:
+            self.image_encoder = AudioResNeXtStem()
+        
+
+        if image_encoder is not None:
+            self.image_encoder = image_encoder
+        else:
+            self.image_encoder = AttentionPool2d()
+        
+        if audio_encoder is not None:
+            self.text_encoder = text_encoder
+        else:
+            self.text_encoder = TransformerLayer()
+        
+
+
+
 
     def forward(
         self,
