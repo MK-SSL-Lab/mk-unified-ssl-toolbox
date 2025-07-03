@@ -37,7 +37,6 @@ class HuBERT(nn.Module):
         )
 
         self.encoder = TransformerEncoder(
-            in_features=config["encoder_embed_dim"],
             embed_dim=config["encoder_embed_dim"],
             num_layers=config["encoder_num_layers"],
             num_heads=config["encoder_num_heads"],

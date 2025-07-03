@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Union
 from MK_SSL.audio.models.modules.heads import COLAProjectionHead
-from MK_SSL.audio.models.modules.backbones import COLAEncoder
+from MK_SSL.audio.models.modules.backbones import EfficientNetAudioEncoder
 
 class COLA(nn.Module):
     """
@@ -31,7 +31,7 @@ class COLA(nn.Module):
     def __init__(
         self,
         feature_size: int,
-        backbone: nn.Module = COLAEncoder(),
+        backbone: nn.Module = None,
         projection_dim: int = 512,
         projection_num_layers: int = 1,
         projection_batch_norm: bool = True,
@@ -50,7 +50,11 @@ class COLA(nn.Module):
         self.projection_dim = projection_dim
         self.projection_num_layers = projection_num_layers
         self.projection_batch_norm = projection_batch_norm
-        self.backbone = backbone
+
+        if backbone is not None:
+            self.backbone = backbone
+        else:
+            self.backbone = EfficientNetAudioEncoder()
 
         self.projection_head = COLAProjectionHead(
             input_dim=self.feature_size,
@@ -60,7 +64,7 @@ class COLA(nn.Module):
             batch_norm=self.projection_batch_norm,
         )
 
-        self.encoder = nn.Sequential(self.backbone, self.projection_head)
+    
 
     def forward(self, x0: torch.Tensor, x1: Optional[torch.Tensor] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
@@ -85,39 +89,3 @@ class COLA(nn.Module):
         out1 = self.projection_head(f1_flat)
 
         return out0, out1
-
-
-
-class COLAWithFrontend(nn.Module):
-
-    """
-    COLAWithFrontend: A wrapper for COLA with integrated mel-spectrogram frontend.
-
-    This class wraps a COLA model with a frontend transform that converts raw audio
-    waveforms into log-compressed mel-filterbanks. It is useful for end-to-end training
-    or inference directly from waveform inputs.
-
-    The frontend is typically implemented using torchaudio.transforms.MelSpectrogram 
-    followed by amplitude-to-dB or log compression.
-
-    """
-
-
-    def __init__(self, cola_model: COLA, mel_spec_transform: nn.Module):
-        super().__init__()
-        self.mel_transform = mel_spec_transform
-        self.cola = cola_model
-
-
-        """
-           Args:
-            cola_model (COLA): A pre-initialized COLA model that operates on mel spectrograms.
-            mel_spec_transform (nn.Module): A frontend transform that converts raw waveform 
-            to log-mel spectrograms, e.g., a nn.Sequential of MelSpectrogram and AmplitudeToDB.
-    
-        """
-
-    def forward(self, waveform0: torch.Tensor, waveform1: Optional[torch.Tensor] = None):
-        x0 = self.mel_transform(waveform0)
-        x1 = self.mel_transform(waveform1) if waveform1 is not None else None
-        return self.cola(x0, x1)
