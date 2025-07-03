@@ -2,11 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple , Optional
-from MK_SSL.multimodal.models.modules.encoders import CNN14
-from MK_SSL.multimodal.models.modules.encoders import BERTTextEncoder
+
+from MK_SSL.multimodal.models.modules.backbones import CNN14
+from MK_SSL.multimodal.models.modules.backbones import BERTTextEncoder
+from MK_SSL.multimodal.models.utils.registry import register_method
 
 
-class CLAPContrastivePretraining(nn.Module):
+class CLAP(nn.Module):
     """
     CLAP-style Contrastive Pretraining for learning joint audio-text embeddings.
     Based on: https://arxiv.org/abs/2206.04769 (CLAP: Learning Audio Concepts from Natural Language Supervision)
@@ -79,3 +81,12 @@ class CLAPContrastivePretraining(nn.Module):
 
         similarity_matrix = self.temperature * torch.matmul(text_proj, audio_proj.T)  # (B, B)
         return audio_proj, text_proj, similarity_matrix
+
+
+register_method(
+    name= "clap",
+    model_cls= CLAP,
+    logs=lambda model: (
+
+    )
+)

@@ -2,11 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, List, Optional
-from MK_SSL.multimodal.models.modules.encoders import AudioResNeXtStem
-from MK_SSL.multimodal.models.modules.encoders import AttentionPool2d
-from MK_SSL.multimodal.models.modules.encoders import TransformerLayer
 
-class AudioCLIPPretraining(nn.Module):
+from MK_SSL.multimodal.models.modules.backbones import AudioResNeXtStem
+from MK_SSL.multimodal.models.modules.backbones import AttentionPool2d
+from MK_SSL.multimodal.models.modules.backbones import TransformerLayer
+from MK_SSL.multimodal.models.utils.registry import register_method
+
+class AudioCLIP(nn.Module):
     """
     AudioCLIP-style contrastive pretraining for joint audio, image, and text embeddings.
     """
@@ -126,3 +128,12 @@ class AudioCLIPPretraining(nn.Module):
             sim_text_image,
             sim_audio_image,
         )
+
+
+register_method(
+    name= "audio_clip",
+    model_cls= AudioCLIP,
+    logs=lambda model: (
+
+    )
+)

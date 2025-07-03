@@ -6,6 +6,8 @@ import torch.nn.functional as F
 
 from torch.autograd import Variable
 
+from MK_SSL.multimodal.models.utils.registry import register_method
+
 
 class VSE(nn.Module):
     """
@@ -203,3 +205,15 @@ class TripletLoss(nn.Module):
             cost_s = cost_s.max(1)[0]
             cost_im = cost_im.max(0)[0]
         return cost_s.sum() + cost_im.sum(), [1, 1]
+
+
+
+register_method(
+    name= "vse",
+    model_cls= VSE,
+    logs=lambda model: (
+        "\n"
+        "---------------- VSE Configuration ----------------\n"
+        f"Margin : {model.margin}"
+    )
+)

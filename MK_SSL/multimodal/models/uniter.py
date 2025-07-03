@@ -9,6 +9,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from MK_SSL.multimodal.models.utils.registry import register_method
+
 
 class UNITER(nn.Module):
     """
@@ -187,3 +189,20 @@ class UNITER(nn.Module):
             answer_scores, targets, reduction="none"
         )
         return vqa_loss
+
+
+
+register_method(
+    name= "uniter",
+    model_cls= UNITER,
+    logs=lambda model: (
+        "\n"
+        "---------------- UNITER Configuration ----------------\n"
+        f"Hidden Size                    : {model.hidden_size}\n"
+        f"Number of Answers              : {model.num_answer}\n"
+        f"Attention Dropout Probability  : {model.attention_probs_dropout_prob}\n"
+        f"Initializer Range              : {model.initializer_range}\n"
+        f"Pooler                         : {model.pooler}\n"
+        f"Encoder                        : {model.encoder}"
+    )
+)

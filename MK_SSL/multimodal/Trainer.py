@@ -12,7 +12,7 @@ from torch.nn.utils.clip_grad import clip_grad_norm_
 from MK_SSL.multimodal.models import *
 from MK_SSL.vision.models.modules.losses.nt_xent import NT_Xent
 from MK_SSL.utils import configure_logging  
-
+from MK_SSL.multimodal.models.utils import get_vision_method
 class Trainer:
 
     def __init__(
@@ -93,121 +93,27 @@ class Trainer:
         )
 
 
-        match self.method.lower():
-            case "clip":
-                self.model = CLIP(
-                    image_encoder=image_encoder,
-                    text_encoder=text_encoder,
-                    device=self.device,
-                    **kwargs,
-                )
-
-
-                self.logger.info(
-                    "\n"
-                    "----------------CLIP Configuration----------------\n"
-                    f"Embedding Dimension           : {self.model.embed_dim}\n"
-                    f"Dimension of image features   : {self.model.image_feature_dim}\n"
-                    f"Dimension of text features    : {self.model.text_feature_dim}\n"
-                    f"Loss Function                 : {'SigLIP loss' if self.model.use_siglip else 'Contrastive loss'}\n"
-                    f"Initial Tau                   : {self.model.init_tau}\n"
-                    f"Initial Bias                  : {self.model.init_bias}"
-                )
-
-
-            case "albef":
-                self.model = ALBEF(
-                    image_encoder=image_encoder,
-                    text_encoder=text_encoder,
-                    device=self.device,
-                    **kwargs,
-                )
+        try:
+            method_cfg = get_vision_method(self.method)
+        except ValueError as e:
+            self.logger.error(f"Method {self.method} not found in registry.")
+            raise e
 
 
 
-                self.logger.info(
-                    "\n"
-                    "---------------- ALBEF Configuration ----------------\n"
-                    f"MLM Probability              : {self.model.mlm_probability}\n"
-                    f"Embedding Dimension          : {self.model.embed_dim}\n"
-                    f"Dimension of image features  : {self.model.image_feature_dim}\n"
-                    f"Dimension of text features   : {self.model.text_feature_dim}\n"
-                    f"Temperature                  : {self.model.temp}\n"
-                    f"Queue Size                   : {self.model.queue_size}\n"
-                    f"Momentum                     : {self.model.momentum}\n"
-                    f"Alpha                        : {self.model.alpha}"
-                )
 
-            case "simvlm":
-                self.model = SimVLM(
-                    transformer_encoder=image_encoder,
-                    transformer_decoder=text_encoder,
-                    **kwargs,
-                )
 
-                self.logger.info(
-                    "\n"
-                    "---------------- SimVLM Configuration ----------------\n"
-                    f"Vocabulary Size               : {self.model.vocab_size}\n"
-                    f"Dimension of Features         : {self.model.feature_dim}\n"
-                    f"Maximum Sequence Length       : {self.model.max_seq_len}\n"
-                    f"Max Truncation Text Length    : {self.model.max_trunc_txt_len}\n"
-                    f"Prefix Text Length            : {self.model.prefix_txt_len}\n"
-                    f"Target Text Length            : {self.model.target_txt_len}\n"
-                    f"Padding Index                 : {self.model.pad_idx}\n"
-                    f"Resolution of Images          : {self.model.image_resolution}\n"
-                    f"Patch Size                    : {self.model.patch_size}\n"
-                    f"Number of Channels            : {self.model.num_channels}"
-                )
+        self.model = method_cfg["model"](
+            image_encoder=image_encoder,
+            text_encoder=text_encoder,
+            transformer_encoder=image_encoder,
+            transformer_decoder=text_encoder,
+            device=self.device,
 
-            case "slip":
-                self.model = SLIP(
-                    image_encoder=image_encoder,
-                    text_encoder=text_encoder,
-                    device=self.device,
-                    **kwargs,
-                )
+            **kwargs
+        )
 
-                self.logger.info(
-                    "\n"
-                    "---------------- SLIP Configuration ----------------\n"
-                    f"Embedding Dimension           : {self.model.embed_dim}\n"
-                    f"Dimension of image features   : {self.model.image_feature_dim}\n"
-                    f"Dimension of text features    : {self.model.text_feature_dim}\n"
-                    f"Dimension of the MLP          : {self.model.mlp_dim}"
-                )
-
-            case "uniter":
-                self.model = UNITER(
-                    image_encoder=image_encoder, text_encoder=text_encoder, **kwargs
-                )
-
-                self.logger.info(
-                    "\n"
-                    "---------------- UNITER Configuration ----------------\n"
-                    f"Hidden Size                    : {self.model.hidden_size}\n"
-                    f"Number of Answers              : {self.model.num_answer}\n"
-                    f"Attention Dropout Probability  : {self.model.attention_probs_dropout_prob}\n"
-                    f"Initializer Range              : {self.model.initializer_range}\n"
-                    f"Pooler                         : {self.model.pooler}\n"
-                    f"Encoder                        : {self.model.encoder}"
-                )
-
-            case "vse":
-                self.model = VSE(
-                    image_encoder=image_encoder, text_encoder=text_encoder, **kwargs
-                )
-
-                self.logger.info(
-                    "\n"
-                    "---------------- VSE Configuration ----------------\n"
-                    f"Margin : {self.model.margin}"
-                )
-
-            case _:
-                self.logger.error(f"Unsupported method: {self.method}")
-                
-                raise ValueError(f"Method {self.method} not supported")
+        self.logger.info(method_cfg["logs"](self.model))
 
         self.model = self.model.to(self.device)
 
