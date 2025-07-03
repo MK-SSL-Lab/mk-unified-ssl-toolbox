@@ -6,6 +6,10 @@ from MK_SSL.vision.models.modules.heads import (
     SimSiamProjectionHead,
 )
 
+from MK_SSL.vision.models.modules.losses import NegativeCosineSimilarity
+from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
+from MK_SSL.vision.registry import register_method
+
 
 class SimSiam(nn.Module):
     """
@@ -57,3 +61,20 @@ class SimSiam(nn.Module):
         out1 = (z1, p1)
 
         return out0, out1
+
+
+register_method(
+    name= "simsiam",
+    model_cls= SimSiam,
+    loss_fn= NegativeCosineSimilarity,
+    transformation= SimCLRViewTransform,
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- SimSiam Configuration ----------------\n"
+        f"Projection Dimension           : {model.projection_dim}\n"
+        f"Projection Hidden Dimension    : {model.projection_hidden_dim}\n"
+        f"Prediction Hidden Dimension    : {model.prediction_hidden_dim}\n"
+        "Loss                           : Negative Cosine Simililarity\n"
+        "Transformation                 : SimCLRViewTransform"
+    )
+)

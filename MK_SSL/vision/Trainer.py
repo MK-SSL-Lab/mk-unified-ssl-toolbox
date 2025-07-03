@@ -19,6 +19,9 @@ from MK_SSL.vision.models.modules.losses import *
 from MK_SSL.vision.models.modules.transformations import *
 from MK_SSL.utils import configure_logging  
 
+from MK_SSL.vision.registry import get_vision_method
+
+
 
 class Trainer:
     def __init__(
@@ -82,7 +85,7 @@ class Trainer:
         self.logger.setLevel(logging.INFO if verbose else logging.WARNING)
 
 
-        self.method = method
+        self.method = method.lower()
         self.image_size = image_size
         self.backbone = backbone
         self.feature_size = feature_size
@@ -117,186 +120,69 @@ class Trainer:
             "----------------------------------------------------"
         )
 
+        try:
+            method_cfg = get_vision_method(self.method)
+        except ValueError as e:
+            self.logger.error(f"Method {self.method} not found in registry.")
+            raise e
+        
+        model_special_overrides = {
+            "barlowtwins": {"hidden_dim": self.feature_size},
+            "simsiam": {
+                "projection_hidden_dim": self.feature_size,
+                "prediction_hidden_dim": self.feature_size // 4
+            }
+        }
 
-        match self.method.lower():
-            case "barlowtwins":
-                self.model = BarlowTwins(
-                    self.backbone,
-                    self.feature_size,
-                    hidden_dim=self.feature_size,
-                    **kwargs,
-                )
-                self.loss = BarlowTwinsLoss(**kwargs)
-                self.transformation = SimCLRViewTransform(
-                    image_size=self.image_size, **kwargs
-                )
-                self.transformation_prime = self.transformation
-
-
-                self.logger.info(
-                    "\n"
-                    "---------------- BarlowTwins Configuration ----------------\n"
-                    f"Projection Dimension         : {self.model.projection_dim}\n"
-                    f"Projection Hidden Dimension  : {self.model.hidden_dim}\n"
-                    "Loss                         : BarlowTwins Loss\n"
-                    "Transformation               : SimCLRViewTransform\n"
-                    "Transformation prime         : SimCLRViewTransform"
-                )
-
-            case "byol":
-                self.model = BYOL(self.backbone, self.feature_size, **kwargs)
-                self.transformation = SimCLRViewTransform(
-                    image_size=self.image_size, **kwargs
-                )
-                self.transformation_prime = self.transformation
-                self.loss = BYOLLoss(**kwargs)
+        loss_special_overrides = {
+            "dino": {
+                "projection_dim": self.model.projection_dim,
+                "temp_student": self.model.temp_student,
+                "temp_teacher": self.model.temp_teacher,
+            },
+            "swav": {"num_crops": self.model.num_crops + 2,}
+        }
 
 
-                self.logger.info(
-                    "\n"
-                    "---------------- BYOL Configuration ----------------\n"
-                    f"Projection Dimension         : {self.model.projection_dim}\n"
-                    f"Projection Hidden Dimension  : {self.model.hidden_dim}\n"
-                    f"Moving average decay         : {self.model.moving_average_decay}\n"
-                    "Loss                         : BYOL Loss\n"
-                    "Transformation               : SimCLRViewTransform\n"
-                    "Transformation prime         : SimCLRViewTransform"
-                )
+        self.model = method_cfg["model"](
+            backbone=self.backbone,
+            feature_size=self.feature_size,
 
-            case "dino":
-                self.model = DINO(self.backbone, self.feature_size, **kwargs)
-                self.loss = DINOLoss(
-                    self.model.projection_dim,
-                    self.model.temp_student,
-                    self.model.temp_teacher,
-                    **kwargs,
-                )
-                self.transformation_global1 = SimCLRViewTransform(
-                    image_size=self.image_size, **kwargs
-                )
-                self.transformation_global2 = self.transformation_global1
-                self.transformation_local = self.transformation_global1
+            **model_special_overrides.get(
+                self.method, {}
+            ),
+            **kwargs
+        )
 
 
-                self.logger.info(
-                    "\n"
-                    "---------------- DINO Configuration ----------------\n"
-                    f"Projection Dimension                          : {self.model.projection_dim}\n"
-                    f"Projection Hidden Dimension                   : {self.model.hidden_dim}\n"
-                    f"Bottleneck Dimension                          : {self.model.projection_dim}\n"
-                    f"Student Temp                                  : {self.model.temp_student}\n"
-                    f"Teacher Temp                                  : {self.model.temp_teacher}\n"
-                    f"Last layer normalization                      : {self.model.norm_last_layer}\n"
-                    f"Center Momentum                               : {self.loss.center_momentum}\n"
-                    f"Teacher Momentum                              : {self.model.momentum_teacher}\n"
-                    f"Number of crops                               : {self.model.num_crops}\n"
-                    f"Using batch normalization in projection head  : {self.model.use_bn_in_head}\n"
-                    "Loss                                          : DINO Loss\n"
-                    "Transformation global_1                       : SimCLRViewTransform\n"
-                    "Transformation global_2                       : SimCLRViewTransform\n"
-                    "Transformation local                          : SimCLRViewTransform"
-                )
+        self.loss = method_cfg["loss"](
+            **loss_special_overrides.get(
+                self.method, {}
+            ),
+            **kwargs
+        )
 
-            case "mocov2":
-                self.model = MoCoV2(self.backbone, self.feature_size, **kwargs)
-                self.loss = nn.CrossEntropyLoss()
-                self.transformation = SimCLRViewTransform(
-                    image_size=self.image_size, **kwargs
-                )
+        self.transformation = method_cfg["transformation"](
+            image_size=self.image_size, 
+            **kwargs
+        )
 
-                self.logger.info(
-                    "\n"
-                    "---------------- MoCoV2 Configuration ----------------\n"
-                    f"Projection Dimension                        : {self.model.projection_dim}\n"
-                    f"Number of negative keys                     : {self.model.K}\n"
-                    f"Momentum for updating the key encoder       : {self.model.m}\n"
-                    "Loss                                        : InfoNCE Loss\n"
-                    "Transformation                              : SimCLRViewTransform"
-                )
+        # Only define transformation_prime if needed
+        if self.method in {"byol", "barlowtwins", "simclr", "simsiam", "mocov3"}:
+            self.transformation_prime = self.transformation
 
-            case "mocov3":
-                self.model = MoCov3(self.backbone, self.feature_size, **kwargs)
-                self.loss = InfoNCE_MoCoV3(**kwargs)
-                self.transformation = SimCLRViewTransform(
-                    image_size=self.image_size, **kwargs
-                )
-                self.transformation_prime = self.transformation
+        if self.method in {"dino"}:
+            self.transformation_global1 = self.transformation
+            self.transformation_global2 = self.transformation
+            self.transformation_local = self.transformation
 
-                self.logger.info(
-                    "\n"
-                    "---------------- MoCoV3 Configuration ----------------\n"
-                    f"Projection Dimension         : {self.model.projection_dim}\n"
-                    f"Projection Hidden Dimension  : {self.model.hidden_dim}\n"
-                    f"Moving average decay         : {self.model.moving_average_decay}\n"
-                    "Loss                         : InfoNCE Loss\n"
-                    "Transformation               : SimCLRViewTransform\n"
-                    "Transformation prime         : SimCLRViewTransform"
-                )
+        if self.method in {"swav"}:
+            self.transformation_global = self.transformation
+            self.transformation_local = self.transformation
 
-
-
-            case "simclr":
-                self.model = SimCLR(self.backbone, self.feature_size, **kwargs)
-                self.loss = NT_Xent(**kwargs)
-                self.transformation = SimCLRViewTransform(
-                    image_size=self.image_size, **kwargs
-                )
-                self.logger.info(
-                    "\n"
-                    "---------------- SimCLR Configuration ----------------\n"
-                    f"Projection Dimension                  : {self.model.projection_dim}\n"
-                    f"Projection number of layers           : {self.model.projection_num_layers}\n"
-                    f"Projection batch normalization        : {self.model.projection_batch_norm}\n"
-                    "Loss                                  : NT_Xent Loss\n"
-                    "Transformation                        : SimCLRViewTransform"
-                )
-            case "simsiam":
-                self.model = SimSiam(
-                    self.backbone,
-                    self.feature_size,
-                    projection_hidden_dim=self.feature_size,
-                    prediction_hidden_dim=self.feature_size // 4,
-                    **kwargs,
-                )
-                self.loss = NegativeCosineSimilarity(**kwargs)
-                self.transformation = SimCLRViewTransform(
-                    image_size=self.image_size, **kwargs
-                )
-
-                self.logger.info(
-                    "\n"
-                    "---------------- SimSiam Configuration ----------------\n"
-                    f"Projection Dimension           : {self.model.projection_dim}\n"
-                    f"Projection Hidden Dimension    : {self.model.projection_hidden_dim}\n"
-                    f"Prediction Hidden Dimension    : {self.model.prediction_hidden_dim}\n"
-                    "Loss                           : Negative Cosine Simililarity\n"
-                    "Transformation                 : SimCLRViewTransform"
-                )
-
-            case "swav":
-                self.model = SwAV(self.backbone, self.feature_size, **kwargs)
-                self.loss = SwAVLoss(self.model.num_crops + 2, **kwargs)
-                self.transformation_global = SimCLRViewTransform(
-                    image_size=self.image_size, **kwargs
-                )
-                self.transformation_local = self.transformation_global
-
-                self.logger.info(
-                    "\n"
-                    "---------------- SwAV Configuration ----------------\n"
-                    f"Projection Dimension         : {self.model.projection_dim}\n"
-                    f"Projection Hidden Dimension  : {self.model.hidden_dim}\n"
-                    f"Number of crops              : {self.model.num_crops}\n"
-                    "Loss                         : SwAV Loss\n"
-                    "Transformation global        : SimCLRViewTransform\n"
-                    "Transformation local         : SimCLRViewTransform"
-                )
-
-            case _:
-                self.logger.error(f"Unsupported method: {self.method}")
-                
-                raise ValueError(f"Method {self.method} not supported")
-
+        self.logger.info(method_cfg["logs"](self.model, self.loss))
+        
+        
         self.model = self.model.to(self.device)
         self.loss = self.loss.to(self.device)
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

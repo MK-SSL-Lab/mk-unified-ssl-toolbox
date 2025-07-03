@@ -2,7 +2,9 @@ import torch
 import torch.nn as nn
 
 from MK_SSL.vision.models.modules.heads import SimCLRProjectionHead
-
+from MK_SSL.vision.models.modules.losses import NT_Xent
+from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
+from MK_SSL.vision.registry import register_method  
 
 class SimCLR(nn.Module):
     """
@@ -54,3 +56,20 @@ class SimCLR(nn.Module):
         out1 = self.projection_head(f1)
 
         return out0, out1
+
+
+register_method(
+    name= "simclr",
+    model_cls= SimCLR,
+    loss_fn= NT_Xent,
+    transformation= SimCLRViewTransform,
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- SimCLR Configuration ----------------\n"
+        f"Projection Dimension                  : {model.projection_dim}\n"
+        f"Projection number of layers           : {model.projection_num_layers}\n"
+        f"Projection batch normalization        : {model.projection_batch_norm}\n"
+        "Loss                                  : NT_Xent Loss\n"
+        "Transformation                        : SimCLRViewTransform"
+    )
+)
