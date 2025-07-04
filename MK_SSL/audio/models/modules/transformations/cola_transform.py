@@ -1,3 +1,7 @@
+import torch
+from typing import Tuple
+import random
+
 class COLAAudioTransform:
     def __init__(self, segment_ms: int = 960, sample_rate: int = 16000):
         self.segment_len = int(segment_ms / 1000 * sample_rate)
