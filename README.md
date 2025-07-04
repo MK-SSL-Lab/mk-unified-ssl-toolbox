@@ -17,7 +17,7 @@
 ## 📂 Project Structure
 
 ```
-AK_SSL/
+MK_SSL/
 │
 ├── audio/
 │   ├── models/
@@ -43,7 +43,7 @@ Stay tuned for more updates!
 ## 🧪 Usage Examples (Coming Soon)
 
 ```python
-from AK_SSL.audio.models import SimCLRSpeech
+from MK_SSL.audio.models import SimCLRSpeech
 
 model = SimCLRSpeech(variant="base")
 # model.forward(...)

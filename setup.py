@@ -7,7 +7,7 @@ _PATH_ROOT = Path(os.path.dirname(__file__))
 
 
 def load_version() -> str:
-    version_filepath = _PATH_ROOT / "AK_SSL" / "__init__.py"
+    version_filepath = _PATH_ROOT / "MK_SSL" / "__init__.py"
     with version_filepath.open() as file:
         for line in file.readlines():
             if line.startswith("__version__"):
@@ -17,7 +17,7 @@ def load_version() -> str:
 
 
 if __name__ == "__main__":
-    name = "AK_SSL"
+    name = "MK_SSL"
     version = load_version()
     author = "Audrina Ebrahimi & Kian Majlessi"
     author_email = "audrina_ebrahimi@outlook.com"
@@ -41,7 +41,7 @@ if __name__ == "__main__":
     packages = setuptools.find_packages()
 
     project_urls = {
-        "Github": "https://github.com/audrina-ebrahimi/AK_SSL",
+        "Github": "https://github.com/audrina-ebrahimi/MK_SSL",
     }
 
     classifiers = [

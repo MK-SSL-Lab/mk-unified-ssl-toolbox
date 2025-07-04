@@ -56,7 +56,7 @@ class Trainer:
 
         self.logger.info(
             "\n"
-            "---------------- AK_SSL: Audio ----------------\n"
+            "---------------- MK_SSL: Audio ----------------\n"
             f"Number of workers : {self.num_workers}\n"
             f"Device            : {self.device}\n"
             f"Method            : {self.method}\n"
