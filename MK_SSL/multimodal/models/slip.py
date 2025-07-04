@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from MK_SSL.multimodal.models.clip import CLIP
 from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
+from MK_SSL.multimodal.models.utils.registry import register_method
 
 
 class SLIP(nn.Module):
@@ -91,3 +92,18 @@ class SLIP(nn.Module):
         self, ssl_scale: float, ssl_loss: torch.Tensor, clip_loss: torch.Tensor
     ) -> torch.Tensor:
         return ssl_scale * ssl_loss + clip_loss
+
+
+
+register_method(
+    name= "slip",
+    model_cls= SLIP,
+    logs=lambda model: (
+        "\n"
+        "---------------- SLIP Configuration ----------------\n"
+        f"Embedding Dimension           : {model.embed_dim}\n"
+        f"Dimension of image features   : {model.image_feature_dim}\n"
+        f"Dimension of text features    : {model.text_feature_dim}\n"
+        f"Dimension of the MLP          : {model.mlp_dim}"
+    )
+)

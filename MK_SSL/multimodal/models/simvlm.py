@@ -8,6 +8,7 @@ from einops import rearrange
 from axial_positional_embedding import AxialPositionalEmbedding
 
 from MK_SSL.multimodal.models.utils.simvlm.resblock import BottleneckBlock
+from MK_SSL.multimodal.models.utils.registry import register_method
 
 
 class ResBlock(nn.Sequential):
@@ -517,3 +518,24 @@ class SimVLM(nn.Module):
         row_idx = torch.arange(len(p)).unsqueeze(1).repeat(1, top_k).to(device)
         final_p[row_idx, largest_p_idx] = renormalized_p.to(final_p.dtype)
         return final_p
+
+
+
+register_method(
+    name= "simvlm",
+    model_cls= SimVLM,
+    logs=lambda model: (
+        "\n"
+        "---------------- SimVLM Configuration ----------------\n"
+        f"Vocabulary Size               : {model.vocab_size}\n"
+        f"Dimension of Features         : {model.feature_dim}\n"
+        f"Maximum Sequence Length       : {model.max_seq_len}\n"
+        f"Max Truncation Text Length    : {model.max_trunc_txt_len}\n"
+        f"Prefix Text Length            : {model.prefix_txt_len}\n"
+        f"Target Text Length            : {model.target_txt_len}\n"
+        f"Padding Index                 : {model.pad_idx}\n"
+        f"Resolution of Images          : {model.image_resolution}\n"
+        f"Patch Size                    : {model.patch_size}\n"
+        f"Number of Channels            : {model.num_channels}"
+    )
+)

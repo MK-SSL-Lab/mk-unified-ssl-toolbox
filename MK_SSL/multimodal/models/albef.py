@@ -11,6 +11,8 @@ import torch.nn.functional as F
 
 from copy import deepcopy
 
+from MK_SSL.multimodal.models.utils.registry import register_method
+
 
 class ALBEF(nn.Module):
     """
@@ -355,3 +357,21 @@ def concat_all_gather(tensor: torch.Tensor):
 
     output = torch.cat(tensors_gather, dim=0)
     return output
+
+
+register_method(
+    name= "albef",
+    model_cls= ALBEF,
+    logs=lambda model: (
+        "\n"
+        "---------------- ALBEF Configuration ----------------\n"
+        f"MLM Probability              : {model.mlm_probability}\n"
+        f"Embedding Dimension          : {model.embed_dim}\n"
+        f"Dimension of image features  : {model.image_feature_dim}\n"
+        f"Dimension of text features   : {model.text_feature_dim}\n"
+        f"Temperature                  : {model.temp}\n"
+        f"Queue Size                   : {model.queue_size}\n"
+        f"Momentum                     : {model.momentum}\n"
+        f"Alpha                        : {model.alpha}"
+    )
+)

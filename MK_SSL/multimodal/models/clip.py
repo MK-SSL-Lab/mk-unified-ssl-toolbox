@@ -3,6 +3,8 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 
+from MK_SSL.multimodal.models.utils.registry import register_method
+
 
 class CLIP(nn.Module):
     """
@@ -117,3 +119,19 @@ class CLIP(nn.Module):
         labels = 2 * torch.eye(n, device=logits.device) - 1
         # Compute pairwise sigmoid loss
         return -torch.sum(F.logsigmoid(labels * logits)) / n
+
+
+register_method(
+    name= "clip",
+    model_cls= CLIP,
+    logs=lambda model: (
+        "\n"
+        "----------------CLIP Configuration----------------\n"
+        f"Embedding Dimension           : {model.embed_dim}\n"
+        f"Dimension of image features   : {model.image_feature_dim}\n"
+        f"Dimension of text features    : {model.text_feature_dim}\n"
+        f"Loss Function                 : {'SigLIP loss' if model.use_siglip else 'Contrastive loss'}\n"
+        f"Initial Tau                   : {model.init_tau}\n"
+        f"Initial Bias                  : {model.init_bias}"
+    )
+)
