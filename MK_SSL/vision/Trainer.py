@@ -31,7 +31,6 @@ class Trainer:
         feature_size: int,
         image_size: int,
         configure_logger: bool = True,
-        log_level: int = logging.INFO,
         save_dir: str = ".",
         checkpoint_interval: int = 10,
         reload_checkpoint: bool = False,
@@ -79,10 +78,9 @@ class Trainer:
 
 
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.logger.setLevel(log_level)
-        self.logger.info("Multimodal Trainer initialized.")
-
         self.logger.setLevel(logging.INFO if verbose else logging.WARNING)
+        
+        self.logger.info("Vision Trainer initialized.")
 
 
         self.method = method.lower()
@@ -91,7 +89,6 @@ class Trainer:
         self.feature_size = feature_size
         self.reload_checkpoint = reload_checkpoint
         self.checkpoint_interval = checkpoint_interval
-        self.verbose = verbose
         self.mixed_precision_training = mixed_precision_training
 
         self.save_dir = os.path.join(save_dir, self.method)
@@ -113,7 +110,7 @@ class Trainer:
 
         self.logger.info(
             "\n"
-            "---------------- AK_SSL: Multimodal ----------------\n"
+            "---------------- AK_SSL: Vision ----------------\n"
             f"Number of workers : {self.num_workers}\n"
             f"Device            : {self.device}\n"
             f"Method            : {self.method}\n"

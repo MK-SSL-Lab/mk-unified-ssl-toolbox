@@ -9,7 +9,9 @@ from MK_SSL.audio.models.modules.feature_extractors import ConvFeatureExtractor
 from MK_SSL.audio.models.modules.backbones import TransformerEncoder
 from MK_SSL.audio.models.modules.quantizer import GumbelVectorQuantizer
 from MK_SSL.audio.models.modules.heads import Wav2Vec2FeatureProjectionHead
+from MK_SSL.audio.models.modules.losses import Wav2Vec2Loss
 
+from MK_SSL.audio.models.utils.registry import register_method
 
 
 class Wav2Vec2(nn.Module):
@@ -234,3 +236,22 @@ class Wav2Vec2(nn.Module):
     @property
     def quantizer_num_entries_per_codebook(self) -> int:
         return self.__quantizer_num_entries_per_codebook
+    
+
+
+register_method(
+    name= "wav2vec2",
+    model_cls= Wav2Vec2,
+    loss_fn= Wav2Vec2Loss,
+    transformation= None,
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- BYOL Configuration ----------------\n"
+        f"Projection Dimension         : {model.projection_dim}\n"
+        f"Projection Hidden Dimension  : {model.hidden_dim}\n"
+        f"Moving average decay         : {model.moving_average_decay}\n"
+        "Loss                         : BYOL Loss\n"
+        "Transformation               : SimCLRViewTransform\n"
+        "Transformation prime         : SimCLRViewTransform"
+    )
+)
