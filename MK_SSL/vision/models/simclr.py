@@ -4,7 +4,7 @@ import torch.nn as nn
 from MK_SSL.vision.models.modules.heads import SimCLRProjectionHead
 from MK_SSL.vision.models.modules.losses import NT_Xent
 from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
-from MK_SSL.vision.registry import register_method  
+from MK_SSL.vision.models.utils.registry import register_method  
 
 class SimCLR(nn.Module):
     """

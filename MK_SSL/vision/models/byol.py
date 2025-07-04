@@ -5,7 +5,7 @@ import torch.nn as nn
 from MK_SSL.vision.models.modules.heads import BYOLPredictionHead, BYOLProjectionHead
 from MK_SSL.vision.models.modules.losses import BYOLLoss
 from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
-from MK_SSL.vision.registry import register_method
+from MK_SSL.vision.models.utils.registry import register_method
 
 
 class BYOL(nn.Module):

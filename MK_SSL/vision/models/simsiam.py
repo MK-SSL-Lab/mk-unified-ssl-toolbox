@@ -8,7 +8,7 @@ from MK_SSL.vision.models.modules.heads import (
 
 from MK_SSL.vision.models.modules.losses import NegativeCosineSimilarity
 from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
-from MK_SSL.vision.registry import register_method
+from MK_SSL.vision.models.utils.registry import register_method
 
 
 class SimSiam(nn.Module):
