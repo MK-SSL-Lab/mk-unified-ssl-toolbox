@@ -110,7 +110,7 @@ class Trainer:
 
         self.logger.info(
             "\n"
-            "---------------- AK_SSL: Vision ----------------\n"
+            "---------------- MK_SSL: Vision ----------------\n"
             f"Number of workers : {self.num_workers}\n"
             f"Device            : {self.device}\n"
             f"Method            : {self.method}\n"
