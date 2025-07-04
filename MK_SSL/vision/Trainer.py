@@ -19,7 +19,7 @@ from MK_SSL.vision.models.modules.losses import *
 from MK_SSL.vision.models.modules.transformations import *
 from MK_SSL.utils import configure_logging  
 
-from MK_SSL.vision.registry import get_vision_method
+from MK_SSL.vision.models.utils.registry import get_vision_method
 
 
 
