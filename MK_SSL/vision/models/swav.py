@@ -5,7 +5,7 @@ import torch.nn as nn
 from MK_SSL.vision.models.modules.heads import SwAVProjectionHead
 from MK_SSL.vision.models.modules.losses import SwAVLoss
 from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
-from MK_SSL.vision.models.utils.registry import register_method
+from MK_SSL.vision.models.utils import register_method
 
 class SwAV(nn.Module):
     """

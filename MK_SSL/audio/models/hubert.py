@@ -5,6 +5,9 @@ from typing import Tuple, Optional
 
 from MK_SSL.audio.models.modules.feature_extractors import ConvFeatureExtractor
 from MK_SSL.audio.models.modules.backbones import TransformerEncoder
+from MK_SSL.audio.models.modules.losses import HuBERTLoss
+
+from MK_SSL.audio.models.utils import register_method
 
 
 class HuBERT(nn.Module):
@@ -57,7 +60,35 @@ class HuBERT(nn.Module):
         self.mask_channel_length = mask_channel_length
 
     def forward(self, x: torch.Tensor, padding_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-        ...
+        """
+        Forward pass of HuBERT.
+
+        Args:
+            x (Tensor): Raw audio waveform, shape (B, T).
+            padding_mask (Optional[Tensor]): Padding mask, shape (B, T), with True for padded positions.
+
+        Returns:
+            Tuple:
+                - context features (Tensor): shape (B, T', D)
+                - time mask indices (Tensor): boolean mask of masked positions
+                - None (placeholder for potential feature penalty)
+        """
+        features = self.feature_extractor(x)
+        features = features.transpose(1, 2)  # (B, T', D)
+
+        mask_indices = self.compute_mask_indices(
+            features.shape[:2],
+            mask_prob=self.mask_prob,
+            mask_length=self.mask_length,
+            device=features.device,
+            attention_mask=padding_mask,
+        )
+
+        masked_features = features.clone()
+        masked_features[mask_indices] = 0.0
+
+        context = self.encoder(masked_features, padding_mask)
+        return context, mask_indices, None
 
     @staticmethod
     def get_config(variant: str) -> dict:
@@ -112,3 +143,28 @@ class HuBERT(nn.Module):
             raise ValueError(f"Unknown HuBERT variant: {variant}")
 
         return configs[variant]
+
+
+register_method(
+    name= "hubert",
+    model_cls= HuBERT,
+    loss_fn= HuBERTLoss,
+    transformation= None,
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- HuBERT Configuration ----------------\n"
+        f"Model Variant                     : {model.variant}\n"
+        f"Encoder Embedding Dimension       : {model.encoder.embed_dim}\n"
+        f"Encoder Layers                    : {model.encoder.num_layers}\n"
+        f"Encoder Attention Heads           : {model.encoder.num_heads}\n"
+        f"Feedforward Hidden Dimension      : {model.encoder.ff_interm_features}\n"
+        f"Feature Projection Dropout        : {model.encoder.dropout_input}\n"
+        f"Time Mask Probability             : {model.mask_prob}\n"
+        f"Time Mask Length                  : {model.mask_length}\n"
+        f"Channel Mask Probability          : {model.mask_channel_prob}\n"
+        f"Channel Mask Length               : {model.mask_channel_length}\n"
+        "Loss                              : HuBERT Loss (Cross Entropy over predicted codes)\n"
+        f"Loss Reduction                : {loss.reduction}\n"
+        "Augmentation                      : Internal latent-space masking only"
+    )
+)

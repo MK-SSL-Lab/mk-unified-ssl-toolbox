@@ -75,16 +75,27 @@ class TransformerEncoder(nn.Module):
     ):
         super().__init__()
 
+        self.embed_dim = embed_dim
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.ff_interm_features = ff_interm_features
+        self.dropout_input = dropout_input
+        self.attention_dropout = attention_dropout
+        self.ff_dropout = ff_dropout
+        self.final_dropout = final_dropout
+        self.layer_norm_first = layer_norm_first
+        self.pos_conv_kernel = pos_conv_kernel
+        self.pos_conv_groups = pos_conv_groups
+        self.layer_drop = layer_drop
+
 
         self.positional_encoding = PositionalConvEmbedding(
-            embed_dim=embed_dim,
-            kernel_size=pos_conv_kernel,
-            groups=pos_conv_groups,
+            embed_dim=self.embed_dim,
+            kernel_size=self.pos_conv_kernel,
+            groups=self.pos_conv_groups,
         )
 
         self.transformer_layers = nn.ModuleList()
-        self.layer_drop = layer_drop
-        self.layer_norm_first = layer_norm_first
 
         for _ in range(num_layers):
             layer = nn.TransformerEncoderLayer(
@@ -95,7 +106,7 @@ class TransformerEncoder(nn.Module):
                 activation="gelu",
                 batch_first=True,
             )
-            if layer_norm_first:
+            if self.layer_norm_first:
                 layer.norm1 = nn.LayerNorm(embed_dim)
                 layer.norm2 = nn.LayerNorm(embed_dim)
             self.transformer_layers.append(layer)

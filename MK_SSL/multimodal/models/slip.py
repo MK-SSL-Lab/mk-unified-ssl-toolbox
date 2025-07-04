@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from MK_SSL.multimodal.models.clip import CLIP
 from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
-from MK_SSL.multimodal.models.utils.registry import register_method
+from MK_SSL.multimodal.models.utils import register_method
 
 
 class SLIP(nn.Module):

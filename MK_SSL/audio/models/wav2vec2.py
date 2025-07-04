@@ -11,7 +11,7 @@ from MK_SSL.audio.models.modules.quantizer import GumbelVectorQuantizer
 from MK_SSL.audio.models.modules.heads import Wav2Vec2FeatureProjectionHead
 from MK_SSL.audio.models.modules.losses import Wav2Vec2Loss
 
-from MK_SSL.audio.models.utils.registry import register_method
+from MK_SSL.audio.models.utils import register_method
 
 
 class Wav2Vec2(nn.Module):
@@ -246,12 +246,20 @@ register_method(
     transformation= None,
     logs=lambda model, loss: (
         "\n"
-        "---------------- BYOL Configuration ----------------\n"
-        f"Projection Dimension         : {model.projection_dim}\n"
-        f"Projection Hidden Dimension  : {model.hidden_dim}\n"
-        f"Moving average decay         : {model.moving_average_decay}\n"
-        "Loss                         : BYOL Loss\n"
-        "Transformation               : SimCLRViewTransform\n"
-        "Transformation prime         : SimCLRViewTransform"
+        "---------------- Wav2Vec2 Configuration ----------------\n"
+        f"Model Variant                     : {model.variant}\n"
+        f"Encoder Embedding Dimension       : {model.encoder.embed_dim}\n"
+        f"Encoder Layers                    : {model.encoder.num_layers}\n"
+        f"Encoder Attention Heads           : {model.encoder.num_heads}\n"
+        f"Feedforward Hidden Dimension      : {model.encoder.ff_interm_features}\n"
+        f"Feature Projection Dropout        : {model.encoder.dropout_input}\n"
+        f"Quantizer Groups                  : {model.quantizer_num_groups}\n"
+        f"Entries per Codebook              : {model.quantizer_num_entries_per_codebook}\n"
+        f"Code Vector Size             : {model.quantizer.code_vector_size}\n"
+        f"Feature Projection Dropout        : {model.feature_proj.dropout}\n"
+        "Masking                           : Applied internally on latent features\n"
+        "Loss                              : Contrastive + Diversity Loss (Wav2Vec2Loss)"
+        f"Loss Temperature                : {loss.temperature}\n"
+        f"Loss Alpha                     : {loss.alpha}\n"
     )
 )
