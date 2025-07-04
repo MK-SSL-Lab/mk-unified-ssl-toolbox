@@ -1,9 +1,85 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchaudio.transforms as T
+
 from torchvision.models.resnet import ResNeXt
-from transformers import BertModel, BertConfig
 from torchvision.models import resnet50
+
+from transformers import BertModel, BertConfig
+
+
+from typing import Optional
+
+from MK_SSL.multimodal.models.modules.feature_extractors import ResNetFeatureExtractor
+from MK_SSL.multimodal.models.modules.heads import Wav2ClipProjectionHead
+
+class Wav2ClipEncoder(nn.Module):
+    """
+    Wav2CLIP audio encoder module.
+
+    Converts raw waveform into spectrograms and processes them through a ResNet-based encoder
+    and an optional projection head.
+
+    Args:
+        backbone (nn.Module, optional): Custom CNN backbone. If None, uses default ResNetAudio.
+        projection_dim (int, optional): Output dimension of projection head. If None, no projection is applied.
+        input_dim (int): Dimension of backbone output (default: 512 for ResNetAudio).
+        freeze_backbone (bool): If True, freezes the backbone during training.
+        sample_rate (int): Sampling rate of input waveform.
+        n_fft (int): FFT window size for spectrogram.
+        hop_length (int): Hop length for spectrogram.
+    """
+
+    def __init__(
+        self,
+        backbone: Optional[nn.Module] = None,
+        projection_dim: Optional[int] = None,
+        input_dim: int = 512,
+        freeze_backbone: bool = False,
+        sample_rate: int = 16000,
+        n_fft: int = 400,
+        hop_length: int = 160,
+    ):
+        super().__init__()
+
+        self.spectrogram = T.Spectrogram(
+            n_fft=n_fft,
+            hop_length=hop_length,
+            power=None,  # returns complex tensor
+        )
+        self.magnitude = lambda x: x.abs()  # get magnitude of spectrogram
+
+        self.backbone = backbone if backbone is not None else ResNetFeatureExtractor.get_default_resnet_audio()
+        if freeze_backbone:
+            for p in self.backbone.parameters():
+                p.requires_grad = False
+
+        self.projection = None
+        if projection_dim is not None:
+            self.projection = Wav2ClipProjectionHead(input_dim=input_dim, output_dim=projection_dim)
+
+    def forward(self, waveform: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass of the audio encoder.
+
+        Args:
+            waveform (torch.Tensor): Input tensor of shape (B, T).
+
+        Returns:
+            torch.Tensor: Encoded (and optionally projected) audio representation of shape (B, D).
+        """
+        if waveform.dim() == 2:
+            waveform = waveform.unsqueeze(1)  # (B, 1, T)
+
+        spec = self.spectrogram(waveform)  # (B, 1, F, T)
+        mag = self.magnitude(spec)         # drop phase
+        features = self.backbone(mag)
+
+        if self.projection is not None:
+            features = self.projection(features)
+
+        return features
 
 
 
