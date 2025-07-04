@@ -4,10 +4,10 @@ from typing import Optional, Tuple, Union
 from MK_SSL.audio.models.modules.heads import COLAProjectionHead
 from MK_SSL.audio.models.modules.backbones import EfficientNetAudioEncoder
 
-from MK_SSL.audio.models.modules.losses.infoNCE_loss import InfoNCELoss
-from MK_SSL.audio.models.modules.transformations.cola_transform import COLAAudioTransform
+from MK_SSL.audio.models.modules.losses import InfoNCELoss
+from MK_SSL.audio.models.modules.transformations import COLAAudioTransform
 
-from MK_SSL.audio.models.utils.registry import register_method
+from MK_SSL.audio.models.utils import register_method
 
 
 class COLA(nn.Module):
@@ -108,9 +108,8 @@ register_method(
         "---------------- COLA Configuration ----------------\n"
         f"Input Type                       : Log-mel spectrograms (B, 1, F, T)\n"
         f"Backbone Architecture            : {model.backbone.__class__.__name__}\n"
-        f"Backbone Output Feature Dimension: {model.feature_size}\n"
-        "Loss                             : NT-Xent (Normalized Temperature-scaled Cross Entropy)\n"
-        "Augmentation                     : User-defined (e.g., waveform-level or spectrogram-level)"
+        "Loss                             : InfoNCE Loss\n"
+        "Augmentation                     : COLAAudioTransform"
 
     )
 )
