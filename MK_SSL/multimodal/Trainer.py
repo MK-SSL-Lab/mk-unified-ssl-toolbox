@@ -294,6 +294,84 @@ class Trainer:
             epoch_loss += loss.item()
             tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
 
+
+
+    def _train_clap(self, tepoch, optimizer):
+        epoch_loss = 0.0
+        for step, batch in enumerate(tepoch):
+            batch = {
+                k: v.to(self.device)
+                for k, v in batch.items()
+                if k in ["audio", "text"]  # adjust keys as per your dataset
+            }
+
+            with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
+                _, _, sim_matrix = self.model(
+                    audio_input=batch["audio"], text_input=batch["text"]
+                )
+                loss = self.model.criterion(sim_matrix)
+
+            optimizer.zero_grad()
+            self.scaler.scale(loss).backward()
+            self.scaler.step(optimizer)
+            self.scaler.update()
+
+            epoch_loss += loss.item()
+            tepoch.set_postfix(
+                loss=loss.item(),
+                temp=self.model.temperature.exp().item(),  # scalar temperature
+                lr=optimizer.param_groups[0]["lr"],
+            )
+
+        return epoch_loss
+    
+
+    def _train_audio_clip(self, tepoch, optimizer):
+        epoch_loss = 0.0
+
+        for step, batch in enumerate(tepoch):
+            batch = {
+                k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                for k, v in batch.items()
+                if k in ["audio", "image", "text"]
+            }
+
+            with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
+                (
+                    _,
+                    _,
+                    _,
+                    sim_text_audio,
+                    sim_text_image,
+                    sim_audio_image,
+                ) = self.model(
+                    audio_input=batch.get("audio", None),
+                    image_input=batch.get("image", None),
+                    text_input=batch.get("text", None),
+                )
+
+                loss = self.model.criterion(
+                    sim_text_audio=sim_text_audio,
+                    sim_text_image=sim_text_image,
+                    sim_audio_image=sim_audio_image,
+                )
+
+            optimizer.zero_grad()
+            self.scaler.scale(loss).backward()
+            self.scaler.step(optimizer)
+            self.scaler.update()
+
+            epoch_loss += loss.item()
+
+            tepoch.set_postfix(
+                loss=loss.item(),
+                temp=self.model.temperature.exp().item(),
+                lr=optimizer.param_groups[0]["lr"],
+            )
+
+        return epoch_loss
+
+
     def train(
         self,
         dataset: torch.utils.data.Dataset,
