@@ -4,19 +4,6 @@ from huggingface_hub import login, whoami, hf_hub_download
 from transformers import AutoModel, AutoConfig
 from torch import nn
 
-
-class NotAuthenticatedError(Exception):
-    """Raised when a Hugging Face user is not authenticated."""
-    def __init__(self):
-        message = (
-            "You are not authenticated with Hugging Face Hub.\n"
-            "Please login using:\n\n"
-            "    HFHubInterface.authenticate(token=\"<your_token>\")\n\n"
-            "or set the environment variable HUGGINGFACE_HUB_TOKEN."
-        )
-        super().__init__(message)
-
-
 class HFHubInterface:
     """
     Interface for interacting with Hugging Face Hub:
@@ -42,10 +29,15 @@ class HFHubInterface:
             try:
                 HFHubInterface._user = whoami()
             except Exception:
-                raise NotAuthenticatedError()
+                raise PermissionError(
+                    "You are not authenticated with Hugging Face Hub.\n"
+                    "Please login using:\n\n"
+                    "HFHubInterface.authenticate(token=\"<your_token>\")\n\n"
+                    "or set the environment variable HUGGINGFACE_HUB_TOKEN."
+                )
 
     @staticmethod
-    def load_module(model_id: str, pretrained: bool = True, **kwargs) -> nn.Module:
+    def load_model(model_id: str, pretrained: bool = True, **kwargs) -> nn.Module:
         HFHubInterface._check_auth()
         if pretrained:
             return AutoModel.from_pretrained(model_id, **kwargs)
