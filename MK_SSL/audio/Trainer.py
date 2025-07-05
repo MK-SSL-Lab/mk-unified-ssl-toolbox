@@ -11,6 +11,9 @@ from torcheval.metrics.functional import multiclass_accuracy
 from MK_SSL.utils import configure_logging  
 
 from MK_SSL.audio.models.utils import get_method
+from MK_SSL.audio.models.hubert import HuBERT, HubertConfig
+from MK_SSL.audio.models.modules.losses import HuBERTLoss
+from MK_SSL.audio.models.modules.tools import PseudoLabelGenerator
 
 
 class Trainer:
@@ -152,6 +155,80 @@ class Trainer:
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
 
+    def _train_hubert(self, dataloader, config: HubertConfig) -> None:
+        """Pre-train HuBERT using generated pseudo-labels."""
+        if config.init_from_mfcc:
+            label_gen = PseudoLabelGenerator(
+                input_type="mfcc",
+                sample_rate=config.sample_rate,
+                kmeans_clusters=config.num_clusters,
+            )
+        else:
+            label_gen = PseudoLabelGenerator(
+                input_type="transformer",
+                model=self.model,
+                transformer_layer=config.extractor_layer,
+                sample_rate=config.sample_rate,
+                kmeans_clusters=config.num_clusters,
+            )
+
+        features = []
+        for batch in dataloader:
+            wave = batch[0].to(self.device) if not isinstance(batch, dict) else batch.get("audio").to(self.device)
+            with torch.no_grad():
+                feat = label_gen.extract_features(wave)
+            features.append(feat.cpu().numpy())
+        flat = np.concatenate(features, axis=0)
+        label_gen.kmeans.fit(flat)
+        label_gen.fitted = True
+
+        model = HuBERT(
+            variant=config.variant,
+            mask_prob=config.mask_prob,
+            mask_length=config.mask_length,
+            mask_channel_prob=config.mask_channel_prob,
+            mask_channel_length=config.mask_channel_length,
+        ).to(self.device)
+        head = nn.Linear(model.encoder.embed_dim, config.num_clusters).to(self.device)
+        criterion = HuBERTLoss().to(self.device)
+        optimizer = torch.optim.AdamW(list(model.parameters()) + list(head.parameters()), lr=config.lr)
+
+        model.train()
+        head.train()
+        for epoch in range(1, config.epochs + 1):
+            running_loss = 0.0
+            pbar = tqdm(dataloader, desc=f"Epoch {epoch}/{config.epochs}")
+            for batch in pbar:
+                wave = batch[0].to(self.device) if not isinstance(batch, dict) else batch.get("audio").to(self.device)
+                with torch.no_grad():
+                    feats = label_gen.extract_features(wave)
+                    targets_np = label_gen.kmeans.predict(feats.cpu().numpy())
+                    targets = torch.from_numpy(targets_np).long().to(self.device)
+
+                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
+                    context, mask_idx, _ = model(wave)
+                    logits = head(context)
+                    loss = criterion(logits, targets, mask_idx)
+
+                optimizer.zero_grad()
+                self.scaler.scale(loss).backward()
+                self.scaler.step(optimizer)
+                self.scaler.update()
+                running_loss += loss.item()
+                pbar.set_postfix({"loss": loss.item()})
+
+            avg_loss = running_loss / len(dataloader)
+            self.logger.info(f"[Epoch {epoch}] Loss: {avg_loss:.4f}")
+
+            if epoch % self.checkpoint_interval == 0:
+                ckpt_path = os.path.join(self.checkpoint_path, f"hubert_model_{self.timestamp}_epoch{epoch}.pth")
+                torch.save({"model": model.state_dict(), "head": head.state_dict()}, ckpt_path)
+                self.logger.info(f"Model checkpoint saved: {ckpt_path}")
+
+        final_path = os.path.join(self.checkpoint_path, f"hubert_model_{self.timestamp}_epoch{config.epochs}.pth")
+        torch.save({"model": model.state_dict(), "head": head.state_dict()}, final_path)
+        self.logger.info(f"Final model checkpoint saved: {final_path}")
+
 
     def train(
         self,
@@ -162,6 +239,7 @@ class Trainer:
         lr: float = 1e-4,
         weight_decay: float = 1e-2,
         optimizer: str = "adamw",
+        hubert_config: HubertConfig | None = None,
         **kwargs,
     ) -> None:
         """
@@ -175,6 +253,7 @@ class Trainer:
             lr (float, optional): Learning rate. Defaults to 1e-4.
             weight_decay (float, optional): Weight decay (L2 regularization). Defaults to 1e-2.
             optimizer (str, optional): Optimizer to use ('adam', 'sgd', or 'adamw'). Defaults to 'adamw'.
+            hubert_config (HubertConfig, optional): Configuration for HuBERT pretraining.
             **kwargs: Additional keyword arguments passed to optimizer or loss.
         """
         train_loader = DataLoader(
@@ -211,7 +290,11 @@ class Trainer:
         if self.reload_checkpoint:
             start_epoch = self._reload_latest_checkpoint() + 1
 
-        if self.method == "wav2vec2":
+        if self.method == "hubert":
+            if hubert_config is None:
+                hubert_config = HubertConfig()
+            self._train_hubert(train_loader, hubert_config)
+        elif self.method == "wav2vec2":
             self._train_wav2vec2(train_loader, optimizer, max_epochs, start_epoch)
         else:
             raise NotImplementedError(f"Training not implemented for method: {self.method}")

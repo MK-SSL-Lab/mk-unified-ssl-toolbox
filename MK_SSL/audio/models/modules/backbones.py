@@ -184,6 +184,16 @@ class TransformerEncoder(nn.Module):
 
         return features
 
+    def extract_layer(
+        self,
+        x: Tensor,
+        layer: int,
+        lengths: Optional[Tensor] = None,
+    ) -> Tensor:
+        """Return the output of a specific transformer layer."""
+        feats = self.extract_features(x, lengths, num_layers=layer)
+        return feats[layer - 1]
+
 
 class EfficientNetAudioEncoder(nn.Module):
     """Encoder backbone for COLA (Contrastive Learning of Audio).
