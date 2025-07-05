@@ -6,8 +6,25 @@ from typing import Tuple, Optional
 from MK_SSL.audio.models.modules.feature_extractors import ConvFeatureExtractor
 from MK_SSL.audio.models.modules.backbones import TransformerEncoder
 from MK_SSL.audio.models.modules.losses import HuBERTLoss
+from dataclasses import dataclass
 
 from MK_SSL.audio.models.utils import register_method
+
+
+@dataclass
+class HubertConfig:
+    variant: str = "base"
+    mask_prob: float = 0.065
+    mask_length: int = 10
+    mask_channel_prob: float = 0.0
+    mask_channel_length: int = 10
+    num_clusters: int = 100
+    kmeans_seed: int = 0
+    init_from_mfcc: bool = True
+    extractor_layer: int = 6
+    sample_rate: int = 16000
+    lr: float = 1e-4
+    epochs: int = 10
 
 
 class HuBERT(nn.Module):
