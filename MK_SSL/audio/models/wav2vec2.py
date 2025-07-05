@@ -11,7 +11,7 @@ from MK_SSL.audio.models.modules.quantizer import GumbelVectorQuantizer
 from MK_SSL.audio.models.modules.heads import Wav2Vec2FeatureProjectionHead
 from MK_SSL.audio.models.modules.losses import Wav2Vec2Loss
 
-from MK_SSL.audio.models.utils.registry import register_method
+from MK_SSL.audio.models.utils import register_method
 
 
 class Wav2Vec2(nn.Module):

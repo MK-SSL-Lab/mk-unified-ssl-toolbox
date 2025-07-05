@@ -5,7 +5,7 @@ from typing import Tuple , Optional
 
 from MK_SSL.multimodal.models.modules.backbones import CNN14
 from MK_SSL.multimodal.models.modules.backbones import BERTTextEncoder
-from MK_SSL.multimodal.models.utils.registry import register_method
+from MK_SSL.multimodal.models.utils import register_method
 
 
 class CLAP(nn.Module):

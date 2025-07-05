@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 from copy import deepcopy
 
-from MK_SSL.multimodal.models.utils.registry import register_method
+from MK_SSL.multimodal.models.utils import register_method
 
 
 class ALBEF(nn.Module):

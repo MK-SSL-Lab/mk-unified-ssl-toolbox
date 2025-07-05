@@ -12,7 +12,7 @@ from torch.nn.utils.clip_grad import clip_grad_norm_
 from MK_SSL.multimodal.models import *
 from MK_SSL.vision.models.modules.losses.nt_xent import NT_Xent
 from MK_SSL.utils import configure_logging  
-from MK_SSL.multimodal.models.utils import get_vision_method
+from MK_SSL.multimodal.models.utils import get_method
 class Trainer:
 
     def __init__(
@@ -94,7 +94,7 @@ class Trainer:
 
 
         try:
-            method_cfg = get_vision_method(self.method)
+            method_cfg = get_method(self.method)
         except ValueError as e:
             self.logger.error(f"Method {self.method} not found in registry.")
             raise e

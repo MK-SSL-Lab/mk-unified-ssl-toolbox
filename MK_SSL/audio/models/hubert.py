@@ -7,7 +7,7 @@ from MK_SSL.audio.models.modules.feature_extractors import ConvFeatureExtractor
 from MK_SSL.audio.models.modules.backbones import TransformerEncoder
 from MK_SSL.audio.models.modules.losses import HuBERTLoss
 
-from MK_SSL.audio.models.utils.registry import register_method
+from MK_SSL.audio.models.utils import register_method
 
 
 class HuBERT(nn.Module):

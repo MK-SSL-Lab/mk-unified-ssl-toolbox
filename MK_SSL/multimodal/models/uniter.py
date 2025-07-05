@@ -9,7 +9,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from MK_SSL.multimodal.models.utils.registry import register_method
+from MK_SSL.multimodal.models.utils import register_method
 
 
 class UNITER(nn.Module):

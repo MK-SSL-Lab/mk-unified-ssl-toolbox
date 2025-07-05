@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from MK_SSL.vision.models.modules.heads import BarlowTwinsProjectionHead
-from MK_SSL.vision.models.utils.registry import register_method
+from MK_SSL.vision.models.utils import register_method
 from MK_SSL.vision.models.modules.losses import BarlowTwinsLoss
 from MK_SSL.vision.models.modules.transformations import SimCLRViewTransform
 class BarlowTwins(nn.Module):

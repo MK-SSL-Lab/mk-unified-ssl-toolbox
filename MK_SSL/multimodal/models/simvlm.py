@@ -8,7 +8,7 @@ from einops import rearrange
 from axial_positional_embedding import AxialPositionalEmbedding
 
 from MK_SSL.multimodal.models.utils.simvlm.resblock import BottleneckBlock
-from MK_SSL.multimodal.models.utils.registry import register_method
+from MK_SSL.multimodal.models.utils import register_method
 
 
 class ResBlock(nn.Sequential):

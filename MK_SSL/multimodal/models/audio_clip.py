@@ -6,7 +6,7 @@ from typing import Tuple, List, Optional
 from MK_SSL.multimodal.models.modules.backbones import AudioResNeXtStem
 from MK_SSL.multimodal.models.modules.backbones import AttentionPool2d
 from MK_SSL.multimodal.models.modules.backbones import TransformerLayer
-from MK_SSL.multimodal.models.utils.registry import register_method
+from MK_SSL.multimodal.models.utils import register_method
 
 class AudioCLIP(nn.Module):
     """

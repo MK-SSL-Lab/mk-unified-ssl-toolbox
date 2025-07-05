@@ -10,7 +10,7 @@ from torch.utils.data import Subset
 import logging
 from torcheval.metrics.functional import multiclass_accuracy
 
-from MK_SSL.audio.models.utils.registry import get_audio_method
+from MK_SSL.audio.models.utils import get_method
 
 
 
@@ -64,7 +64,7 @@ class Trainer:
         )
 
         try:
-            method_cfg = get_vision_method(self.method)
+            method_cfg = get_method(self.method)
         except ValueError as e:
             self.logger.error(f"Method {self.method} not found in registry.")
             raise e
