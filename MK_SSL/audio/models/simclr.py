@@ -6,10 +6,10 @@ from MK_SSL.audio.models.modules.heads import InputSpeechSimCLRProjectionHead, S
 from MK_SSL.audio.models.modules.feature_extractors import FBANKFeatureExtractor
 from MK_SSL.audio.models.modules.backbones import TransformerEncoder
 from MK_SSL.audio.models.modules.losses import NTXent_loss
-from MK_SSL.audio.models.modules.transformations.simclr_transform import SimCLRAudioTransform
+from MK_SSL.audio.models.modules.transformations import SimCLRAudioTransform
 
 
-from MK_SSL.audio.models.utils.registry import register_method
+from MK_SSL.audio.models.utils import register_method
 
 
 class SimCLRSpeech(nn.Module):
@@ -119,11 +119,9 @@ register_method(
         "---------------- SimCLRSpeech Configuration ----------------\n"
         f"Input Feature Dimension           : 80 (FBANK)\n"
         f"Input Projection Used             : {not isinstance(model.input_proj, nn.Identity)}\n"
-        f"Encoder Embedding Dimension       : {model.backbone.embed_dim}\n"
-        f"Encoder Layers                    : {model.backbone.num_layers}\n"
-        f"Encoder Attention Heads           : {model.backbone.num_heads}\n"
+        f"Backbone Architecture            : {model.backbone.__class__.__name__}\n"
         "Loss                              : NT-Xent (Normalized Temperature-scaled Cross Entropy)\n"
-        "Augmentation                      : User-defined (e.g., waveform transformations)"
+        "Augmentation                      : SimCLRAudioTransform"
 
     )
 )
