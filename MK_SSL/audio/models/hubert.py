@@ -6,40 +6,37 @@ from typing import Tuple, Optional
 from MK_SSL.audio.models.modules.feature_extractors import ConvFeatureExtractor
 from MK_SSL.audio.models.modules.backbones import TransformerEncoder
 from MK_SSL.audio.models.modules.losses import HuBERTLoss
-from dataclasses import dataclass
 
 from MK_SSL.audio.models.utils import register_method
-
-
-@dataclass
-class HubertConfig:
-    variant: str = "base"
-    mask_prob: float = 0.065
-    mask_length: int = 10
-    mask_channel_prob: float = 0.0
-    mask_channel_length: int = 10
-    num_clusters: int = 100
-    kmeans_seed: int = 0
-    init_from_mfcc: bool = True
-    # extractor_layer: int = 6 # This will now be determined by the variant
-    sample_rate: int = 16000
-    lr: float = 1e-4
-    epochs: int = 10
-    iterations: int = 2 # Setting default to 2 based on paper (total cycles)
 
 
 class HuBERT(nn.Module):
     """
     HuBERT model for self-supervised speech representation learning.
 
+    This implementation supports time-based and channel-based masking,
+    and can optionally initialize from MFCC features. It outputs discrete 
+    cluster predictions for contrastive or predictive objectives.
+
     Args:
-        variant (str): Model variant to use. One of {"base", "large", "x-large"}.
-        mask_prob (float): Probability of masking a given time step.
-        mask_length (int): Length of each mask span.
-        mask_channel_prob (float): Probability of masking a feature channel.
-        mask_channel_length (int): Length of channel mask span.
-        num_clusters (int): Number of clusters for the prediction head output.
+        variant (str, optional): Model variant architecture to use. 
+            One of {"base", "large", "x-large"}. Defaults to "base".
+        mask_prob (float, optional): Probability of masking a given time step 
+            during training. Defaults to 0.065.
+        mask_length (int, optional): Length of each temporal mask span. 
+            Defaults to 10.
+        mask_channel_prob (float, optional): Probability of masking a feature 
+            channel. Defaults to 0.0.
+        mask_channel_length (int, optional): Length of each channel mask span. 
+            Defaults to 10.
+        num_clusters (int, optional): Number of clusters for the output 
+            quantizer/prediction head. Defaults to 100.
+        init_from_mfcc (bool, optional): Whether to initialize features from 
+            MFCC instead of raw waveform. Defaults to True.
+        sample_rate (int, optional): Sampling rate of input waveform, used 
+            for MFCC extraction or frontend processing. Defaults to 16000.
     """
+
 
     def __init__(
         self,
@@ -49,6 +46,9 @@ class HuBERT(nn.Module):
         mask_channel_prob: float = 0.0,
         mask_channel_length: int = 10,
         num_clusters: int = 100,
+        init_from_mfcc: bool = True,
+        sample_rate: int = 16000,
+        **kwargs  
     ):
         super().__init__()
         self.variant = variant
@@ -57,43 +57,45 @@ class HuBERT(nn.Module):
         self.mask_channel_prob = mask_channel_prob
         self.mask_channel_length = mask_channel_length
         self.num_clusters = num_clusters
+        self.init_from_mfcc = init_from_mfcc
+        self.sample_rate = sample_rate
 
         # Get configuration based on the variant
-        model_config = self._get_config(variant)
+        config = self._get_config(variant)
 
         # Store variant-specific config for easy access in logs/elsewhere
-        self.model_config = model_config
+        self.config = config
 
         # Convolutional Feature Extractor
         self.feature_extractor = ConvFeatureExtractor(
-            conv_layers=model_config["conv_layers"],
-            conv_dropout=model_config["conv_dropout"],
+            conv_layers=config["conv_layers"],
+            conv_dropout=config["conv_dropout"],
         )
-        feature_extractor_output_dim = model_config["feature_extractor_output_dim"]
+        feature_extractor_output_dim = config["feature_extractor_output_dim"]
 
         # Feature projection for Transformer input
         self.feature_projection = nn.Linear(
-            feature_extractor_output_dim, model_config["encoder_embed_dim"]
+            feature_extractor_output_dim, config["encoder_embed_dim"]
         )
-        self.post_extract_proj_norm = nn.LayerNorm(model_config["encoder_embed_dim"])
-        self.post_extract_proj_dropout = nn.Dropout(model_config["encoder_dropout_input"])
+        self.post_extract_proj_norm = nn.LayerNorm(config["encoder_embed_dim"])
+        self.post_extract_proj_dropout = nn.Dropout(config["encoder_dropout_input"])
 
 
         # Transformer Encoder
         self.encoder = TransformerEncoder(
-            embed_dim=model_config["encoder_embed_dim"],
-            ff_interm_features=model_config["encoder_ff_interm_features"],
-            num_layers=model_config["encoder_num_layers"],
-            num_heads=model_config["encoder_num_heads"],
-            dropout=model_config["encoder_dropout"],
-            attention_dropout=model_config["encoder_attention_dropout"],
-            activation_dropout=model_config["encoder_activation_dropout"],
-            encoder_layer_norm_first=model_config["encoder_layer_norm_first"],
-            encoder_layer_drop=model_config["encoder_layer_drop"],
+            embed_dim=config["encoder_embed_dim"],
+            ff_interm_features=config["encoder_ff_interm_features"],
+            num_layers=config["encoder_num_layers"],
+            num_heads=config["encoder_num_heads"],
+            dropout=config["encoder_dropout"],
+            attention_dropout=config["encoder_attention_dropout"],
+            activation_dropout=config["encoder_activation_dropout"],
+            encoder_layer_norm_first=config["encoder_layer_norm_first"],
+            encoder_layer_drop=config["encoder_layer_drop"],
         )
 
         # Prediction Head (maps Transformer output to number of clusters)
-        self.prediction_head = nn.Linear(model_config["encoder_embed_dim"], num_clusters)
+        self.prediction_head = nn.Linear(config["encoder_embed_dim"], num_clusters)
 
 
     def _get_config(self, variant: str):
@@ -118,7 +120,8 @@ class HuBERT(nn.Module):
                 encoder_dropout=0.1,
                 encoder_layer_norm_first=False,
                 encoder_layer_drop=0.1,
-                extractor_layer=6, # For subsequent iterations of base
+                max_iterations= 2, 
+                extractor_layer=6,
             ),
             "large": dict(
                 conv_layers=[
@@ -137,7 +140,8 @@ class HuBERT(nn.Module):
                 encoder_dropout=0.1,
                 encoder_layer_norm_first=False,
                 encoder_layer_drop=0.1,
-                extractor_layer=9, # For subsequent iterations of large
+                max_iterations= 2, 
+                extractor_layer=9, 
             ),
             "x-large": dict(
                 conv_layers=[
@@ -156,7 +160,8 @@ class HuBERT(nn.Module):
                 encoder_dropout=0.1,
                 encoder_layer_norm_first=False,
                 encoder_layer_drop=0.1,
-                extractor_layer=9, # For subsequent iterations of x-large
+                max_iterations= 2, 
+                extractor_layer=9,
             ),
         }
 
@@ -268,8 +273,12 @@ class HuBERT(nn.Module):
 register_method(
     name= "hubert",
     model_cls= HuBERT,
-    loss_fn= HuBERTLoss,
+    loss= HuBERTLoss,
     transformation= None,
+    default_params={
+        "init_from_mfcc": True,  
+        "sample_rate": 16000,  
+    },
     logs=lambda model, loss: (
         "\n"
         "---------------- HuBERT Configuration ----------------\n"
@@ -284,7 +293,7 @@ register_method(
         f"Channel Mask Probability          : {model.mask_channel_prob}\n"
         f"Channel Mask Length               : {model.mask_channel_length}\n"
         f"Number of Clusters (Prediction Head Output): {model.num_clusters}\n"
-        f"Extractor Layer for Subsequent Iterations: {model.model_config['extractor_layer']}\n" # Added
+        f"Extractor Layer for Subsequent Iterations: {model.config['extractor_layer']}\n" # Added
         "Loss                              : HuBERT Loss (Cross Entropy over predicted codes)\n"
         f"Loss Reduction                    : {loss.reduction}\n"
         "Augmentation                      : Internal latent-space masking only"

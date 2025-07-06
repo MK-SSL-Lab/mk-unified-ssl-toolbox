@@ -66,7 +66,7 @@ class SimSiam(nn.Module):
 register_method(
     name= "simsiam",
     model_cls= SimSiam,
-    loss_fn= NegativeCosineSimilarity,
+    loss= NegativeCosineSimilarity,
     transformation= SimCLRViewTransform,
     logs=lambda model, loss: (
         "\n"

@@ -193,7 +193,7 @@ class MoCoV2(nn.Module):
 register_method(
     name= "mocov2",
     model_cls= MoCoV2,
-    loss_fn= nn.CrossEntropyLoss,
+    loss= nn.CrossEntropyLoss,
     transformation= SimCLRViewTransform,
     logs=lambda model, loss: (
         "\n"
@@ -209,7 +209,7 @@ register_method(
 register_method(
     name= "mocov3",
     model_cls= MoCov3,
-    loss_fn= InfoNCE_MoCoV3,
+    loss= InfoNCE_MoCoV3,
     transformation= SimCLRViewTransform,
     logs=lambda model, loss: (
         "\n"

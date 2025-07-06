@@ -1,19 +1,21 @@
-from typing import Type, Callable, Union, Optional
+from typing import Type, Callable, Union, Optional, Tup
 
 _METHOD_REGISTRY = {}
 
 def register_method(
     name: str,
     model_cls: Type,
-    loss_fn: Callable,
-    transformation: Callable,
+    loss: Type,
+    transformation: Optional[Type] = None,
     logs: Union[str, Callable[[object, Optional[object]], str]] = None,
+    default_params: Optional[dict] = None,
 ):
     _METHOD_REGISTRY[name.lower()] = {
         "model": model_cls,
-        "loss": loss_fn,
+        "loss": loss,
         "transformation": transformation,
         "logs": logs,
+        "params": default_params or {},
     }
 
 def get_method(name: str):

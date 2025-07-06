@@ -56,7 +56,7 @@ class BarlowTwins(nn.Module):
 register_method(
     name= "barlowtwins",
     model_cls= BarlowTwins,
-    loss_fn= BarlowTwinsLoss,
+    loss= BarlowTwinsLoss,
     transformation= SimCLRViewTransform,
     logs=lambda model, loss: (
         "\n"

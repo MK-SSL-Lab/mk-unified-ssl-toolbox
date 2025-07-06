@@ -119,7 +119,7 @@ class SwAV(nn.Module):
 register_method(
     name= "swav",
     model_cls= SwAV,
-    loss_fn= SwAVLoss,
+    loss= SwAVLoss,
     transformation= SimCLRViewTransform,
     logs=lambda model, loss: (
         "\n"

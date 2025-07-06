@@ -112,8 +112,9 @@ class SimCLRSpeech(nn.Module):
 register_method(
     name= "simCLRSpeech",
     model_cls= SimCLRSpeech,
-    loss_fn= NTXent_loss,
+    loss= NTXent_loss,
     transformation= SimCLRAudioTransform,
+    params={},
     logs=lambda model, loss: (
         "\n"
         "---------------- SimCLRSpeech Configuration ----------------\n"

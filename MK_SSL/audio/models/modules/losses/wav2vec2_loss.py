@@ -11,18 +11,14 @@ from typing import List
 class Wav2Vec2Loss(nn.Module):
     def __init__(
         self,
-        loss_temperature: float = 0.1,
+        temperature: float = 0.1,
         num_distractors: int = 100,
-        quantizer_num_groups: int = None,
-        quantizer_num_entries_per_codebook: int = None,
-        loss_alpha: float = 0.1,
+        alpha: float = 0.1,
     ):
         super().__init__()
-        self.temperature = loss_temperature
+        self.temperature = temperature
         self.num_distractors = num_distractors
-        self.quantizer_num_groups = quantizer_num_groups
-        self.quantizer_num_entries_per_codebook = quantizer_num_entries_per_codebook
-        self.alpha = loss_alpha
+        self.alpha = alpha
 
         self.similarity = nn.CosineSimilarity(dim=-1)
 

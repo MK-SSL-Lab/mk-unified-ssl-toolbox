@@ -74,7 +74,7 @@ class BYOL(nn.Module):
 register_method(
     name= "byol",
     model_cls= BYOL,
-    loss_fn= BYOLLoss,
+    loss= BYOLLoss,
     transformation= SimCLRViewTransform,
     logs=lambda model, loss: (
         "\n"

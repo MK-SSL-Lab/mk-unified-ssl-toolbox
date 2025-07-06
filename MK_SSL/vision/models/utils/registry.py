@@ -5,13 +5,13 @@ _METHOD_REGISTRY = {}
 def register_method(
     name: str,
     model_cls: Type,
-    loss_fn: Callable,
+    loss: Type,
     transformation: Callable,
     logs: Union[str, Callable[[object, Optional[object]], str]] = None,
 ):
     _METHOD_REGISTRY[name.lower()] = {
         "model": model_cls,
-        "loss": loss_fn,
+        "loss": loss,
         "transformation": transformation,
         "logs": logs,
     }
