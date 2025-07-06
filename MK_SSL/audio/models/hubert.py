@@ -21,11 +21,11 @@ class HubertConfig:
     num_clusters: int = 100
     kmeans_seed: int = 0
     init_from_mfcc: bool = True
-    extractor_layer: int = 6 # Example default, depends on variant
+    # extractor_layer: int = 6 # This will now be determined by the variant
     sample_rate: int = 16000
     lr: float = 1e-4
     epochs: int = 10
-    iterations: int = 1
+    iterations: int = 2 # Setting default to 2 based on paper (total cycles)
 
 
 class HuBERT(nn.Module):
@@ -38,6 +38,7 @@ class HuBERT(nn.Module):
         mask_length (int): Length of each mask span.
         mask_channel_prob (float): Probability of masking a feature channel.
         mask_channel_length (int): Length of channel mask span.
+        num_clusters (int): Number of clusters for the prediction head output.
     """
 
     def __init__(
@@ -58,7 +59,10 @@ class HuBERT(nn.Module):
         self.num_clusters = num_clusters
 
         # Get configuration based on the variant
-        model_config = self._get_config_from_variant(variant)
+        model_config = self._get_config(variant)
+
+        # Store variant-specific config for easy access in logs/elsewhere
+        self.model_config = model_config
 
         # Convolutional Feature Extractor
         self.feature_extractor = ConvFeatureExtractor(
@@ -92,7 +96,7 @@ class HuBERT(nn.Module):
         self.prediction_head = nn.Linear(model_config["encoder_embed_dim"], num_clusters)
 
 
-    def _get_config_from_variant(self, variant: str):
+    def _get_config(self, variant: str):
         """
         Returns model configuration parameters based on the specified variant.
         """
@@ -114,6 +118,7 @@ class HuBERT(nn.Module):
                 encoder_dropout=0.1,
                 encoder_layer_norm_first=False,
                 encoder_layer_drop=0.1,
+                extractor_layer=6, # For subsequent iterations of base
             ),
             "large": dict(
                 conv_layers=[
@@ -132,6 +137,7 @@ class HuBERT(nn.Module):
                 encoder_dropout=0.1,
                 encoder_layer_norm_first=False,
                 encoder_layer_drop=0.1,
+                extractor_layer=9, # For subsequent iterations of large
             ),
             "x-large": dict(
                 conv_layers=[
@@ -150,6 +156,7 @@ class HuBERT(nn.Module):
                 encoder_dropout=0.1,
                 encoder_layer_norm_first=False,
                 encoder_layer_drop=0.1,
+                extractor_layer=9, # For subsequent iterations of x-large
             ),
         }
 
@@ -277,6 +284,7 @@ register_method(
         f"Channel Mask Probability          : {model.mask_channel_prob}\n"
         f"Channel Mask Length               : {model.mask_channel_length}\n"
         f"Number of Clusters (Prediction Head Output): {model.num_clusters}\n"
+        f"Extractor Layer for Subsequent Iterations: {model.model_config['extractor_layer']}\n" # Added
         "Loss                              : HuBERT Loss (Cross Entropy over predicted codes)\n"
         f"Loss Reduction                    : {loss.reduction}\n"
         "Augmentation                      : Internal latent-space masking only"
