@@ -11,7 +11,7 @@ from torch.nn.utils.clip_grad import clip_grad_norm_
 
 from MK_SSL.multimodal.models import *
 from MK_SSL.vision.models.modules.losses.nt_xent import NT_Xent
-from MK_SSL.utils import configure_logging  
+from MK_SSL.utils import configure_logging, get_logger_handler
 from MK_SSL.multimodal.models.utils import get_method
 class Trainer:
 
@@ -58,6 +58,10 @@ class Trainer:
 
 
         self.logger = logging.getLogger(self.__class__.__name__)
+
+        if not self.logger.hasHandlers():
+            self.logger.addHandler(get_logger_handler())
+            
         self.logger.setLevel(log_level)
         self.logger.info("Multimodal Trainer initialized.")
 
