@@ -14,6 +14,39 @@ class GenericSSLTrainer:
         epochs: int = 100,
         device: torch.device = None,
     ):
+        
+        """
+        Trainer class for generic self-supervised pretraining.
+
+        Args:
+            model (nn.Module): The backbone model to train.
+            loss_fn (Callable): The self-supervised loss function.
+            dataloader (DataLoader): DataLoader that yields batches of dicts.
+            optimizer_ctor (Callable): A function that returns an optimizer when called with model parameters.
+            build_views_fn (Callable, optional): A custom function for generating training views (e.g., masking,
+                augmentation, or distortion). If None, defaults to returning two identical views and no masks.
+
+                The function should have the signature:
+                    def build_views_fn(batch: dict) -> Tuple[List[dict], List[Optional[torch.Tensor]]]
+
+                Example:
+                    def my_masking_fn(batch):
+                        input_ids = batch["input_ids"]
+                        attention_mask = batch["attention_mask"]
+                        rand = torch.rand_like(input_ids.float())
+                        mask = (rand < 0.15)
+                        masked_ids = input_ids.clone()
+                        masked_ids[mask] = 103  # [MASK]
+                        return [{"input_ids": masked_ids, "attention_mask": attention_mask}], [mask]
+
+                Returns:
+                    views (List[dict]): A list of input dicts for different views.
+                    masks (List[Optional[torch.Tensor]]): Optional mask(s) per view for use in the loss function.
+
+            epochs (int): Number of training epochs.
+            device (torch.device, optional): The device to run training on.
+        """     
+        
         self.model = model
         self.loss_fn = loss_fn
         self.dataloader = dataloader
@@ -49,4 +82,7 @@ class GenericSSLTrainer:
         return self.loss_fn(**filtered)
 
     def _build_views(self, batch):
+        if self.build_views_fn:
+            return self.build_views_fn(batch)
         return [batch, batch], [None, None]
+    
