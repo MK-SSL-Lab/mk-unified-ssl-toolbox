@@ -223,7 +223,7 @@ class Wav2Vec2(nn.Module):
         time_mask_indices = time_mask_indices[:, :-self.num_mask_time_steps]
         num_masks = sum(time_mask_indices.flatten())
 
-        # Maks hidden states
+        # Mask hidden states
         mask_values = torch.zeros(num_masks, hidden_size, device=hidden_states.device)
         hidden_states[time_mask_indices] = mask_values
 
