@@ -4,16 +4,27 @@ import torch
 import numpy as np
 from torch import nn
 from tqdm.auto import tqdm
+from tqdm import tqdm
 from datetime import datetime
 from torch.utils.data import Subset, DataLoader
 import logging
 from torcheval.metrics.functional import multiclass_accuracy
+from torch.optim import AdamW # Or Adam, as per paper
+
 from MK_SSL.utils import configure_logging  
+
 
 from MK_SSL.audio.models.utils import get_method
 from MK_SSL.audio.models.hubert import HuBERT, HubertConfig
 from MK_SSL.audio.models.modules.losses import HuBERTLoss
 from MK_SSL.audio.models.modules.tools import PseudoLabelGenerator
+
+\
+
+
+
+
+
 
 
 class Trainer:
@@ -93,6 +104,13 @@ class Trainer:
         self.model = method_cfg["model"](
             variant=variant,
             projection_dim=projection_dim,
+            
+            variant=config.variant,
+            mask_prob=config.mask_prob,
+            mask_length=config.mask_length,
+            mask_channel_prob=config.mask_channel_prob,
+            mask_channel_length=config.mask_channel_length,
+            num_clusters=config.num_clusters # This is for the projection head output dim
             **kwargs
         ).to(self.device)
 
@@ -105,6 +123,10 @@ class Trainer:
 
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.mixed_precision_training)
+
+
+    
+
 
 
     def _train_wav2vec2(self, train_loader, optimizer, max_epochs: int, start_epoch: int = 1) -> None:
@@ -155,106 +177,148 @@ class Trainer:
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
 
-    def _train_hubert(self, dataloader, config: HubertConfig) -> None:
-        """Run multi-iteration HuBERT pretraining."""
-        hubert_dir = os.path.join(self.checkpoint_path, "hubert")
-        os.makedirs(hubert_dir, exist_ok=True)
 
-        model: HuBERT | None = None
-
-        for itr in range(1, config.iterations + 1):
-            if itr == 1:
-                clusters = 100
-                label_gen = PseudoLabelGenerator(
-                    input_type="mfcc",
-                    sample_rate=config.sample_rate,
-                    kmeans_clusters=clusters,
-                )
-                model = HuBERT(
-                    variant=config.variant,
-                    mask_prob=config.mask_prob,
-                    mask_length=config.mask_length,
-                    mask_channel_prob=config.mask_channel_prob,
-                    mask_channel_length=config.mask_channel_length,
-                ).to(self.device)
+    def _train_hubert(
+        config: HubertConfig,
+        train_dataloader: DataLoader,
+        val_dataloader: DataLoader, # Optional, for evaluation during training
+        audio_paths_for_kmeans: list, # List of audio paths for K-means fitting
+        output_dir: str,
+        device: torch.device,
+    ):
+        """
+        Trains the HuBERT model iteratively.
+    
+        Args:
+            config (HubertConfig): Configuration object for HuBERT and training parameters.
+            train_dataloader (DataLoader): DataLoader for the training audio data.
+            val_dataloader (DataLoader): DataLoader for validation data (optional).
+            audio_paths_for_kmeans (list): List of audio file paths used for K-means clustering.
+                                           This could be a subset of the training data.
+            output_dir (str): Directory to save models, pseudo-labels, and logs.
+            device (torch.device): Device to run training on (e.g., 'cuda' or 'cpu').
+        """
+    
+        os.makedirs(output_dir, exist_ok=True)
+        model = HuBERT(
+            variant=config.variant,
+            mask_prob=config.mask_prob,
+            mask_length=config.mask_length,
+            mask_channel_prob=config.mask_channel_prob,
+            mask_channel_length=config.mask_channel_length,
+            num_clusters=config.num_clusters # This is for the projection head output dim
+        ).to(device)
+    
+        loss_fn = HuBERTLoss(reduction="mean") # From hubert_loss.py
+        optimizer = AdamW(model.parameters(), lr=config.lr) # Using AdamW, common for transformers
+    
+    
+        # Main Iteration Loop (Offline Clustering + Model Training)
+        for iteration in range(config.iterations):
+            print(f"\n--- Starting Iteration {iteration + 1}/{config.iterations} ---")
+    
+            # --- Phase 1: Offline Clustering (Pseudo-label Generation) ---
+            print("Generating pseudo-labels...")
+    
+            # Determine input type for K-means based on iteration
+            if iteration == 0 and config.init_from_mfcc:
+                # First iteration uses MFCC features for K-means
+                kmeans_input_type = "mfcc"
+                kmeans_model = None # No HuBERT model needed for MFCC extraction
+                kmeans_layer = None
             else:
-                clusters = 500
-                label_gen = PseudoLabelGenerator(
-                    input_type="transformer",
-                    model=model,
-                    transformer_layer=config.extractor_layer,
-                    sample_rate=config.sample_rate,
-                    kmeans_clusters=clusters,
-                )
-
-            features = []
-            for batch in dataloader:
-                wave = batch[0].to(self.device) if not isinstance(batch, dict) else batch.get("audio").to(self.device)
-                with torch.no_grad():
-                    feat = label_gen.extract_features(wave)
-                features.append(feat.cpu().numpy())
-
-            flat = np.concatenate(features, axis=0)
-            if itr > 1:
-                keep = np.random.choice(len(flat), max(1, int(0.1 * len(flat))), replace=False)
-                flat = flat[keep]
-            label_gen.kmeans.fit(flat)
-            label_gen.fitted = True
-
-            head = nn.Linear(model.encoder.embed_dim, clusters).to(self.device)
-            criterion = HuBERTLoss().to(self.device)
-            optimizer = torch.optim.AdamW(
-                list(model.parameters()) + list(head.parameters()), lr=config.lr
+                # Subsequent iterations use features from a trained HuBERT model
+                kmeans_input_type = "transformer"
+                kmeans_model = model # Use the current HuBERT model
+                kmeans_layer = config.extractor_layer # The layer to extract features from (e.g., 6 for base, 9 for large)
+                # Ensure model is in eval mode during feature extraction for clustering
+                model.eval()
+    
+    
+            pseudo_label_generator = PseudoLabelGenerator(
+                input_type=kmeans_input_type,
+                model=kmeans_model,
+                transformer_layer=kmeans_layer,
+                sample_rate=config.sample_rate,
+                kmeans_clusters=config.num_clusters,
+                save_dir=os.path.join(output_dir, f"pseudo_labels_iter_{iteration}")
             )
-
-            model.train()
-            head.train()
-            for epoch in range(1, config.epochs + 1):
-                running_loss = 0.0
-                pbar = tqdm(dataloader, desc=f"Iter {itr} Epoch {epoch}/{config.epochs}")
-                for batch in pbar:
-                    wave = batch[0].to(self.device) if not isinstance(batch, dict) else batch.get("audio").to(self.device)
-                    with torch.no_grad():
-                        feats = label_gen.extract_features(wave)
-                        t_np = label_gen.kmeans.predict(feats.cpu().numpy())
-                        targets = torch.from_numpy(t_np).long().to(self.device)
-
-                    with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
-                        context, mask_idx, _ = model(wave)
-                        logits = head(context)
-                        loss = criterion(logits, targets, mask_idx)
-
+    
+            # Fit K-means (randomly sample subset of audio_paths_for_kmeans if dataset is very large)
+            print("Fitting K-means...")
+            # Note: For large datasets, you would only sample a subset of audio_paths_for_kmeans here
+            pseudo_label_generator.fit_kmeans(audio_paths_for_kmeans)
+    
+            # Generate and save pseudo-labels for the entire training dataset
+            print("Generating and saving pseudo-labels for training data...")
+            # This function would save the generated labels for each audio path.
+            # You'd then need to modify your AudioDataset to load these labels.
+            pseudo_label_generator.generate_labels(list(train_dataloader.dataset.audio_paths))
+            # Important: Your DataLoader/Dataset needs to be updated here to load these newly generated labels.
+            # This implies either re-initializing the DataLoader or having a mechanism to update labels.
+            # For simplicity in this outline, assume the dataset can load labels from the save_dir.
+    
+    
+            # --- Phase 2: HuBERT Model Training ---
+            print(f"Training HuBERT model for {config.epochs} epochs...")
+            model.train() # Set model to training mode
+    
+            for epoch in range(config.epochs):
+                total_loss = 0
+                num_batches = 0
+                # Wrap train_dataloader with tqdm for progress bar
+                for batch_idx, batch in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch+1}")):
+                    audio = batch["audio"].to(device) # Shape (B, T_audio_samples)
+                    # Assumes your dataset now provides 'labels' generated by PseudoLabelGenerator
+                    pseudo_labels = batch["labels"].to(device) # Shape (B, T_features)
+    
                     optimizer.zero_grad()
-                    self.scaler.scale(loss).backward()
-                    self.scaler.step(optimizer)
-                    self.scaler.update()
+    
+                    # Forward pass
+                    # model_output contains (logits, masked_indices, features_lengths, masked_lengths)
+                    # as per the HuBERT forward method signature
+                    logits, mask_indices, _, _ = model(audio)
+    
+                    # Compute loss only on masked positions
+                    # logits: (B, T_features, num_clusters)
+                    # pseudo_labels: (B, T_features)
+                    # mask_indices: (B, T_features) boolean mask
+                    loss = loss_fn(logits, pseudo_labels, mask_indices)
+    
+                    # Backward pass and optimize
+                    loss.backward()
+                    optimizer.step()
+    
+                    total_loss += loss.item()
+                    num_batches += 1
+    
+                avg_loss = total_loss / num_batches
+                print(f"Iteration {iteration+1}, Epoch {epoch+1}: Average Loss = {avg_loss:.4f}")
+    
+                # --- (Optional) Validation/Evaluation ---
+                # You would typically add validation here after each epoch or every few epochs
+                # if val_dataloader is not None:
+                #     model.eval()
+                #     val_loss = 0
+                #     with torch.no_grad():
+                #         for batch in val_dataloader:
+                #             audio = batch["audio"].to(device)
+                #             pseudo_labels = batch["labels"].to(device)
+                #             logits, mask_indices, _, _ = model(audio)
+                #             loss = loss_fn(logits, pseudo_labels, mask_indices)
+                #             val_loss += loss.item()
+                #     avg_val_loss = val_loss / len(val_dataloader)
+                #     print(f"Iteration {iteration+1}, Epoch {epoch+1}: Validation Loss = {avg_val_loss:.4f}")
+                #     model.train()
+    
+                # Save checkpoint (optional)
+                torch.save(model.state_dict(), os.path.join(output_dir, f"hubert_iter_{iteration}_epoch_{epoch}.pt"))
+    
+        print("\nHuBERT pre-training complete!")
+        return model
+    
 
-                    running_loss += loss.item()
-                    pbar.set_postfix({"loss": loss.item()})
 
-                avg_loss = running_loss / len(dataloader)
-                self.logger.info(
-                    f"[Iter {itr} Epoch {epoch}] Loss: {avg_loss:.4f}"
-                )
-
-                if epoch % self.checkpoint_interval == 0:
-                    ckpt_path = os.path.join(
-                        hubert_dir,
-                        f"iter{itr}_{self.timestamp}_epoch{epoch}.pth",
-                    )
-                    torch.save(
-                        {"model": model.state_dict(), "head": head.state_dict()},
-                        ckpt_path,
-                    )
-                    self.logger.info(f"Model checkpoint saved: {ckpt_path}")
-
-            final_path = os.path.join(
-                hubert_dir, f"iter{itr}_{self.timestamp}_epoch{config.epochs}.pth"
-            )
-            torch.save({"model": model.state_dict(), "head": head.state_dict()}, final_path)
-            self.logger.info(f"Final model checkpoint saved: {final_path}")
-
-        self.model = model
 
 
     def train(
