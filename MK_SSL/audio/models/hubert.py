@@ -25,6 +25,7 @@ class HubertConfig:
     sample_rate: int = 16000
     lr: float = 1e-4
     epochs: int = 10
+    iterations: int = 1
 
 
 class HuBERT(nn.Module):
