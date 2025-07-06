@@ -35,46 +35,47 @@ class Wav2Vec2(nn.Module):
         super().__init__()
         self.variant = variant
 
-        config = self._get_config(self.variant)
+        model_config = self._get_config(self.variant)
+        self.model_config = model_config
 
         self.__quantizer_num_groups = quantizer_num_groups
         self.__quantizer_num_entries_per_codebook = quantizer_num_entries_per_codebook
 
         self.feature_extractor = ConvFeatureExtractor(
-            variant=config["extractor_norm"],
-            conv_layers=config["conv_layers"],
-            conv_bias=config["conv_bias"],
+            variant=self.model_config["extractor_norm"],
+            conv_layers=self.model_config["conv_layers"],
+            conv_bias=self.model_config["conv_bias"],
         )
 
         self.encoder = TransformerEncoder(
-            embed_dim=config["encoder_embed_dim"],
-            num_layers=config["encoder_num_layers"],
-            num_heads=config["encoder_num_heads"],
-            ff_interm_features=config["encoder_ff_interm_features"],
-            dropout_input=config["encoder_projection_dropout"],
-            attention_dropout=config["encoder_attention_dropout"],
-            ff_dropout=config["encoder_ff_interm_dropout"],
-            final_dropout=config["encoder_dropout"],
-            layer_norm_first=config["encoder_layer_norm_first"],
-            layer_drop=config["encoder_layer_drop"],
-            pos_conv_kernel=config["encoder_pos_conv_kernel"],
-            pos_conv_groups=config["encoder_pos_conv_groups"],
+            embed_dim=self.model_config["encoder_embed_dim"],
+            num_layers=self.model_config["encoder_num_layers"],
+            num_heads=self.model_config["encoder_num_heads"],
+            ff_interm_features=self.model_config["encoder_ff_interm_features"],
+            dropout_input=self.model_config["encoder_projection_dropout"],
+            attention_dropout=self.model_config["encoder_attention_dropout"],
+            ff_dropout=self.model_config["encoder_ff_interm_dropout"],
+            final_dropout=self.model_config["encoder_dropout"],
+            layer_norm_first=self.model_config["encoder_layer_norm_first"],
+            layer_drop=self.model_config["encoder_layer_drop"],
+            pos_conv_kernel=self.model_config["encoder_pos_conv_kernel"],
+            pos_conv_groups=self.model_config["encoder_pos_conv_groups"],
         )
 
         self.quantizer = GumbelVectorQuantizer(
-            dim=config["conv_layers"][-1][0],
+            dim=self.model_config["conv_layers"][-1][0],
             num_entries_per_codebook=self.__quantizer_num_entries_per_codebook,
-            code_vector_size=config["code_vector_size"],
+            code_vector_size=self.model_config["code_vector_size"],
             temp=quantizer_temp,
             num_groups=self.__quantizer_num_groups,
             combine_groups=False,
         )
 
         self.feature_proj = Wav2Vec2FeatureProjectionHead(
-            input_dim=config["conv_layers"][-1][0],
-            output_dim=config["encoder_embed_dim"],
+            input_dim=self.model_config["conv_layers"][-1][0],
+            output_dim=self.model_config["encoder_embed_dim"],
             use_layer_norm=True,
-            dropout=config["encoder_projection_dropout"],
+            dropout=self.model_config["encoder_projection_dropout"],
         )
 
     def forward(
@@ -116,7 +117,6 @@ class Wav2Vec2(nn.Module):
         return context, quantized_features, perplexity, time_mask_indices
     
     
-    @staticmethod
     def _get_config(self, variant: str) -> dict:
         base_conv = [
             (512, 10, 5),
