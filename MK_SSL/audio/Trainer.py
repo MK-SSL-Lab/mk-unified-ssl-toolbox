@@ -339,7 +339,6 @@ class Trainer:
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
 
-<<<<<<< HEAD
 
 
 
