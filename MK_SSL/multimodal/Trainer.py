@@ -99,19 +99,24 @@ class Trainer:
             self.logger.error(f"Method {self.method} not found in registry.")
             raise e
 
+        # --- Model Args ---
+        
+        model_args = {
+            "image_encoder": image_encoder,
+            "text_encoder": text_encoder,
+            "transformer_encoder": image_encoder,
+            "transformer_decoder": text_encoder,
+            "device": self.device,
+        }
+
+        if "params" in method_cfg:
+            model_args.update(method_cfg["default_params"])
+        
+        model_args.update(kwargs)
 
 
 
-
-        self.model = method_cfg["model"](
-            image_encoder=image_encoder,
-            text_encoder=text_encoder,
-            transformer_encoder=image_encoder,
-            transformer_decoder=text_encoder,
-            device=self.device,
-
-            **kwargs
-        )
+        self.model = method_cfg["model"](**model_args)
 
         self.logger.info(method_cfg["logs"](self.model))
 

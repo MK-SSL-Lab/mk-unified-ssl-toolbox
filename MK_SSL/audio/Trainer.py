@@ -108,9 +108,8 @@ class Trainer:
 
         # --- Loss Args ---
 
-        loss_args = {
+        loss_args = {}
 
-        }
         if "params" in method_cfg:
             loss_args.update(method_cfg["default_params"])
         
@@ -118,20 +117,17 @@ class Trainer:
 
 
         # --- Create Generic Model ---
-        self.model = method_cfg["model"](
-            **model_args
-        ).to(self.device)
+        self.model = method_cfg["model"](**model_args)
 
         # --- Create Generic Loss ---
-        self.loss = method_cfg["loss"](
-            **loss_args
-        ).to(self.device)
+        self.loss = method_cfg["loss"](**loss_args)
 
 
 
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.mixed_precision_training)
-
+        self.model = self.model.to(self.device)
+        self.loss = self.loss.to(self.device)
 
 
     
