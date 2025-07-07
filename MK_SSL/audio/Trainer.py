@@ -187,8 +187,6 @@ class Trainer:
         self.logger.info(f"Final model checkpoint saved: {final_path}")
 
 
-
-
     def _train_hubert(
         self, 
         audio_paths_for_kmeans: list,
@@ -414,7 +412,8 @@ class Trainer:
                 optimizer=optimizer,
                 max_epochs=max_epochs,
                 start_epoch=start_epoch,
-                val_loader=val_loader, # Pass the new val_loader
+                start_iteration=start_iteration,
+                val_loader=val_loader,
                 audio_paths_for_kmeans=audio_paths_for_kmeans,
             )
 

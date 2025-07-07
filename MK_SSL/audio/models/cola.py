@@ -101,8 +101,9 @@ class COLA(nn.Module):
 register_method(
     name= "cola",
     model_cls= COLA,
-    loss_fn= InfoNCELoss,
+    loss= InfoNCELoss,
     transformation= COLAAudioTransform,
+    params={},
     logs=lambda model, loss: (
         "\n"
         "---------------- COLA Configuration ----------------\n"

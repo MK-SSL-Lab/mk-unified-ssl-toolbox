@@ -273,7 +273,7 @@ class HuBERT(nn.Module):
 register_method(
     name= "hubert",
     model_cls= HuBERT,
-    loss_fn= HuBERTLoss,
+    loss= HuBERTLoss,
     transformation= None,
     default_params={
         "init_from_mfcc": True,  

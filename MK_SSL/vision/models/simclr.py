@@ -61,7 +61,7 @@ class SimCLR(nn.Module):
 register_method(
     name= "simclr",
     model_cls= SimCLR,
-    loss_fn= NT_Xent,
+    loss= NT_Xent,
     transformation= SimCLRViewTransform,
     logs=lambda model, loss: (
         "\n"

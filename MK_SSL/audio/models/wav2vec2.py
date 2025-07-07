@@ -244,7 +244,7 @@ class Wav2Vec2(nn.Module):
 register_method(
     name= "wav2vec2",
     model_cls= Wav2Vec2,
-    loss_fn= Wav2Vec2Loss,
+    loss= Wav2Vec2Loss,
     transformation= None,
     params={},
     logs=lambda model, loss: (

@@ -110,7 +110,7 @@ class DINO(nn.Module):
 register_method(
     name= "dino",
     model_cls= DINO,
-    loss_fn= DINOLoss,
+    loss= DINOLoss,
     transformation= SimCLRViewTransform,
     logs=lambda model, loss: (
         "\n"
