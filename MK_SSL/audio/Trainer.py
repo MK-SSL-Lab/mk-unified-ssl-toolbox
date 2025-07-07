@@ -247,7 +247,7 @@ class Trainer:
                 val_loader, desc=f"Validation Wav2Vec2 Epoch {epoch+1}"
             )  # Changed desc
             for batch in pbar:
-                audio = batch["audio"].to(self.device)
+                audio = batch[0].to(self.device)
 
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     # Correctly unpack all four outputs from the Wav2Vec2 model
@@ -280,6 +280,7 @@ class Trainer:
         optimizer,
         max_epochs: int,
         start_epoch: int = 0,
+        val_loader: Optional[DataLoader] = None, 
     ) -> None:
         """
         Trains the COLA model using the specified optimizer and data loader.
@@ -330,13 +331,39 @@ class Trainer:
                 torch.save(self.model.state_dict(), model_path)
                 self.logger.info(f"Model checkpoint saved: {model_path}")
 
-        # Save final checkpoint after all epochs
+
+            if val_loader:  
+                self._validate_cola(val_loader, epoch)
+
         final_path = os.path.join(
             self.checkpoint_path,
             f"{self.method}_model_{self.timestamp}_epoch{max_epochs}.pth",
         )
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
+
+
+    def _validate_cola(self, val_loader: DataLoader, epoch: int):
+
+        self.model.eval()
+        val_running_loss = 0.0
+        with torch.no_grad():
+            pbar = tqdm(val_loader, desc=f"Validation COLA Epoch {epoch+1}")
+            for batch in pbar:
+                audio = batch[0].to(self.device)
+                view0, view1 = self.transformation(audio)
+                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
+                    # COLA model returns (out0, out1)
+                    out0, out1 = self.model(view0, view1)
+                    loss = self.loss(out0, out1)
+
+                val_running_loss += loss.item()
+
+            avg_val_loss = val_running_loss / len(val_loader)
+            self.logger.info(
+                f"[COLA - Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f}"
+            )  
+        self.model.train() 
 
     def _train_hubert(
         self,
@@ -522,7 +549,7 @@ class Trainer:
                 desc=f"Validation HuBERT Iter {iteration+1}, Epoch {epoch+1}",
             )
             for batch in pbar:
-                audio = batch["audio"].to(self.device)
+                audio = batch[0].to(self.device)
                 # If validation also requires pseudo_labels from the dataset, the val_dataset would need a similar wrapper.
                 # For simplicity, assuming validation uses fixed labels or is handled differently if no pseudo_labels are needed.
                 # If validation involves pseudo-labels, make sure the val_loader also provides 'pseudo_labels'.
