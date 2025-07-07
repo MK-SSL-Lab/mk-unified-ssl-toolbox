@@ -5,24 +5,22 @@ import numpy as np
 from torch import nn
 from tqdm.auto import (
     tqdm,
-)  # Used for general progress bars (can be replaced by inner tqdm if preferred)
-from tqdm import tqdm  # Used for specific inner loop progress bars
+)
+from tqdm import tqdm
 from datetime import datetime
 from torch.utils.data import Subset, DataLoader, Dataset, RandomSampler
 import logging
 from torcheval.metrics.functional import (
     multiclass_accuracy,
-)  # Only import if directly used
-from torch.optim import AdamW  # Or Adam, as per paper
+)
+from torch.optim import AdamW
 from typing import Optional, Type
 
 from MK_SSL.utils import configure_logging, get_logger_handler  # Assuming this exists
 
 from MK_SSL.audio.models.utils import get_method
 from MK_SSL.audio.models.modules.tools import PseudoLabelGenerator
-from MK_SSL.audio.models.modules.utils import (
-    HuBERTWrapperDataset,
-)  # Import the new wrapper
+from MK_SSL.audio.models.modules.utils import HuBERTWrapperDataset
 
 
 class Trainer:
@@ -280,7 +278,7 @@ class Trainer:
         optimizer,
         max_epochs: int,
         start_epoch: int = 0,
-        val_loader: Optional[DataLoader] = None, 
+        val_loader: Optional[DataLoader] = None,
     ) -> None:
         """
         Trains the COLA model using the specified optimizer and data loader.
@@ -331,8 +329,7 @@ class Trainer:
                 torch.save(self.model.state_dict(), model_path)
                 self.logger.info(f"Model checkpoint saved: {model_path}")
 
-
-            if val_loader:  
+            if val_loader:
                 self._validate_cola(val_loader, epoch)
 
         final_path = os.path.join(
@@ -341,7 +338,6 @@ class Trainer:
         )
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
-
 
     def _validate_cola(self, val_loader: DataLoader, epoch: int):
 
@@ -360,10 +356,8 @@ class Trainer:
                 val_running_loss += loss.item()
 
             avg_val_loss = val_running_loss / len(val_loader)
-            self.logger.info(
-                f"[COLA - Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f}"
-            )  
-        self.model.train() 
+            self.logger.info(f"[COLA - Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f}")
+        self.model.train()
 
     def _train_hubert(
         self,
