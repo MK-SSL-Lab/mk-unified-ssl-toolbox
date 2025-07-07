@@ -122,6 +122,8 @@ class HuBERT(nn.Module):
                 encoder_layer_drop=0.1,
                 max_iterations= 2, 
                 extractor_layer=6,
+                pseudo_label_sample_ratio= 0.1,  
+
             ),
             "large": dict(
                 conv_layers=[
@@ -142,6 +144,8 @@ class HuBERT(nn.Module):
                 encoder_layer_drop=0.1,
                 max_iterations= 2, 
                 extractor_layer=9, 
+                pseudo_label_sample_ratio= 0.1,  
+
             ),
             "x-large": dict(
                 conv_layers=[
@@ -162,6 +166,7 @@ class HuBERT(nn.Module):
                 encoder_layer_drop=0.1,
                 max_iterations= 2, 
                 extractor_layer=9,
+                pseudo_label_sample_ratio= 0.1,  
             ),
         }
 
