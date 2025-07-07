@@ -31,6 +31,8 @@ class Wav2Vec2(nn.Module):
         quantizer_num_groups: int = 2,
         quantizer_num_entries_per_codebook: int = 320,
         quantizer_temp: float = 2.0,
+        **kwargs  
+
     ):
         super().__init__()
         self.variant = variant
@@ -244,6 +246,7 @@ register_method(
     model_cls= Wav2Vec2,
     loss_fn= Wav2Vec2Loss,
     transformation= None,
+    params={},
     logs=lambda model, loss: (
         "\n"
         "---------------- Wav2Vec2 Configuration ----------------\n"
