@@ -328,7 +328,7 @@ class Trainer:
                 self.logger.info(f"Model checkpoint saved: {model_path}")
             
             if val_loader:
-                self._validate_cola(val_loader, epoch)
+                self._validate_simclr(val_loader, epoch)
 
         final_path = os.path.join(
             self.checkpoint_path,
