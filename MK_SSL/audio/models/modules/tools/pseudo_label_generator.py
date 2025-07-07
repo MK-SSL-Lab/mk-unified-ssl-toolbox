@@ -3,9 +3,10 @@ import numpy as np
 import torch
 import torchaudio
 from sklearn.cluster import MiniBatchKMeans
-from tqdm.auto import tqdm # Using tqdm.auto for consistency
+from tqdm.auto import tqdm
 from typing import Dict, List, Literal, Optional
-import logging # For adding logger
+import logging
+import torchaudio.transforms as T_audio # Import for Resample
 
 class PseudoLabelGenerator:
     """
@@ -19,7 +20,7 @@ class PseudoLabelGenerator:
         kmeans_clusters: int = 100,
         sample_rate: int = 16000,
         save_dir: str = "generated_labels",
-        logger=None # Added logger argument
+        logger=None
     ):
         self.kmeans_clusters = kmeans_clusters
         self.sample_rate = sample_rate
@@ -27,22 +28,17 @@ class PseudoLabelGenerator:
         self.logger = logger if logger is not None else self._get_default_logger()
 
         os.makedirs(self.save_dir, exist_ok=True)
-        # MiniBatchKMeans is used; for extremely large datasets, iterative partial_fit
-        # with a DataLoader would be more memory efficient than collecting all_features first.
-        # For now, we collect all features for the initial fit as in the original design.
         self.kmeans = MiniBatchKMeans(n_clusters=kmeans_clusters, batch_size=1024, random_state=0, n_init='auto')
         self.mfcc_extractor = torchaudio.transforms.MFCC(
             sample_rate=sample_rate, n_mfcc=13, melkwargs={"n_fft": 400, "hop_length": 160, "n_mels": 23}
         )
-        self.fitted = False # Indicates if K-means has been fitted for the current context
+        self.fitted = False
 
-        # Internal state for current feature extraction mode
         self._current_input_type: Optional[Literal["mfcc", "transformer"]] = None
         self._current_model: Optional[torch.nn.Module] = None
         self._current_transformer_layer: Optional[int] = None
 
     def _get_default_logger(self):
-        """Creates a basic logger if none is provided."""
         logger = logging.getLogger(__name__)
         if not logger.handlers:
             logging.basicConfig(level=logging.INFO)
@@ -54,9 +50,6 @@ class PseudoLabelGenerator:
         model: Optional[torch.nn.Module] = None,
         transformer_layer: Optional[int] = None,
     ):
-        """
-        Configures the feature extraction mode for the current iteration (MFCC or Transformer-based).
-        """
         if is_mfcc:
             self._current_input_type = "mfcc"
             self._current_model = None
@@ -65,35 +58,27 @@ class PseudoLabelGenerator:
             if model is None:
                 raise ValueError("Model must be provided for transformer-based feature extraction.")
             self._current_input_type = "transformer"
-            self._current_model = model # Model should already be in eval mode from Trainer.
-            self._current_transformer_layer = transformer_layer # Can be None, model should handle it
+            self._current_model = model
+            self._current_transformer_layer = transformer_layer
 
     def _extract_features_from_audio(self, audio: torch.Tensor) -> torch.Tensor:
-        """
-        Helper to extract features based on the currently set mode.
-        Expects a single audio waveform (e.g., (1, N_samples)) or (N_samples,).
-        Returns features with a batch dimension (B=1, T, D).
-        """
         if audio.dim() == 1:
-            audio = audio.unsqueeze(0) # Add batch dimension if missing
+            audio = audio.unsqueeze(0)
 
         if self._current_input_type == "mfcc":
-            # MFCC extractor expects (B, N_samples)
-            mfcc = self.mfcc_extractor(audio).transpose(1, 2)  # (B, T, 13)
+            mfcc = self.mfcc_extractor(audio).transpose(1, 2)
             delta = torchaudio.functional.compute_deltas(mfcc)
             delta2 = torchaudio.functional.compute_deltas(delta)
-            return torch.cat([mfcc, delta, delta2], dim=-1) # (B, T, 39)
+            return torch.cat([mfcc, delta, delta2], dim=-1)
 
         elif self._current_input_type == "transformer":
             if self._current_model is None:
                 raise RuntimeError("Model not set for transformer-based feature extraction.")
             with torch.no_grad():
-                # self._current_model.feature_extractor expects (B, N_samples)
-                feat = self._current_model.feature_extractor(audio)  # (B, C, T')
-                feat = feat.transpose(1, 2)  # (B, T', C)
-                # self._current_model.encoder.extract_layer
-                enc = self._current_model.encoder.extract_layer(feat, self._current_transformer_layer)  # (B, T', D)
-            return enc # (B, T', D)
+                feat = self._current_model.feature_extractor(audio)
+                feat = feat.transpose(1, 2)
+                enc = self._current_model.encoder.extract_layer(feat, self._current_transformer_layer)
+            return enc
         else:
             raise ValueError(f"Feature extraction mode not set or unsupported: {self._current_input_type}")
 
@@ -105,20 +90,6 @@ class PseudoLabelGenerator:
         transformer_layer: Optional[int] = None,
         device: torch.device = torch.device('cpu')
     ) -> Dict[str, np.ndarray]:
-        """
-        Generates pseudo-labels for a list of audio paths, performing K-means fitting if necessary.
-        Returns a dictionary mapping audio paths to their generated pseudo-label sequences.
-        Labels are also saved to disk as individual .npy files.
-
-        Args:
-            audio_paths (List[str]): List of paths to audio files for pseudo-label generation.
-            model (Optional[torch.nn.Module]): The HuBERT model to use for feature extraction
-                                                in transformer-based iterations.
-            is_mfcc (bool): If True, uses MFCCs; otherwise, uses model's hidden states.
-            transformer_layer (Optional[int]): The specific transformer layer to extract features from
-                                               if `is_mfcc` is False.
-            device (torch.device): The device to perform feature extraction on.
-        """
         self.set_current_iteration_mode(is_mfcc, model, transformer_layer)
         
         all_features_for_kmeans = []
@@ -126,11 +97,13 @@ class PseudoLabelGenerator:
         for path in tqdm(audio_paths, desc="Extracting features"):
             wav, sr = torchaudio.load(path)
             if sr != self.sample_rate:
-                wav = torchextra.functional.resample(wav, orig_freq=sr, new_freq=self.sample_rate) # Use torchextra.functional.resample if available, otherwise torchaudio.transforms.Resample
+                # Using torchaudio.transforms.Resample for resampling
+                resampler = T_audio.Resample(orig_freq=sr, new_freq=self.sample_rate).to(device)
+                wav = resampler(wav)
             wav = wav.to(device)
             
-            extracted_feature = self._extract_features_from_audio(wav) # (B=1, T, D)
-            all_features_for_kmeans.append(extracted_feature.squeeze(0).cpu().numpy()) # Store (T, D)
+            extracted_feature = self._extract_features_from_audio(wav)
+            all_features_for_kmeans.append(extracted_feature.squeeze(0).cpu().numpy())
 
         flat_features = np.concatenate(all_features_for_kmeans, axis=0)
         
@@ -144,11 +117,13 @@ class PseudoLabelGenerator:
         for path in tqdm(audio_paths, desc="Predicting labels"):
             wav, sr = torchaudio.load(path)
             if sr != self.sample_rate:
-                wav = torchextra.functional.resample(wav, orig_freq=sr, new_freq=self.sample_rate) # Use torchextra.functional.resample if available, otherwise torchaudio.transforms.Resample
+                # Using torchaudio.transforms.Resample for resampling
+                resampler = T_audio.Resample(orig_freq=sr, new_freq=self.sample_rate).to(device)
+                wav = resampler(wav)
             wav = wav.to(device)
 
-            extracted_feature = self._extract_features_from_audio(wav) # (B=1, T, D)
-            z = self.kmeans.predict(extracted_feature.squeeze(0).cpu().numpy())  # (T,)
+            extracted_feature = self._extract_features_from_audio(wav)
+            z = self.kmeans.predict(extracted_feature.squeeze(0).cpu().numpy())
 
             fname = os.path.splitext(os.path.basename(path))[0]
             out_path = os.path.join(self.save_dir, f"{fname}.npy")
