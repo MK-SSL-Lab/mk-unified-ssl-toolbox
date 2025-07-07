@@ -179,7 +179,7 @@ class Trainer:
 
 
 
-    def train_hubert(
+    def _train_hubert(
         config: HubertConfig,
         train_dataloader: DataLoader,
         val_dataloader: DataLoader, # Optional, for evaluation during training
