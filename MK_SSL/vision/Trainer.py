@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 from MK_SSL.vision.models import *
 from MK_SSL.vision.models.modules.losses import *
 from MK_SSL.vision.models.modules.transformations import *
-from MK_SSL.utils import configure_logging  
+from MK_SSL.utils import configure_logging, get_logger_handler
 
 from MK_SSL.vision.models.utils import get_method
 
@@ -78,6 +78,10 @@ class Trainer:
 
 
         self.logger = logging.getLogger(self.__class__.__name__)
+
+        if not self.logger.hasHandlers():
+            self.logger.addHandler(get_logger_handler())
+
         self.logger.setLevel(logging.INFO if verbose else logging.WARNING)
         
         self.logger.info("Vision Trainer initialized.")

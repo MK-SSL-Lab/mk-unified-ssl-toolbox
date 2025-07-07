@@ -1,3 +1,4 @@
-from .logging_utils import configure_logging
+from .logging_utils import configure_logging, get_logger_handler
 
-__all__ = ["configure_logging"]
+__all__ = ["configure_logging",
+           "get_logger_handler"]

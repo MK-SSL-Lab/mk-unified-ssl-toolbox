@@ -12,7 +12,7 @@ from torcheval.metrics.functional import multiclass_accuracy # Only import if di
 from torch.optim import AdamW # Or Adam, as per paper
 from typing import Optional # Import Optional
 
-from MK_SSL.utils import configure_logging  # Assuming this exists
+from MK_SSL.utils import configure_logging, get_logger_handler  # Assuming this exists
 
 
 from MK_SSL.audio.models.utils import get_method
@@ -59,6 +59,10 @@ class Trainer:
             configure_logging()
 
         self.logger = logging.getLogger(self.__class__.__name__)
+
+        if not self.logger.hasHandlers():
+            self.logger.addHandler(get_logger_handler())
+            
         self.logger.setLevel(logging.INFO if verbose else logging.WARNING)
         self.logger.info("Audio Trainer initialized.")
 

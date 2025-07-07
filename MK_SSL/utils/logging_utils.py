@@ -1,4 +1,5 @@
 import logging
+import colorlog
 
 def configure_logging(level: int = logging.INFO) -> None:
     """
@@ -22,3 +23,19 @@ def configure_logging(level: int = logging.INFO) -> None:
             format="%(asctime)s | %(levelname)s | %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
+
+def get_logger_handler():
+    handler = colorlog.StreamHandler()
+    handler.setFormatter(colorlog.ColoredFormatter(
+        "%(log_color)s%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        log_colors={
+            'DEBUG':    'cyan',
+            'INFO':     'green',
+            'WARNING':  'yellow',
+            'ERROR':    'red',
+            'CRITICAL': 'bold_red',
+        }
+    ))
+
+    return handler
