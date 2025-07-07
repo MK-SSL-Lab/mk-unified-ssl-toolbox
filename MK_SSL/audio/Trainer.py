@@ -142,13 +142,15 @@ class Trainer:
 
     
 
+ 
     def _train_wav2vec2(
-            self,
-            train_loader,
-            optimizer,
-            max_epochs: int,
-            start_epoch: int = 0
-        ) -> None:
+        self,
+        train_loader: DataLoader,
+        optimizer,
+        max_epochs: int,
+        start_epoch: int = 0,
+        val_loader: Optional[DataLoader] = None, # Added val_loader parameter
+    ):
         """
         Trains the Wav2Vec2 model using the specified optimizer and data loader.
 
@@ -156,21 +158,32 @@ class Trainer:
             train_loader (DataLoader): PyTorch DataLoader for training data.
             optimizer (Optimizer): Optimizer instance for training.
             max_epochs (int): Total number of training epochs.
-            start_epoch (int, optional): Epoch to start training from. Defaults to 1.
+            start_epoch (int, optional): Epoch to start training from. Defaults to 0.
+            val_loader (DataLoader, optional): PyTorch DataLoader for validation data.
         """
+        self.logger.info(f"Starting training for Wav2Vec2 for {max_epochs} epochs.")
         self.model.train()
+
         for epoch in range(start_epoch, max_epochs):
             running_loss = 0.0
-            pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{max_epochs}")
+            pbar = tqdm(train_loader, desc=f"Wav2Vec2 Epoch {epoch+1}/{max_epochs}") # Changed desc for clarity
 
             for batch in pbar:
                 audio = batch["audio"].to(self.device)
 
-                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
-                    features, quantized = self.model(audio)
-                    loss = self.loss(features, quantized)
-
                 optimizer.zero_grad()
+                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
+                    # Correctly unpack all four outputs from the Wav2Vec2 model's forward pass
+                    context_features, quantized_targets, perplexity, time_mask_indices = self.model(audio)
+                    
+                    # Pass all required arguments to the Wav2Vec2Loss function
+                    loss = self.loss(
+                        context=context_features,
+                        quantized=quantized_targets,
+                        perplexity=perplexity,
+                        time_mask_indices=time_mask_indices
+                    )
+
                 self.scaler.scale(loss).backward()
                 self.scaler.step(optimizer)
                 self.scaler.update()
@@ -179,22 +192,61 @@ class Trainer:
                 pbar.set_postfix({"loss": loss.item()})
 
             avg_loss = running_loss / len(train_loader)
-            self.logger.info(f"[Epoch {epoch}] Loss: {avg_loss:.4f}")
+            self.logger.info(f"[Wav2Vec2 - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}") # Changed log message
 
-            if epoch % self.checkpoint_interval == 0:
+            if (epoch + 1) % self.checkpoint_interval == 0: # Changed to (epoch + 1) to checkpoint at correct intervals
                 model_path = os.path.join(
                     self.checkpoint_path,
-                    f"{self.method}_model_{self.timestamp}_epoch{epoch}.pth",
+                    f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth", # Changed epoch number
                 )
                 torch.save(self.model.state_dict(), model_path)
                 self.logger.info(f"Model checkpoint saved: {model_path}")
 
+            if val_loader: # Re-added validation call
+                self._validate_wav2vec2(val_loader, epoch)
+
+        # Final checkpoint after all epochs
         final_path = os.path.join(
             self.checkpoint_path,
-            f"{self.method}_model_{self.timestamp}_epoch{max_epochs}.pth",
+            f"{self.method}_model_{self.timestamp}_final.pth", # Naming final checkpoint
         )
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
+        self.logger.info("Wav2Vec2 training complete.")
+
+
+    def _validate_wav2vec2(self, val_loader: DataLoader, epoch: int):
+        """
+        Performs validation for the Wav2Vec2 model.
+
+        Args:
+            val_loader (DataLoader): PyTorch DataLoader for validation data.
+            epoch (int): Current epoch number for logging.
+        """
+        self.model.eval()
+        val_running_loss = 0.0
+        with torch.no_grad():
+            pbar = tqdm(val_loader, desc=f"Validation Wav2Vec2 Epoch {epoch+1}") # Changed desc
+            for batch in pbar:
+                audio = batch["audio"].to(self.device)
+
+                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
+                    # Correctly unpack all four outputs from the Wav2Vec2 model
+                    context_features, quantized_targets, perplexity, time_mask_indices = self.model(audio)
+                    
+                    # Pass all required arguments to the Wav2Vec2Loss function
+                    loss = self.loss(
+                        context=context_features,
+                        quantized=quantized_targets,
+                        perplexity=perplexity,
+                        time_mask_indices=time_mask_indices
+                    )
+
+                val_running_loss += loss.item()
+
+            avg_val_loss = val_running_loss / len(val_loader)
+            self.logger.info(f"[Wav2Vec2 - Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f}") # Changed log message
+        self.model.train() # Set model back to train mode
 
 
     def _train_hubert(
