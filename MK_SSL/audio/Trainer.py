@@ -3,25 +3,29 @@ import re
 import torch
 import numpy as np
 from torch import nn
-from tqdm.auto import tqdm # Used for general progress bars (can be replaced by inner tqdm if preferred)
-from tqdm import tqdm # Used for specific inner loop progress bars
+from tqdm.auto import (
+    tqdm,
+)  # Used for general progress bars (can be replaced by inner tqdm if preferred)
+from tqdm import tqdm  # Used for specific inner loop progress bars
 from datetime import datetime
 from torch.utils.data import Subset, DataLoader, Dataset, RandomSampler
 import logging
-from torcheval.metrics.functional import multiclass_accuracy # Only import if directly used
-from torch.optim import AdamW # Or Adam, as per paper
-from typing import Optional, Type 
+from torcheval.metrics.functional import (
+    multiclass_accuracy,
+)  # Only import if directly used
+from torch.optim import AdamW  # Or Adam, as per paper
+from typing import Optional, Type
 
 from MK_SSL.utils import configure_logging, get_logger_handler  # Assuming this exists
 
-
 from MK_SSL.audio.models.utils import get_method
 from MK_SSL.audio.models.modules.tools import PseudoLabelGenerator
-from MK_SSL.audio.models.modules.utils import HuBERTWrapperDataset # Import the new wrapper
+from MK_SSL.audio.models.modules.utils import (
+    HuBERTWrapperDataset,
+)  # Import the new wrapper
 
 
 class Trainer:
-
 
     def __init__(
         self,
@@ -34,7 +38,6 @@ class Trainer:
         configure_logger: bool = True,
         verbose: bool = True,
         mixed_precision_training: bool = True,
-
         **kwargs,
     ) -> None:
         """
@@ -62,7 +65,7 @@ class Trainer:
 
         if not self.logger.hasHandlers():
             self.logger.addHandler(get_logger_handler())
-            
+
         self.logger.setLevel(logging.INFO if verbose else logging.WARNING)
         self.logger.info("Audio Trainer initialized.")
 
@@ -90,8 +93,6 @@ class Trainer:
             "----------------------------------------------------"
         )
 
-
-
         # --- Load Model Config ---
 
         try:
@@ -99,16 +100,16 @@ class Trainer:
         except ValueError as e:
             self.logger.error(f"Method {self.method} not found in registry.")
             raise e
-        
+
         # --- Model Args ---
-        
+
         model_args = {
             "variant": variant,
         }
 
         if "params" in method_cfg:
             model_args.update(method_cfg["default_params"])
-        
+
         model_args.update(kwargs)
 
         # --- Loss Args ---
@@ -117,46 +118,45 @@ class Trainer:
 
         if "params" in method_cfg:
             loss_args.update(method_cfg["default_params"])
-        
-        loss_args.update(kwargs)
 
+        loss_args.update(kwargs)
 
         # --- Create Generic Model ---
         self.model = method_cfg["model"](**model_args)
 
         # --- Create Generic Loss ---
         self.loss = method_cfg["loss"](**loss_args)
-        
+
         # --- Create Generic Transformation ---
-        self.transformation = method_cfg['transformation']() if method_cfg['transformation'] is not None else None
-
-
+        self.transformation = (
+            method_cfg["transformation"]()
+            if method_cfg["transformation"] is not None
+            else None
+        )
 
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.mixed_precision_training)
         self.model = self.model.to(self.device)
         self.loss = self.loss.to(self.device)
 
-
-        kmeans_clusters = kwargs.get('kmeans_clusters', getattr(self.model, 'num_clusters', 100))
-        sample_rate = kwargs.get('sample_rate', 16000)
+        kmeans_clusters = kwargs.get(
+            "kmeans_clusters", getattr(self.model, "num_clusters", 100)
+        )
+        sample_rate = kwargs.get("sample_rate", 16000)
         self.pseudo_label_generator = PseudoLabelGenerator(
             kmeans_clusters=kmeans_clusters,
             sample_rate=sample_rate,
             save_dir=os.path.join(self.save_dir, "hubert_pseudo_labels"),
-            logger=self.logger # Pass logger to the generator
+            logger=self.logger,  # Pass logger to the generator
         )
 
-    
-
- 
     def _train_wav2vec2(
         self,
         train_loader: DataLoader,
         optimizer,
         max_epochs: int,
         start_epoch: int = 0,
-        val_loader: Optional[DataLoader] = None, # Added val_loader parameter
+        val_loader: Optional[DataLoader] = None,  # Added val_loader parameter
     ):
         """
         Trains the Wav2Vec2 model using the specified optimizer and data loader.
@@ -173,7 +173,9 @@ class Trainer:
 
         for epoch in range(start_epoch, max_epochs):
             running_loss = 0.0
-            pbar = tqdm(train_loader, desc=f"Wav2Vec2 Epoch {epoch+1}/{max_epochs}") # Changed desc for clarity
+            pbar = tqdm(
+                train_loader, desc=f"Wav2Vec2 Epoch {epoch+1}/{max_epochs}"
+            )  # Changed desc for clarity
 
             for batch in pbar:
                 audio = batch[0].to(self.device)
@@ -181,14 +183,19 @@ class Trainer:
                 optimizer.zero_grad()
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     # Correctly unpack all four outputs from the Wav2Vec2 model's forward pass
-                    context_features, quantized_targets, perplexity, time_mask_indices = self.model(audio)
-                    
+                    (
+                        context_features,
+                        quantized_targets,
+                        perplexity,
+                        time_mask_indices,
+                    ) = self.model(audio)
+
                     # Pass all required arguments to the Wav2Vec2Loss function
                     loss = self.loss(
                         context=context_features,
                         quantized=quantized_targets,
                         perplexity=perplexity,
-                        time_mask_indices=time_mask_indices
+                        time_mask_indices=time_mask_indices,
                     )
 
                 self.scaler.scale(loss).backward()
@@ -199,28 +206,31 @@ class Trainer:
                 pbar.set_postfix({"loss": loss.item()})
 
             avg_loss = running_loss / len(train_loader)
-            self.logger.info(f"[Wav2Vec2 - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}") # Changed log message
+            self.logger.info(
+                f"[Wav2Vec2 - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}"
+            )  # Changed log message
 
-            if (epoch + 1) % self.checkpoint_interval == 0: # Changed to (epoch + 1) to checkpoint at correct intervals
+            if (
+                epoch + 1
+            ) % self.checkpoint_interval == 0:  # Changed to (epoch + 1) to checkpoint at correct intervals
                 model_path = os.path.join(
                     self.checkpoint_path,
-                    f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth", # Changed epoch number
+                    f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth",  # Changed epoch number
                 )
                 torch.save(self.model.state_dict(), model_path)
                 self.logger.info(f"Model checkpoint saved: {model_path}")
 
-            if val_loader: # Re-added validation call
+            if val_loader:  # Re-added validation call
                 self._validate_wav2vec2(val_loader, epoch)
 
         # Final checkpoint after all epochs
         final_path = os.path.join(
             self.checkpoint_path,
-            f"{self.method}_model_{self.timestamp}_final.pth", # Naming final checkpoint
+            f"{self.method}_model_{self.timestamp}_final.pth",  # Naming final checkpoint
         )
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
         self.logger.info("Wav2Vec2 training complete.")
-
 
     def _validate_wav2vec2(self, val_loader: DataLoader, epoch: int):
         """
@@ -233,185 +243,229 @@ class Trainer:
         self.model.eval()
         val_running_loss = 0.0
         with torch.no_grad():
-            pbar = tqdm(val_loader, desc=f"Validation Wav2Vec2 Epoch {epoch+1}") # Changed desc
+            pbar = tqdm(
+                val_loader, desc=f"Validation Wav2Vec2 Epoch {epoch+1}"
+            )  # Changed desc
             for batch in pbar:
                 audio = batch["audio"].to(self.device)
 
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     # Correctly unpack all four outputs from the Wav2Vec2 model
-                    context_features, quantized_targets, perplexity, time_mask_indices = self.model(audio)
-                    
+                    (
+                        context_features,
+                        quantized_targets,
+                        perplexity,
+                        time_mask_indices,
+                    ) = self.model(audio)
+
                     # Pass all required arguments to the Wav2Vec2Loss function
                     loss = self.loss(
                         context=context_features,
                         quantized=quantized_targets,
                         perplexity=perplexity,
-                        time_mask_indices=time_mask_indices
+                        time_mask_indices=time_mask_indices,
                     )
 
                 val_running_loss += loss.item()
 
             avg_val_loss = val_running_loss / len(val_loader)
-            self.logger.info(f"[Wav2Vec2 - Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f}") # Changed log message
-        self.model.train() # Set model back to train mode
-
-
-
+            self.logger.info(
+                f"[Wav2Vec2 - Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f}"
+            )  # Changed log message
+        self.model.train()  # Set model back to train mode
 
     def _train_cola(
-                self,
-                train_loader,
-                optimizer,
-                max_epochs: int,
-                start_epoch: int = 0,
-            ) -> None:
-                """
-                Trains the COLA model using the specified optimizer and data loader.
-    
-                Args:
-                    train_loader (DataLoader): PyTorch DataLoader for training data.
-                    optimizer (Optimizer): Optimizer instance for training.
-                    max_epochs (int): Total number of training epochs.
-                    start_epoch (int, optional): Epoch to start training from. Defaults to 0.
-                """
-                if self.transformation is None:
-                    self.logger.error(f"Transformation not given!")
-                    raise ValueError('Transformation not given!')
+        self,
+        train_loader,
+        optimizer,
+        max_epochs: int,
+        start_epoch: int = 0,
+    ) -> None:
+        """
+        Trains the COLA model using the specified optimizer and data loader.
 
-                self.model.train()
-                for epoch in range(start_epoch, max_epochs):
-                    running_loss = 0.0
-                    pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{max_epochs}")
-    
-                    for batch in pbar:
+        Args:
+            train_loader (DataLoader): PyTorch DataLoader for training data.
+            optimizer (Optimizer): Optimizer instance for training.
+            max_epochs (int): Total number of training epochs.
+            start_epoch (int, optional): Epoch to start training from. Defaults to 0.
+        """
+        if self.transformation is None:
+            self.logger.error(f"Transformation not given!")
+            raise ValueError("Transformation not given!")
 
-                        audio = batch[0].to(self.device)
-                        view0, view1 = self.transformation(audio)
-                        with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
-                            # COLA model returns (out0, out1)
-                            out0, out1 = self.model(view0, view1)
-                            loss = self.loss(out0, out1)
-    
-                        optimizer.zero_grad()
-                        self.scaler.scale(loss).backward()
-                        self.scaler.step(optimizer)
-                        self.scaler.update()
-    
-                        running_loss += loss.item()
-                        pbar.set_postfix({"loss": loss.item()})
-    
-                    avg_loss = running_loss / len(train_loader)
-                    self.logger.info(f"[Epoch {epoch}] Loss: {avg_loss:.4f}")
-    
-                    # Save checkpoint
-                    if (epoch + 1) % self.checkpoint_interval == 0: # Adjusted for 0-indexed epochs
-                        model_path = os.path.join(
-                            self.checkpoint_path,
-                            f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth", # Save with 1-based epoch
-                        )
-                        torch.save(self.model.state_dict(), model_path)
-                        self.logger.info(f"Model checkpoint saved: {model_path}")
-    
-                # Save final checkpoint after all epochs
-                final_path = os.path.join(
+        self.model.train()
+        for epoch in range(start_epoch, max_epochs):
+            running_loss = 0.0
+            pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{max_epochs}")
+
+            for batch in pbar:
+
+                audio = batch[0].to(self.device)
+                view0, view1 = self.transformation(audio)
+                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
+                    # COLA model returns (out0, out1)
+                    out0, out1 = self.model(view0, view1)
+                    loss = self.loss(out0, out1)
+
+                optimizer.zero_grad()
+                self.scaler.scale(loss).backward()
+                self.scaler.step(optimizer)
+                self.scaler.update()
+
+                running_loss += loss.item()
+                pbar.set_postfix({"loss": loss.item()})
+
+            avg_loss = running_loss / len(train_loader)
+            self.logger.info(f"[Epoch {epoch}] Loss: {avg_loss:.4f}")
+
+            # Save checkpoint
+            if (
+                epoch + 1
+            ) % self.checkpoint_interval == 0:  # Adjusted for 0-indexed epochs
+                model_path = os.path.join(
                     self.checkpoint_path,
-                    f"{self.method}_model_{self.timestamp}_epoch{max_epochs}.pth",
+                    f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth",  # Save with 1-based epoch
                 )
-                torch.save(self.model.state_dict(), final_path)
-                self.logger.info(f"Final model checkpoint saved: {final_path}")
-    
-    
+                torch.save(self.model.state_dict(), model_path)
+                self.logger.info(f"Model checkpoint saved: {model_path}")
 
-
-
+        # Save final checkpoint after all epochs
+        final_path = os.path.join(
+            self.checkpoint_path,
+            f"{self.method}_model_{self.timestamp}_epoch{max_epochs}.pth",
+        )
+        torch.save(self.model.state_dict(), final_path)
+        self.logger.info(f"Final model checkpoint saved: {final_path}")
 
     def _train_hubert(
         self,
-        train_loader_for_training: DataLoader, # For actual training epochs
-        train_loader_full_dataset: DataLoader, # For feature extraction for K-means (full dataset)
+        train_loader_for_training: DataLoader,  # For actual training epochs
+        train_loader_full_dataset: DataLoader,  # For feature extraction for K-means (full dataset)
         optimizer,
         max_epochs: int,
         start_epoch: int = 0,
         start_iteration: int = 0,
         val_loader: Optional[DataLoader] = None,
         num_hubert_iterations: int = 5,
-        pseudo_label_sample_ratio: float = 0.1, # New argument for sampling ratio
-        **kwargs
+        pseudo_label_sample_ratio: float = 0.1,  # New argument for sampling ratio
+        **kwargs,
     ):
-        transformer_layer = kwargs.get('transformer_layer', getattr(self.model, 'extractor_layer', None))
+        transformer_layer = kwargs.get(
+            "transformer_layer", getattr(self.model, "extractor_layer", None)
+        )
         if transformer_layer is None:
-            self.logger.warning("No 'transformer_layer' specified for HuBERT. Defaulting to model's internal default (e.g., last layer of encoder).")
+            self.logger.warning(
+                "No 'transformer_layer' specified for HuBERT. Defaulting to model's internal default (e.g., last layer of encoder)."
+            )
 
         for iteration in range(start_iteration, num_hubert_iterations):
-            self.logger.info(f"--- Starting HuBERT Iteration {iteration + 1}/{num_hubert_iterations} ---")
+            self.logger.info(
+                f"--- Starting HuBERT Iteration {iteration + 1}/{num_hubert_iterations} ---"
+            )
 
             iteration_pseudo_labels_path = os.path.join(
-                self.pseudo_label_generator.save_dir, f"pseudo_labels_iter_{iteration}.npy"
+                self.pseudo_label_generator.save_dir,
+                f"pseudo_labels_iter_{iteration}.npy",
             )
 
             pseudo_labels_dict = {}
             if os.path.exists(iteration_pseudo_labels_path):
-                self.logger.info(f"Loading existing pseudo-labels for iteration {iteration} from {iteration_pseudo_labels_path}")
-                pseudo_labels_dict = np.load(iteration_pseudo_labels_path, allow_pickle=True).item()
+                self.logger.info(
+                    f"Loading existing pseudo-labels for iteration {iteration} from {iteration_pseudo_labels_path}"
+                )
+                pseudo_labels_dict = np.load(
+                    iteration_pseudo_labels_path, allow_pickle=True
+                ).item()
             else:
-                self.logger.info(f"Generating pseudo-labels for iteration {iteration + 1} (This may take a while)...")
+                self.logger.info(
+                    f"Generating pseudo-labels for iteration {iteration + 1} (This may take a while)..."
+                )
 
                 dataloader_for_clustering = None
                 if iteration == 0:
                     # Use the full dataset for the first iteration (MFCC-based clustering)
-                    self.logger.info("Using full dataset for pseudo-label generation in iteration 0 (MFCCs).")
+                    self.logger.info(
+                        "Using full dataset for pseudo-label generation in iteration 0 (MFCCs)."
+                    )
                     dataloader_for_clustering = train_loader_full_dataset
                 else:
                     # For subsequent iterations, sample a subset of the dataset
-                    self.logger.info(f"Sampling {pseudo_label_sample_ratio * 100}% of the dataset for pseudo-label generation in iteration {iteration + 1}.")
-                    wrapped_dataset = train_loader_full_dataset.dataset # Get the HuBERTWrapperDataset
-                    
+                    self.logger.info(
+                        f"Sampling {pseudo_label_sample_ratio * 100}% of the dataset for pseudo-label generation in iteration {iteration + 1}."
+                    )
+                    wrapped_dataset = (
+                        train_loader_full_dataset.dataset
+                    )  # Get the HuBERTWrapperDataset
+
                     # Determine subset size
-                    num_samples_to_sample = int(len(wrapped_dataset) * pseudo_label_sample_ratio)
+                    num_samples_to_sample = int(
+                        len(wrapped_dataset) * pseudo_label_sample_ratio
+                    )
                     if num_samples_to_sample == 0 and len(wrapped_dataset) > 0:
-                        self.logger.warning("Calculated sample size is 0. Using at least 1 sample if dataset is not empty.")
+                        self.logger.warning(
+                            "Calculated sample size is 0. Using at least 1 sample if dataset is not empty."
+                        )
                         num_samples_to_sample = 1
                     elif num_samples_to_sample > len(wrapped_dataset):
-                        self.logger.warning(f"Calculated sample size {num_samples_to_sample} is greater than dataset size {len(wrapped_dataset)}. Using full dataset for sampling.")
+                        self.logger.warning(
+                            f"Calculated sample size {num_samples_to_sample} is greater than dataset size {len(wrapped_dataset)}. Using full dataset for sampling."
+                        )
                         num_samples_to_sample = len(wrapped_dataset)
 
                     # Create a RandomSampler to select a subset of indices
                     # Ensure reproducibility if needed by setting a random seed before sampling
-                    sampler = RandomSampler(wrapped_dataset, num_samples=num_samples_to_sample, replacement=False)
-                    
+                    sampler = RandomSampler(
+                        wrapped_dataset,
+                        num_samples=num_samples_to_sample,
+                        replacement=False,
+                    )
+
                     # Create a DataLoader from the Subset
                     # This dataloader must use the original_idx for mapping
                     dataloader_for_clustering = DataLoader(
                         wrapped_dataset,
-                        batch_size=train_loader_full_dataset.batch_size, # Use same batch size
-                        sampler=sampler, # Use the sampler to get the subset
+                        batch_size=train_loader_full_dataset.batch_size,  # Use same batch size
+                        sampler=sampler,  # Use the sampler to get the subset
                         num_workers=train_loader_full_dataset.num_workers,
                         pin_memory=train_loader_full_dataset.pin_memory,
                     )
-                    self.logger.info(f"Created dataloader for clustering with {len(dataloader_for_clustering.sampler)} samples.")
-
+                    self.logger.info(
+                        f"Created dataloader for clustering with {len(dataloader_for_clustering.sampler)} samples."
+                    )
 
                 pseudo_labels_dict = self.pseudo_label_generator.generate_pseudo_labels(
-                    dataloader=dataloader_for_clustering, # Use the conditionally selected dataloader
+                    dataloader=dataloader_for_clustering,  # Use the conditionally selected dataloader
                     model=self.model,
                     is_mfcc=(iteration == 0),
                     transformer_layer=transformer_layer,
-                    device=self.device
+                    device=self.device,
                 )
                 np.save(iteration_pseudo_labels_path, pseudo_labels_dict)
-                self.logger.info(f"Generated and saved pseudo-labels for iteration {iteration + 1}.")
+                self.logger.info(
+                    f"Generated and saved pseudo-labels for iteration {iteration + 1}."
+                )
 
             train_loader_for_training.dataset.set_pseudo_labels(pseudo_labels_dict)
-            self.logger.info(f"Updated train_dataset with pseudo-labels for iteration {iteration + 1}.")
+            self.logger.info(
+                f"Updated train_dataset with pseudo-labels for iteration {iteration + 1}."
+            )
 
-            self.logger.info(f"Starting model training for HuBERT Iteration {iteration + 1} for {max_epochs} epochs.")
+            self.logger.info(
+                f"Starting model training for HuBERT Iteration {iteration + 1} for {max_epochs} epochs."
+            )
             self.model.train()
 
-            current_iter_start_epoch = start_epoch if iteration == start_iteration else 0
+            current_iter_start_epoch = (
+                start_epoch if iteration == start_iteration else 0
+            )
 
             for epoch in range(current_iter_start_epoch, max_epochs):
                 running_loss = 0.0
-                pbar = tqdm(train_loader_for_training, desc=f"HuBERT Iter {iteration+1}, Epoch {epoch+1}/{max_epochs}")
+                pbar = tqdm(
+                    train_loader_for_training,
+                    desc=f"HuBERT Iter {iteration+1}, Epoch {epoch+1}/{max_epochs}",
+                )
 
                 for batch in pbar:
                     audio = batch["audio"].to(self.device)
@@ -430,7 +484,9 @@ class Trainer:
                     pbar.set_postfix({"loss": loss.item()})
 
                 avg_loss = running_loss / len(train_loader_for_training)
-                self.logger.info(f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
+                self.logger.info(
+                    f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}"
+                )
 
                 if (epoch + 1) % self.checkpoint_interval == 0:
                     model_path = os.path.join(
@@ -448,23 +504,30 @@ class Trainer:
                 f"{self.method}_iter{iteration+1}_final_model_{self.timestamp}.pth",
             )
             torch.save(self.model.state_dict(), final_iteration_model_path)
-            self.logger.info(f"Final model for HuBERT Iteration {iteration+1} saved: {final_iteration_model_path}")
+            self.logger.info(
+                f"Final model for HuBERT Iteration {iteration+1} saved: {final_iteration_model_path}"
+            )
 
         self.logger.info("HuBERT training complete across all specified iterations.")
 
- 
-    def _validate_hubert(self, val_loader: DataLoader, iteration: int, epoch: int):
+    def _validate_hubert(
+        self, val_loader: DataLoader, iteration: int, epoch: int
+    ) -> None:
+
         self.model.eval()
         val_running_loss = 0.0
         with torch.no_grad():
-            pbar = tqdm(val_loader, desc=f"Validation HuBERT Iter {iteration+1}, Epoch {epoch+1}")
+            pbar = tqdm(
+                val_loader,
+                desc=f"Validation HuBERT Iter {iteration+1}, Epoch {epoch+1}",
+            )
             for batch in pbar:
                 audio = batch["audio"].to(self.device)
                 # If validation also requires pseudo_labels from the dataset, the val_dataset would need a similar wrapper.
                 # For simplicity, assuming validation uses fixed labels or is handled differently if no pseudo_labels are needed.
                 # If validation involves pseudo-labels, make sure the val_loader also provides 'pseudo_labels'.
                 # For now, fetching 'pseudo_labels' for validation, assuming it's available.
-                pseudo_labels = batch["pseudo_labels"].to(self.device) 
+                pseudo_labels = batch["pseudo_labels"].to(self.device)
 
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     logits, mask_indices, _, _ = self.model(audio)
@@ -473,7 +536,9 @@ class Trainer:
                 val_running_loss += loss.item()
 
             avg_val_loss = val_running_loss / len(val_loader)
-            self.logger.info(f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f}")
+            self.logger.info(
+                f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f}"
+            )
         self.model.train()
 
     def train(
@@ -503,7 +568,6 @@ class Trainer:
             **kwargs: Additional keyword arguments passed to optimizer or loss.
         """
 
-
         match optimizer.lower():
             case "adam":
                 optimizer = torch.optim.Adam(
@@ -532,7 +596,6 @@ class Trainer:
 
         if self.method == "wav2vec2":
 
-
             train_loader = DataLoader(
                 train_dataset,
                 batch_size=batch_size,
@@ -541,16 +604,15 @@ class Trainer:
                 pin_memory=True,
             )
 
-
             val_loader = None
             if val_dataset:
                 val_loader = DataLoader(
                     val_dataset,
-                    batch_size=batch_size, # Could be separate val_batch_size if needed
+                    batch_size=batch_size,  # Could be separate val_batch_size if needed
                     shuffle=False,
                     num_workers=self.num_workers,
                     pin_memory=True,
-            )
+                )
 
             self._train_wav2vec2(
                 train_loader,
@@ -561,24 +623,26 @@ class Trainer:
 
         elif self.method == "hubert":
             # Wrap the user's dataset for HuBERT, without requiring specific __getitem__ output beyond audio tensor
-            wrapped_train_dataset = HuBERTWrapperDataset(train_dataset, logger=self.logger)
+            wrapped_train_dataset = HuBERTWrapperDataset(
+                train_dataset, logger=self.logger
+            )
 
             # Create a DataLoader for the initial pseudo-label generation phase
             # This DataLoader will return {"audio": audio_tensor, "original_idx": idx}
             train_loader_for_pseudo_label_gen = DataLoader(
                 wrapped_train_dataset,
-                batch_size=batch_size, # Use training batch size, or a larger one for faster feature extraction
-                shuffle=False, # Order matters for consistent index mapping for pseudo-label gen
+                batch_size=batch_size,  # Use training batch size, or a larger one for faster feature extraction
+                shuffle=False,  # Order matters for consistent index mapping for pseudo-label gen
                 num_workers=self.num_workers,
                 pin_memory=True,
             )
-            
+
             # The final DataLoader for actual model training. It will receive pseudo_labels later.
             # Keep shuffle=True for actual training.
             train_loader_for_training = DataLoader(
                 wrapped_train_dataset,
                 batch_size=batch_size,
-                shuffle=True, # Shuffle for training epochs
+                shuffle=True,  # Shuffle for training epochs
                 num_workers=self.num_workers,
                 pin_memory=True,
             )
@@ -587,33 +651,38 @@ class Trainer:
             if val_dataset:
                 val_loader = DataLoader(
                     val_dataset,
-                    batch_size=batch_size, # Could be separate val_batch_size if needed
+                    batch_size=batch_size,  # Could be separate val_batch_size if needed
                     shuffle=False,
                     num_workers=self.num_workers,
                     pin_memory=True,
-            )
-
+                )
 
             self._train_hubert(
-                train_loader_for_training=train_loader_for_training, # Used for actual training
-                train_loader_for_pseudo_label_gen=train_loader_for_pseudo_label_gen, # Used for pseudo-label generation
+                train_loader_for_training=train_loader_for_training,  # Used for actual training
+                train_loader_for_pseudo_label_gen=train_loader_for_pseudo_label_gen,  # Used for pseudo-label generation
                 optimizer=optimizer,
                 max_epochs=max_epochs,
                 start_epoch=start_epoch,
                 val_loader=val_loader,
                 start_iteration=start_iteration,
-                num_hubert_iterations=kwargs.get("num_hubert_iterations", self.model.config.get('max_iterations', 2)),
-                transformer_layer=kwargs.get("transformer_layer", self.model.config.get('extractor_layer', None)),
-                pseudo_label_sample_ratio=kwargs.get("pseudo_label_sample_ratio", self.model.config.get('pseudo_label_sample_ratio', 0.1)) 
+                num_hubert_iterations=kwargs.get(
+                    "num_hubert_iterations", self.model.config.get("max_iterations", 2)
+                ),
+                transformer_layer=kwargs.get(
+                    "transformer_layer", self.model.config.get("extractor_layer", None)
+                ),
+                pseudo_label_sample_ratio=kwargs.get(
+                    "pseudo_label_sample_ratio",
+                    self.model.config.get("pseudo_label_sample_ratio", 0.1),
+                ),
             )
 
-
         else:
-            raise NotImplementedError(f"Training not implemented for method: {self.method}")
+            raise NotImplementedError(
+                f"Training not implemented for method: {self.method}"
+            )
 
-
-
-    def load_checkpoint(self, checkpoint_path: str):
+    def load_checkpoint(self, checkpoint_path: str) -> None:
         """
         Loads a model checkpoint from the given path.
         Assumes self.model is already initialized and matches the checkpoint's state_dict.
@@ -624,9 +693,10 @@ class Trainer:
         if self.model is None:
             self.logger.error("Model must be initialized before loading a checkpoint.")
             raise RuntimeError("Model must be initialized before loading a checkpoint.")
-        self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
+        self.model.load_state_dict(
+            torch.load(checkpoint_path, map_location=self.device)
+        )
         self.logger.info(f"Checkpoint loaded from: {checkpoint_path}")
-
 
     def _reload_latest_checkpoint(self) -> int:
         """
@@ -642,12 +712,16 @@ class Trainer:
         # Filter for files ending with .pth and potentially related to the current method
         method_prefix = self.method + "_model_"
         filtered_checkpoints = [
-            ckpt for ckpt in checkpoints if ckpt.endswith(".pth") and ckpt.startswith(method_prefix)
+            ckpt
+            for ckpt in checkpoints
+            if ckpt.endswith(".pth") and ckpt.startswith(method_prefix)
         ]
 
         if not filtered_checkpoints:
-            self.logger.warning(f"No valid checkpoints found for method '{self.method}' in {self.checkpoint_path}. Starting from scratch.")
-            return 0 # Indicate starting from epoch 0 or 1, depending on convention
+            self.logger.warning(
+                f"No valid checkpoints found for method '{self.method}' in {self.checkpoint_path}. Starting from scratch."
+            )
+            return 0  # Indicate starting from epoch 0 or 1, depending on convention
 
         sorted_checkpoints = sorted(
             [os.path.join(self.checkpoint_path, ckpt) for ckpt in filtered_checkpoints],
@@ -662,11 +736,12 @@ class Trainer:
             epoch = int(match.group(1))
             self.logger.info(f"Reloaded checkpoint from epoch {epoch + 1}")
         else:
-            self.logger.warning(f"No epoch number found in the checkpoint name '{latest_ckpt}'. Resuming from epoch 1.")
-            epoch = 0 # Default to epoch 1 if not found
+            self.logger.warning(
+                f"No epoch number found in the checkpoint name '{latest_ckpt}'. Resuming from epoch 1."
+            )
+            epoch = 0  # Default to epoch 1 if not found
 
         return epoch
-
 
     def __del__(self):
         """
