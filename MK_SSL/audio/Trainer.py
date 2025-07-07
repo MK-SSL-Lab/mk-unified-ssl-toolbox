@@ -272,6 +272,92 @@ class Trainer:
             )  # Changed log message
         self.model.train()  # Set model back to train mode
 
+
+    def _train_simclr(
+        self,
+        train_loader,
+        optimizer,
+        max_epochs: int,
+        start_epoch: int = 0,
+        val_loader: Optional[DataLoader] = None,
+    ) -> None:
+        """
+        Trains the SimCLR model using the specified optimizer and data loader.
+    
+        Args:
+            train_loader (DataLoader): PyTorch DataLoader for training data.
+            optimizer (Optimizer): Optimizer instance for training.
+            max_epochs (int): Total number of training epochs.
+            start_epoch (int, optional): Epoch to start training from. Defaults to 0.
+        """
+        if self.transformation is None:
+            self.logger.error("Transformation not given!")
+            raise ValueError("Transformation not given!")
+    
+        self.model.train()
+        for epoch in range(start_epoch, max_epochs):
+            running_loss = 0.0
+            pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{max_epochs}")
+    
+            for batch in pbar:
+                audio = batch[0].to(self.device)
+                view0, view1 = self.transformation(audio)
+    
+                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
+                    out0, out1 = self.model(view0, view1)
+                    loss = self.loss(out0, out1)
+    
+                optimizer.zero_grad()
+                self.scaler.scale(loss).backward()
+                self.scaler.step(optimizer)
+                self.scaler.update()
+    
+                running_loss += loss.item()
+                pbar.set_postfix({"loss": loss.item()})
+    
+            avg_loss = running_loss / len(train_loader)
+            self.logger.info(f"[Epoch {epoch}] Loss: {avg_loss:.4f}")
+    
+            # Save checkpoint
+            if (epoch + 1) % self.checkpoint_interval == 0:
+                model_path = os.path.join(
+                    self.checkpoint_path,
+                    f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth",
+                )
+                torch.save(self.model.state_dict(), model_path)
+                self.logger.info(f"Model checkpoint saved: {model_path}")
+            
+            if val_loader:
+                self._validate_cola(val_loader, epoch)
+
+        final_path = os.path.join(
+            self.checkpoint_path,
+            f"{self.method}_model_{self.timestamp}_epoch{max_epochs}.pth",
+        )
+        torch.save(self.model.state_dict(), final_path)
+        self.logger.info(f"Final model checkpoint saved: {final_path}")
+    
+
+    def _validate_simclr(self, val_loader: DataLoader, epoch: int):
+
+        self.model.eval()
+        val_running_loss = 0.0
+        with torch.no_grad():
+            pbar = tqdm(val_loader, desc=f"Validation SimCLR Epoch {epoch+1}")
+            for batch in pbar:
+                audio = batch[0].to(self.device)
+                view0, view1 = self.transformation(audio)
+                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
+                    # COLA model returns (out0, out1)
+                    out0, out1 = self.model(view0, view1)
+                    loss = self.loss(out0, out1)
+
+                val_running_loss += loss.item()
+
+            avg_val_loss = val_running_loss / len(val_loader)
+            self.logger.info(f"[SimCLR - Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f}")
+        self.model.train()
+
     def _train_cola(
         self,
         train_loader,
@@ -338,74 +424,6 @@ class Trainer:
         )
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
-
-
-
-
-
-    def _train_simclr(
-        self,
-        train_loader,
-        optimizer,
-        max_epochs: int,
-        start_epoch: int = 0,
-    ) -> None:
-        """
-        Trains the SimCLR model using the specified optimizer and data loader.
-    
-        Args:
-            train_loader (DataLoader): PyTorch DataLoader for training data.
-            optimizer (Optimizer): Optimizer instance for training.
-            max_epochs (int): Total number of training epochs.
-            start_epoch (int, optional): Epoch to start training from. Defaults to 0.
-        """
-        if self.transformation is None:
-            self.logger.error("Transformation not given!")
-            raise ValueError("Transformation not given!")
-    
-        self.model.train()
-        for epoch in range(start_epoch, max_epochs):
-            running_loss = 0.0
-            pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{max_epochs}")
-    
-            for batch in pbar:
-                audio = batch[0].to(self.device)
-                view0, view1 = self.transformation(audio)
-    
-                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
-                    out0, out1 = self.model(view0, view1)
-                    loss = self.loss(out0, out1)
-    
-                optimizer.zero_grad()
-                self.scaler.scale(loss).backward()
-                self.scaler.step(optimizer)
-                self.scaler.update()
-    
-                running_loss += loss.item()
-                pbar.set_postfix({"loss": loss.item()})
-    
-            avg_loss = running_loss / len(train_loader)
-            self.logger.info(f"[Epoch {epoch}] Loss: {avg_loss:.4f}")
-    
-            # Save checkpoint
-            if (epoch + 1) % self.checkpoint_interval == 0:
-                model_path = os.path.join(
-                    self.checkpoint_path,
-                    f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth",
-                )
-                torch.save(self.model.state_dict(), model_path)
-                self.logger.info(f"Model checkpoint saved: {model_path}")
-    
-        # Save final checkpoint
-        final_path = os.path.join(
-            self.checkpoint_path,
-            f"{self.method}_model_{self.timestamp}_epoch{max_epochs}.pth",
-        )
-        torch.save(self.model.state_dict(), final_path)
-        self.logger.info(f"Final model checkpoint saved: {final_path}")
-    
-
-
 
     def _validate_cola(self, val_loader: DataLoader, epoch: int):
 
