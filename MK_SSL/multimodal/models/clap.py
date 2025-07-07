@@ -6,7 +6,7 @@ from typing import Tuple , Optional
 from MK_SSL.multimodal.models.modules.backbones import CNN14
 from MK_SSL.multimodal.models.modules.backbones import BERTTextEncoder
 from MK_SSL.multimodal.models.utils import register_method
-
+from MK_SSL.multimodal.models.modules.losses import CLAPLoss
 
 class CLAP(nn.Module):
     """
@@ -54,6 +54,7 @@ class CLAP(nn.Module):
         else: 
             self.text_encoder = BERTTextEncoder()
 
+        self.clap_loss = CLAPLoss()
 
     def forward(
         self,
@@ -81,6 +82,10 @@ class CLAP(nn.Module):
 
         similarity_matrix = self.temperature * torch.matmul(text_proj, audio_proj.T)  # (B, B)
         return audio_proj, text_proj, similarity_matrix
+
+    def criterion(self, similarity_matrix: torch.Tensor,) -> torch.Tensor:
+        return self.clap_loss(similarity_matrix)
+    
 
 
 register_method(

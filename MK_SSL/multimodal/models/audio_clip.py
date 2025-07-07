@@ -6,7 +6,9 @@ from typing import Tuple, List, Optional
 from MK_SSL.multimodal.models.modules.backbones import AudioResNeXtStem
 from MK_SSL.multimodal.models.modules.backbones import AttentionPool2d
 from MK_SSL.multimodal.models.modules.backbones import TransformerLayer
+from MK_SSL.multimodal.models.modules.losses import AudioCLIPLoss
 from MK_SSL.multimodal.models.utils import register_method
+
 
 class AudioCLIP(nn.Module):
     """
@@ -48,21 +50,18 @@ class AudioCLIP(nn.Module):
             self.audio_encoder = audio_encoder
         else:
             self.image_encoder = AudioResNeXtStem()
-        
 
         if image_encoder is not None:
             self.image_encoder = image_encoder
         else:
             self.image_encoder = AttentionPool2d()
-        
+
         if audio_encoder is not None:
             self.text_encoder = text_encoder
         else:
             self.text_encoder = TransformerLayer()
-        
 
-
-
+        self.audio_clip_loss = AudioCLIPLoss()
 
     def forward(
         self,
@@ -97,7 +96,7 @@ class AudioCLIP(nn.Module):
         audio_emb = image_emb = text_emb = None
         sim_text_audio = sim_text_image = sim_audio_image = None
 
-        #encoder
+        # encoder
         if audio_input is not None:
             audio_emb = F.normalize(self.audio_encoder(audio_input), dim=-1)
 
@@ -108,9 +107,7 @@ class AudioCLIP(nn.Module):
             formatted_text = [self.text_template.format(t) for t in text_input]
             text_emb = F.normalize(self.text_encoder(formatted_text), dim=-1)
 
-
-
-        #similarity matrix
+        # similarity matrix
         if text_emb is not None and audio_emb is not None:
             sim_text_audio = self.temperature * torch.matmul(text_emb, audio_emb.T)
 
@@ -129,11 +126,18 @@ class AudioCLIP(nn.Module):
             sim_audio_image,
         )
 
+    def criterien(
+        self,
+        sim_text_audio: torch.Tensor,
+        sim_text_image: torch.Tensor,
+        sim_audio_image: torch.Tensor,
+    ) -> torch.Tensor:
 
-register_method(
-    name= "audio_clip",
-    model_cls= AudioCLIP,
-    logs=lambda model: (
+        return self.audio_clip_loss(
+            sim_text_audio=sim_text_audio,
+            sim_text_image=sim_text_image,
+            sim_audio_image=sim_audio_image,
+        )
 
-    )
-)
+
+register_method(name="audio_clip", model_cls=AudioCLIP, logs=lambda model: ())

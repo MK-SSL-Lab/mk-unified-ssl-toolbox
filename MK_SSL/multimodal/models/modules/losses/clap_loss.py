@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class CLAPContrastiveLoss(nn.Module):
+class CLAPLoss(nn.Module):
     """
     Symmetric Contrastive Loss for CLAP (Contrastive Language-Audio Pretraining).
     Implements the symmetric cross-entropy loss from Section 2.1 of the CLAP paper.

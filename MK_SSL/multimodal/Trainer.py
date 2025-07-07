@@ -10,7 +10,9 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.nn.utils.clip_grad import clip_grad_norm_
 
 from MK_SSL.multimodal.models import *
+
 from MK_SSL.vision.models.modules.losses.nt_xent import NT_Xent
+
 from MK_SSL.utils import configure_logging, get_logger_handler
 from MK_SSL.multimodal.models.utils import get_method
 class Trainer:
