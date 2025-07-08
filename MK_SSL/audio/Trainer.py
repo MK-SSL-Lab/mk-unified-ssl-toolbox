@@ -173,10 +173,10 @@ class Trainer:
             running_loss = 0.0
             pbar = tqdm(
                 train_loader, desc=f"Wav2Vec2 Epoch {epoch+1}/{max_epochs}"
-            )  # Changed desc for clarity
+            )
 
             for batch in pbar:
-                audio = batch[0].to(self.device)
+                audio = batch['audio'].to(self.device)
 
                 optimizer.zero_grad()
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
@@ -245,7 +245,7 @@ class Trainer:
                 val_loader, desc=f"Validation Wav2Vec2 Epoch {epoch+1}"
             )  # Changed desc
             for batch in pbar:
-                audio = batch[0].to(self.device)
+                audio = batch['audio'].to(self.device)
 
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     # Correctly unpack all four outputs from the Wav2Vec2 model
@@ -300,7 +300,7 @@ class Trainer:
             pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{max_epochs}")
     
             for batch in pbar:
-                audio = batch[0].to(self.device)
+                audio = batch['audio'].to(self.device)
                 view0, view1 = self.transformation(audio)
     
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
@@ -345,7 +345,7 @@ class Trainer:
         with torch.no_grad():
             pbar = tqdm(val_loader, desc=f"Validation SimCLR Epoch {epoch+1}")
             for batch in pbar:
-                audio = batch[0].to(self.device)
+                audio = batch['audio'].to(self.device)
                 view0, view1 = self.transformation(audio)
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     # COLA model returns (out0, out1)
@@ -386,7 +386,7 @@ class Trainer:
 
             for batch in pbar:
 
-                audio = batch[0].to(self.device)
+                audio = batch['audio'].to(self.device)
                 view0, view1 = self.transformation(audio)
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     # COLA model returns (out0, out1)
@@ -432,7 +432,7 @@ class Trainer:
         with torch.no_grad():
             pbar = tqdm(val_loader, desc=f"Validation COLA Epoch {epoch+1}")
             for batch in pbar:
-                audio = batch[0].to(self.device)
+                audio = batch['audio'].to(self.device)
                 view0, view1 = self.transformation(audio)
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     # COLA model returns (out0, out1)
@@ -629,7 +629,7 @@ class Trainer:
                 desc=f"Validation HuBERT Iter {iteration+1}, Epoch {epoch+1}",
             )
             for batch in pbar:
-                audio = batch[0].to(self.device)
+                audio = batch['audio'].to(self.device)
                 # If validation also requires pseudo_labels from the dataset, the val_dataset would need a similar wrapper.
                 # For simplicity, assuming validation uses fixed labels or is handled differently if no pseudo_labels are needed.
                 # If validation involves pseudo-labels, make sure the val_loader also provides 'pseudo_labels'.
