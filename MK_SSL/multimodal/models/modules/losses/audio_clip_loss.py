@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class AudioCLIPContrastiveLoss(nn.Module):
+class AudioCLIPLoss(nn.Module):
     """
     Symmetric Contrastive Loss for AudioCLIP.
 
@@ -25,9 +25,9 @@ class AudioCLIPContrastiveLoss(nn.Module):
 
     def forward(
         self,
-        sim_text_audio: torch.Tensor = None,
-        sim_text_image: torch.Tensor = None,
-        sim_audio_image: torch.Tensor = None,
+        sim_text_audio: torch.Tensor,
+        sim_text_image: torch.Tensor,
+        sim_audio_image: torch.Tensor,
     ) -> torch.Tensor:
         """
         Args:
