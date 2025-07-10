@@ -21,11 +21,11 @@ from MK_SSL.vision.models.modules.transformations import *
 from MK_SSL.utils import configure_logging, get_logger_handler
 
 from MK_SSL.vision.models.utils import get_method
-from typing import Optional, Dict, Any # Added for type hinting W&B args
+from MK_SSL.utils import optimize_hyperparameters
 
-# Import your WandbLogger utility
-# Make sure your_library.wandb_utils is accessible, e.g., in the same directory
-# or properly installed as part of your package.
+from typing import Optional, Dict, Any 
+
+
 from MK_SSL.utils import WandbLogger
 
 
@@ -311,13 +311,17 @@ class Trainer:
 
     def train(
         self,
-        dataset: torch.utils.data.Dataset,
+        train_dataset: torch.utils.data.Dataset,
         batch_size: int = 256,
         start_epoch: int = 1,
         epochs: int = 100,
         optimizer: str = "Adam",
         weight_decay: float = 1e-6,
         learning_rate: float = 1e-3,
+        use_hpo: bool = False,
+        n_trials: int = 20,
+        tuning_max_epochs: int = 5, 
+        **kwargs,
     ):
         """
         Description:
@@ -333,6 +337,8 @@ class Trainer:
             learning_rate (float): Learning rate.
         """
         # Initialize W&B run at the very beginning of the main train method
+        self.train_dataset = train_dataset
+
         if self.wandb_logger.is_active:
             self.wandb_logger.init_run()
             # Update W&B config with dynamic training parameters
@@ -347,9 +353,26 @@ class Trainer:
             self.logger.info(f"W&B run initialized. View run at: {self.wandb_logger.current_run.url}")
         else:
             self.logger.info("W&B logging is not active for this run.")
+        
 
+        if use_hpo:
+            self.logger.info("🧪 Running Optuna for hyperparameter tuning...")
+            
+            best_params = optimize_hyperparameters(
+                trainer=self,
+                train_dataset=train_dataset,
+                n_trials=n_trials,
+                max_epochs=tuning_max_epochs,
+            )
+            self.logger.info(f"🌟 Best hyperparameters found: {best_params}")
+            
+            learning_rate = best_params.get("lr", learning_rate)
+            batch_size = best_params.get("batch_size", batch_size)
+            weight_decay = best_params.get("weight_decay", weight_decay)
+            optimizer = best_params.get("optimizer", optimizer)
 
-        self.dataset = dataset
+            kwargs.update({k: v for k, v in best_params.items() if k not in {"lr", "batch_size", "weight_decay", "optimizer"}})
+
         match optimizer.lower():
             case "adam":
                 optimizer = torch.optim.Adam(
@@ -375,7 +398,7 @@ class Trainer:
                 raise ValueError(f"Optimizer {optimizer} not supported")
 
         train_loader = torch.utils.data.DataLoader(
-            self.dataset, batch_size=batch_size, shuffle=True, drop_last=True,
+            self.train_dataset, batch_size=batch_size, shuffle=True, drop_last=True,
             num_workers=self.num_workers # Add num_workers for consistency
         )
         total_batches_per_epoch = len(train_loader) # Used for global step calculation

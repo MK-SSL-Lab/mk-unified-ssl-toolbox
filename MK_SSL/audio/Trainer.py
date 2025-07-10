@@ -946,7 +946,7 @@ class Trainer:
             lr = best_params.get("lr", lr)
             batch_size = best_params.get("batch_size", batch_size)
             weight_decay = best_params.get("weight_decay", weight_decay)
-            # optimizer = best_params.get("optimizer", optimizer)
+            optimizer = best_params.get("optimizer", optimizer)
 
             kwargs.update({k: v for k, v in best_params.items() if k not in {"lr", "batch_size", "weight_decay", "optimizer"}})
 
