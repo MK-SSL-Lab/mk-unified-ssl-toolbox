@@ -22,6 +22,8 @@ from MK_SSL.audio.models.utils import get_method
 from MK_SSL.audio.models.modules.tools import PseudoLabelGenerator
 from MK_SSL.audio.models.modules.utils import HuBERTWrapperDataset
 
+from MK_SSL.utils import optimize_hyperparameters
+
 # Import your WandbLogger utility
 # Make sure your_library.wandb_utils is accessible, e.g., in the same directory
 # or properly installed as part of your package.
@@ -857,6 +859,9 @@ class Trainer:
         lr: float = 1e-4,
         weight_decay: float = 1e-2,
         optimizer: str = "adamw",
+        use_optuna: bool = False,
+        n_trials: int = 20,
+        tuning_max_epochs: int = 5, 
         **kwargs,
     ) -> None:
         """
@@ -893,6 +898,26 @@ class Trainer:
         else:
             self.logger.info("W&B logging is not active for this run.")
 
+
+        # Auto hyperparameter tuning
+        if use_optuna:
+            self.logger.info("🧪 Running Optuna for hyperparameter tuning...")
+            
+            best_params = optimize_hyperparameters(
+                trainer=self,
+                train_dataset=train_dataset,
+                val_dataset=val_dataset,
+                n_trials=n_trials,
+                max_epochs=tuning_max_epochs,
+            )
+            self.logger.info(f"🌟 Best hyperparameters found: {best_params}")
+            
+            lr = best_params.get("lr", lr)
+            batch_size = best_params.get("batch_size", batch_size)
+            weight_decay = best_params.get("weight_decay", weight_decay)
+            # optimizer = best_params.get("optimizer", optimizer)
+
+            kwargs.update({k: v for k, v in best_params.items() if k not in {"lr", "batch_size", "weight_decay", "optimizer"}})
 
         match optimizer.lower():
             case "adam":
