@@ -224,6 +224,11 @@ class Trainer:
                 bias=self.model.b.item(),
                 lr=optimizer.param_groups[0]["lr"],
             )
+        
+            if hasattr(self, "_optuna_trial"):
+                self._optuna_trial.report(loss.item(), tepoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()            
 
         return epoch_loss
 
@@ -277,6 +282,11 @@ class Trainer:
                 lr=optimizer.param_groups[0]["lr"],
             )
 
+            if hasattr(self, "_optuna_trial"):
+                self._optuna_trial.report(loss.item(), tepoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()            
+
         return epoch_loss
 
     def _train_simvlm(self, tepoch, optimizer, epoch_idx, total_batches_per_epoch): # Added epoch_idx, total_batches_per_epoch
@@ -309,6 +319,11 @@ class Trainer:
                 }, step=global_batch_step)
 
             tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
+
+            if hasattr(self, "_optuna_trial"):
+                self._optuna_trial.report(loss.item(), tepoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()            
 
         return epoch_loss
 
@@ -349,6 +364,11 @@ class Trainer:
                 }, step=global_batch_step)
 
             tepoch.set_postfix(loss=loss.item(), epoch_negs=np.mean(num_negs)) # Keep for TQDM
+
+            if hasattr(self, "_optuna_trial"):
+                self._optuna_trial.report(loss.item(), tepoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()            
 
         return epoch_loss
 
@@ -397,6 +417,11 @@ class Trainer:
 
             tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
 
+            if hasattr(self, "_optuna_trial"):
+                self._optuna_trial.report(loss.item(), epoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()
+
         return epoch_loss
 
     def _train_unitervqa(self, tepoch, optimizer, epoch_idx, total_batches_per_epoch): # Added epoch_idx, total_batches_per_epoch
@@ -427,6 +452,12 @@ class Trainer:
 
 
             tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
+
+            if hasattr(self, "_optuna_trial"):
+                self._optuna_trial.report(loss.item(), tepoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()  
+                          
         return epoch_loss
 
 
@@ -469,6 +500,11 @@ class Trainer:
                 temp=self.model.temperature.exp().item(),  # scalar temperature
                 lr=optimizer.param_groups[0]["lr"],
             )
+
+            if hasattr(self, "_optuna_trial"):
+                self._optuna_trial.report(loss.item(), tepoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()            
 
         return epoch_loss
     
@@ -529,6 +565,12 @@ class Trainer:
                 temp=self.model.temperature.exp().item(),
                 lr=optimizer.param_groups[0]["lr"],
             )
+
+
+        if hasattr(self, "_optuna_trial"):
+            self._optuna_trial.report(loss.item(), tepoch)
+            if self._optuna_trial.should_prune():
+                raise optuna.TrialPruned()            
 
         return epoch_loss
 
