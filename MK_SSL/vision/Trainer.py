@@ -10,6 +10,8 @@ from torch.utils.data import Subset, DataLoader # Added DataLoader for clarity
 import logging
 from torcheval.metrics.functional import multiclass_accuracy
 
+import optuna
+
 # from torch.utils.tensorboard import SummaryWriter # Commented out: Replaced by WandbLogger
 
 
@@ -24,7 +26,7 @@ from typing import Optional, Dict, Any # Added for type hinting W&B args
 # Import your WandbLogger utility
 # Make sure your_library.wandb_utils is accessible, e.g., in the same directory
 # or properly installed as part of your package.
-from your_library.wandb_utils import WandbLogger
+from MK_SSL.utils import WandbLogger
 
 
 class Trainer:
@@ -392,7 +394,12 @@ class Trainer:
             with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                 tepoch.set_description(f"Epoch {epoch + 1}")
                 loss_per_epoch = self.train_one_epoch(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
-
+            
+            # To stop from full training for optuna
+            if hasattr(self, "_optuna_trial"):
+                self._optuna_trial.report(loss_per_epoch, epoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()
     
 
             # Log epoch-level metrics to W&B
