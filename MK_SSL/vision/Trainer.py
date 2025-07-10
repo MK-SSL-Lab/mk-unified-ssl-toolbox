@@ -6,12 +6,11 @@ import os
 from torch import nn
 from tqdm.auto import tqdm
 from datetime import datetime
-from torch.utils.data import Subset
+from torch.utils.data import Subset, DataLoader # Added DataLoader for clarity
 import logging
 from torcheval.metrics.functional import multiclass_accuracy
 
-from torch.utils.tensorboard import SummaryWriter
-
+# from torch.utils.tensorboard import SummaryWriter # Commented out: Replaced by WandbLogger
 
 
 from MK_SSL.vision.models import *
@@ -20,7 +19,12 @@ from MK_SSL.vision.models.modules.transformations import *
 from MK_SSL.utils import configure_logging, get_logger_handler
 
 from MK_SSL.vision.models.utils import get_method
+from typing import Optional, Dict, Any # Added for type hinting W&B args
 
+# Import your WandbLogger utility
+# Make sure your_library.wandb_utils is accessible, e.g., in the same directory
+# or properly installed as part of your package.
+from your_library.wandb_utils import WandbLogger
 
 
 class Trainer:
@@ -36,6 +40,14 @@ class Trainer:
         reload_checkpoint: bool = False,
         verbose: bool = True,
         mixed_precision_training: bool = True,
+        # W&B specific arguments
+        wandb_project: Optional[str] = None,
+        wandb_entity: Optional[str] = None,
+        wandb_mode: str = "online", # "online", "offline", "disabled"
+        wandb_run_name: Optional[str] = None,
+        wandb_config: Optional[Dict[str, Any]] = None,
+        wandb_notes: Optional[str] = None,
+        wandb_tags: Optional[list[str]] = None,
         **kwargs,
     ) -> None:
         """
@@ -68,6 +80,13 @@ class Trainer:
             verbose (bool): If True, detailed logs and progress updates will be printed during training.
             mixed_precision_training (bool): If True, mixed precision (using both 16-bit and 32-bit floats)
                                              will be used during training to improve performance and reduce memory usage.
+            wandb_project (str, optional): W&B project name. If None, uses default from W&B.
+            wandb_entity (str, optional): W&B entity (username or team name). If None, uses default.
+            wandb_mode (str, optional): W&B logging mode ("online", "offline", "disabled"). Defaults to "online".
+            wandb_run_name (str, optional): Custom name for the W&B run.
+            wandb_config (Dict[str, Any], optional): Dictionary of hyperparameters/settings for W&B.
+            wandb_notes (str, optional): Notes for the W&B run.
+            wandb_tags (list[str], optional): Tags for the W&B run.
             **kwargs: Additional keyword arguments for extending functionality or overriding default settings
                       specific to the training method or the backbone architecture.
         """
@@ -187,7 +206,6 @@ class Trainer:
         self.model = self.model.to(self.device)
         self.loss = self.loss.to(self.device)
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.writer = SummaryWriter("{}/Logs/{}".format(self.save_dir, self.timestamp))
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.mixed_precision_training)
 
 
@@ -198,15 +216,45 @@ class Trainer:
             "----------------------------------------------"
         )
 
+        # --- W&B Logger Initialization ---
+        # Combine trainer_config with any specific wandb_config provided
+        trainer_internal_config = {
+            "method": self.method,
+            "feature_size": self.feature_size,
+            "image_size": self.image_size,
+            "save_dir": save_dir,
+            "checkpoint_interval": checkpoint_interval,
+            "reload_checkpoint": reload_checkpoint,
+            "mixed_precision_training": mixed_precision_training,
+            "device": str(self.device),
+            "num_workers": self.num_workers,
+            **kwargs # Include any other kwargs passed to Trainer init
+        }
+        full_wandb_config = {**trainer_internal_config, **(wandb_config if wandb_config else {})}
+
+        self.wandb_logger = WandbLogger(
+            project_name=wandb_project if wandb_project else f"MK_SSL_Vision_{self.method}", # Default project name
+            entity=wandb_entity,
+            mode=wandb_mode,
+            run_name=wandb_run_name,
+            config=full_wandb_config,
+            notes=wandb_notes if wandb_notes else f"Training {self.method} vision model with MK_SSL.",
+            tags=wandb_tags if wandb_tags else [self.method, "vision", "training"],
+        )
+
     def __del__(self):
-        self.writer.close()
+        pass # No need for TensorBoard writer close if not used
 
     def get_backbone(self):
         return self.model.backbone
 
-    def train_one_epoch(self, tepoch, optimizer):
+    def train_one_epoch(self, tepoch, optimizer, epoch_idx, total_batches_per_epoch): # Added epoch_idx, total_batches_per_epoch
         loss_hist_train = 0.0
-        for images, _ in tepoch:
+        # Watch the model with W&B if active
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(self.model)
+
+        for step, (images, _) in enumerate(tepoch): # Added step for global step calculation
             images = images.to(self.device)
             if self.method.lower() in ["barlowtwins", "byol", "mocov3"]:
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
@@ -234,7 +282,7 @@ class Trainer:
                             viewc.append(self.transformation_local(images))
                     z0, z1 = self.model(view0, view1, viewc)
                     loss = self.loss(z0, z1)
-            else:
+            else: # SimCLR, SimSiam, MoCov2 (assuming these use transformation twice)
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     view0 = self.transformation(images)
                     view1 = self.transformation(images)
@@ -246,6 +294,15 @@ class Trainer:
             self.scaler.step(optimizer)
             self.scaler.update()
             loss_hist_train += loss.item()
+            
+            # Log batch-level metrics to W&B
+            if self.wandb_logger.is_active:
+                global_batch_step = (epoch_idx * total_batches_per_epoch) + step
+                self.wandb_logger.log({
+                    f"{self.method.upper()}/Train/Batch_Loss": loss.item(),
+                    f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
+                }, step=global_batch_step)
+
             tepoch.set_postfix(loss=loss.item())
 
         return loss_hist_train
@@ -273,6 +330,23 @@ class Trainer:
             weight_decay (float): Weight decay.
             learning_rate (float): Learning rate.
         """
+        # Initialize W&B run at the very beginning of the main train method
+        if self.wandb_logger.is_active:
+            self.wandb_logger.init_run()
+            # Update W&B config with dynamic training parameters
+            self.wandb_logger.current_run.config.update({
+                "batch_size": batch_size,
+                "start_epoch": start_epoch,
+                "max_epochs": epochs,
+                "learning_rate": learning_rate,
+                "weight_decay": weight_decay,
+                "optimizer": optimizer,
+            })
+            self.logger.info(f"W&B run initialized. View run at: {self.wandb_logger.current_run.url}")
+        else:
+            self.logger.info("W&B logging is not active for this run.")
+
+
         self.dataset = dataset
         match optimizer.lower():
             case "adam":
@@ -299,15 +373,17 @@ class Trainer:
                 raise ValueError(f"Optimizer {optimizer} not supported")
 
         train_loader = torch.utils.data.DataLoader(
-            self.dataset, batch_size=batch_size, shuffle=True, drop_last=True
+            self.dataset, batch_size=batch_size, shuffle=True, drop_last=True,
+            num_workers=self.num_workers # Add num_workers for consistency
         )
+        total_batches_per_epoch = len(train_loader) # Used for global step calculation
 
-        self.model.train(True)
+        self.model.train()
 
         if self.reload_checkpoint:
             start_epoch = self._reload_latest_checkpoint() + 1
 
-        for epoch in tqdm(
+        for epoch in tqdm( # epoch is 0-indexed loop variable (range(start-1, epochs))
             range(start_epoch - 1, epochs),
             unit="epoch",
             desc="Pretext Task Model Training",
@@ -315,25 +391,57 @@ class Trainer:
         ):
             with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                 tepoch.set_description(f"Epoch {epoch + 1}")
-                loss_per_epoch = self.train_one_epoch(tepoch, optimizer)
+                loss_per_epoch = self.train_one_epoch(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
 
-            self.writer.add_scalar(
-                "Pretext Task/Loss/train",
-                loss_per_epoch / len(train_loader),
-                epoch + 1,
-            )
+    
 
-            self.writer.flush()
+            # Log epoch-level metrics to W&B
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({
+                    f"{self.method.upper()}/Train/Epoch_Loss": loss_per_epoch / len(train_loader),
+                    f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
+                }, step=epoch + 1) # Use epoch + 1 for 1-indexed epoch step
+
+
             if (epoch + 1) % self.checkpoint_interval == 0:
-                model_path = self.checkpoint_path + "{}_model_{}_epoch{}.pth".format(
+                model_path = self.checkpoint_path + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
                     self.method, self.timestamp, epoch + 1
                 )
                 torch.save(self.model.state_dict(), model_path)
+                self.logger.info(f"Model checkpoint saved: {model_path}")
+                # Save model checkpoint as W&B artifact
+                if self.wandb_logger.is_active:
+                    self.wandb_logger.save_artifact(
+                        model_path,
+                        name=f"{self.method}-model-epoch-{epoch+1}",
+                        type="model",
+                        metadata={"epoch": epoch+1, "loss": loss_per_epoch / len(train_loader)}
+                    )
 
-        model_path = self.checkpoint_path + "{}_model_{}_epoch{}.pth".format(
-            self.method, self.timestamp, epoch + 1
+        # Save final model after all epochs
+        # Note: 'epoch' here will be the last value from the loop, which is `epochs - 1` (0-indexed)
+        # So, for the filename, it should be `epochs` (1-indexed total epochs)
+        final_model_path = self.checkpoint_path + "/{}_model_{}_final.pth".format( # Changed to final
+            self.method, self.timestamp
         )
-        torch.save(self.model.state_dict(), model_path)
+        torch.save(self.model.state_dict(), final_model_path)
+        self.logger.info(f"Final model saved: {final_model_path}")
+        # Save final model as W&B artifact
+        if self.wandb_logger.is_active:
+            self.wandb_logger.save_artifact(
+                final_model_path,
+                name=f"{self.method}-model-final",
+                type="model",
+                metadata={"epochs_trained": epochs, "final_loss": loss_per_epoch / len(train_loader)} # Use final epoch's loss
+            )
+
+        # Finish W&B run at the very end of the main train method
+        if self.wandb_logger.is_active:
+            self.wandb_logger.finish_run()
+            self.logger.info("Main training process completed and W&B run finalized.")
+        else:
+            self.logger.info("Main training process completed.")
+
 
     def evaluate(
         self,
@@ -365,6 +473,31 @@ class Trainer:
             fine_tuning_data_proportion (float): Proportion of the dataset between 0 and 1 to use for fine-tuning.
 
         """
+        # Start W&B run for evaluation if not already active (e.g., if evaluation is run standalone)
+        # If train() was called before, the run might still be active.
+        # This ensures evaluation metrics are logged to the same run or a new one.
+        if not self.wandb_logger.is_active:
+            # Re-init W&B logger for evaluation context if not already active from training
+            # This might create a new run if not explicitly linked to a previous one.
+            # For simplicity, we'll assume a new run if not active.
+            # You might want to add a specific project/run_name for evaluation runs.
+            self.logger.info("W&B logger not active, initializing for evaluation.")
+            self.wandb_logger.init_run() # This will create a new run if none is active
+
+        # Log evaluation parameters to W&B config
+        if self.wandb_logger.is_active:
+            self.wandb_logger.current_run.config.update({
+                "eval_method": eval_method,
+                "eval_top_k": top_k,
+                "eval_epochs": epochs,
+                "eval_optimizer": optimizer,
+                "eval_weight_decay": weight_decay,
+                "eval_learning_rate": learning_rate,
+                "eval_batch_size": batch_size,
+                "fine_tuning_data_proportion": fine_tuning_data_proportion,
+            })
+            self.logger.info("Evaluation parameters logged to W&B config.")
+
 
         match eval_method.lower():
             case "linear":
@@ -420,8 +553,10 @@ class Trainer:
         criterion = nn.CrossEntropyLoss()
 
         train_loader_ds = torch.utils.data.DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True
+            train_dataset, batch_size=batch_size, shuffle=True,
+            num_workers=self.num_workers # Add num_workers
         )
+        total_batches_per_eval_epoch = len(train_loader_ds) # For global step calculation
 
         net.train(True)
         scaler_eval = torch.cuda.amp.GradScaler(enabled=self.mixed_precision_training)
@@ -436,7 +571,7 @@ class Trainer:
                 tepoch_ds.set_description(f"Epoch {epoch + 1}")
                 loss_hist_train, acc_hist_train = 0.0, 0.0
 
-                for images, labels in tepoch_ds:
+                for step, (images, labels) in enumerate(tepoch_ds): # Added step
                     correct, total = 0, 0
 
                     images = images.to(self.device)
@@ -459,22 +594,28 @@ class Trainer:
                     scaler_eval.step(optimizer_eval)
                     scaler_eval.update()
 
-                self.writer.add_scalar(
-                    "Downstream Task/Loss/train",
-                    loss_hist_train / len(train_loader_ds),
-                    epoch + 1,
-                )
+                    # Log batch-level evaluation train metrics to W&B
+                    if self.wandb_logger.is_active:
+                        global_eval_batch_step = (epoch * total_batches_per_eval_epoch) + step
+                        self.wandb_logger.log({
+                            f"Downstream Task/{eval_method.capitalize()}/Batch_Loss": loss.item(),
+                            f"Downstream Task/{eval_method.capitalize()}/Batch_Accuracy": acc,
+                            f"Downstream Task/{eval_method.capitalize()}/LR": optimizer_eval.param_groups[0]["lr"],
+                        }, step=global_eval_batch_step)
 
-                self.writer.add_scalar(
-                    "Downstream Task/Accuracy/train",
-                    acc_hist_train / len(train_loader_ds),
-                    epoch + 1,
-                )
 
-                self.writer.flush()
+
+                # Log epoch-level evaluation train metrics to W&B
+                if self.wandb_logger.is_active:
+                    self.wandb_logger.log({
+                        f"Downstream Task/{eval_method.capitalize()}/Epoch_Loss": loss_hist_train / len(train_loader_ds),
+                        f"Downstream Task/{eval_method.capitalize()}/Epoch_Accuracy": acc_hist_train / len(train_loader_ds),
+                    }, step=epoch + 1)
+
 
         test_loader_ds = torch.utils.data.DataLoader(
-            test_dataset, batch_size=batch_size, shuffle=True
+            test_dataset, batch_size=batch_size, shuffle=True,
+            num_workers=self.num_workers # Add num_workers
         )
 
         acc_test = 0.0
@@ -486,19 +627,34 @@ class Trainer:
                 outputs = net(images)
                 acc_test += multiclass_accuracy(outputs, labels, k=top_k).item()
 
-        acc = 100 * acc_test / len(test_loader_ds)
+        final_test_accuracy = 100 * acc_test / len(test_loader_ds)
 
         self.logger.info(
             "\n"
             "---------------- Test Accuracy ----------------\n"
-            f"The top_{top_k} accuracy of the network on the {len(test_dataset)} test images: {acc}%\n"
+            f"The top_{top_k} accuracy of the network on the {len(test_dataset)} test images: {final_test_accuracy:.2f}%\n" # Formatted for clarity
             "-----------------------------------------------"
         )
 
-        return acc
+        # Log final test accuracy to W&B summary
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({
+                f"Downstream Task/{eval_method.capitalize()}/Final_Test_Accuracy_top_{top_k}": final_test_accuracy
+            })
+            # Also add to summary for easy comparison across runs
+            self.wandb_logger.current_run.summary[f"final_test_accuracy_top_{top_k}"] = final_test_accuracy
+
+        # Finish W&B run after evaluation if it was started by evaluate and not already finished by train
+        if self.wandb_logger.is_active: # Check again if it's still active
+            self.wandb_logger.finish_run()
+            self.logger.info("Evaluation process completed and W&B run finalized.")
+        else:
+            self.logger.info("Evaluation process completed.")
+
+        return final_test_accuracy
 
     def load_checkpoint(self, checkpont_dir: str):
-        self.model.load_state_dict(torch.load(checkpont_dir))
+        self.model.load_state_dict(torch.load(checkpont_dir, map_location=self.device)) # Add map_location
         self.logger.info(
             "\n"
             "---------------- Checkpoint ----------------\n"
@@ -508,48 +664,60 @@ class Trainer:
 
 
     def save_backbone(self):
-        torch.save(self.model.backbone.state_dict(), self.save_dir + "backbone.pth")
+        # Ensure save_dir has a trailing slash or use os.path.join
+        backbone_path = os.path.join(self.save_dir, "backbone.pth")
+        torch.save(self.model.backbone.state_dict(), backbone_path)
 
         self.logger.info(
             "\n"
             "---------------- Save Backbone ----------------\n"
             "Backbone saved.\n"
-            f"Backbone file path : {os.path.join(self.save_dir, 'backbone.pth')}\n"
+            f"Backbone file path : {backbone_path}\n"
             "------------------------------------------------"
         )
+        # Save backbone as W&B artifact
+        if self.wandb_logger.is_active:
+            self.wandb_logger.save_artifact(
+                backbone_path,
+                name=f"{self.method}-backbone",
+                type="model_backbone",
+                metadata={"feature_size": self.feature_size, "image_size": self.image_size}
+            )
 
 
     def _reload_latest_checkpoint(self):
         checkpoints = os.listdir(self.checkpoint_path)
+        method_prefix = self.method + "_model_" # Filter by method
+        filtered_checkpoints = [
+            ckpt
+            for ckpt in checkpoints
+            if ckpt.endswith(".pth") and ckpt.startswith(method_prefix)
+        ]
+
         sorted_checkpoints = sorted(
-            [os.path.join(self.checkpoint_path, i) for i in checkpoints],
+            [os.path.join(self.checkpoint_path, i) for i in filtered_checkpoints], # Use filtered checkpoints
             key=os.path.getmtime,
         )
 
         if len(sorted_checkpoints) == 0:
-
-
-            self.logger.error(f"No checkpoints found in the directory")
-            
-            raise ValueError("No checkpoints found in the directory")
+            self.logger.warning(f"No checkpoints found for method '{self.method}' in {self.checkpoint_path}. Starting from scratch.")
+            return 0 # Return 0 for 0-indexed epoch if no checkpoint found
 
         self.load_checkpoint(sorted_checkpoints[-1])
 
         match = re.search(r"epoch(\d+)", sorted_checkpoints[-1])
         if match:
-            epoch = int(match.group(1))
-
+            epoch = int(match.group(1)) -1 # Return 0-indexed epoch for consistency with range(start-1, epochs)
             self.logger.info(
                 "\n"
                 "---------------- Checkpoint Reload ----------------\n"
-                f"Starting Epoch : {epoch}\n"
+                f"Starting Epoch : {epoch + 1}\n" # Log 1-indexed epoch for user
                 "---------------------------------------------------"
             )
 
 
         else:
-            self.logger.error(f"No epoch number found in the checkpoint name.")
-            
-            raise ValueError("No epoch number found in the checkpoint name.")
+            self.logger.warning("No epoch number found in the checkpoint name. Resuming from epoch 0.")
+            epoch = 0 # Default to epoch 0 if not found
 
-        return epoch
+        return epoch # Return 0-indexed epoch
