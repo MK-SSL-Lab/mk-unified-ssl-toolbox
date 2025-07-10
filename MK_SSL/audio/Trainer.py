@@ -279,6 +279,13 @@ class Trainer:
                     self.checkpoint_path,
                     f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth",
                 )
+
+            # Save checkpoint
+            if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
+                model_path = os.path.join(
+                    self.checkpoint_path,
+                    f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth",
+                )
                 torch.save(self.model.state_dict(), model_path)
                 self.logger.info(f"Model checkpoint saved: {model_path}")
                 # Save model checkpoint as W&B artifact
@@ -428,7 +435,7 @@ class Trainer:
                 )
     
             # Save checkpoint
-            if (epoch + 1) % self.checkpoint_interval == 0:
+            if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
                 model_path = os.path.join(
                     self.checkpoint_path,
                     f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth",
@@ -561,7 +568,7 @@ class Trainer:
             # Save checkpoint
             if (
                 epoch + 1
-            ) % self.checkpoint_interval == 0:
+            ) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
                 model_path = os.path.join(
                     self.checkpoint_path,
                     f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth",
@@ -794,7 +801,7 @@ class Trainer:
                         step=epoch + 1
                     )
 
-                if (epoch + 1) % self.checkpoint_interval == 0:
+                if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
                     model_path = os.path.join(
                         self.checkpoint_path,
                         f"{self.method}_iter{iteration+1}_model_{self.timestamp}_epoch{epoch+1}.pth",
@@ -814,7 +821,7 @@ class Trainer:
                     avg_val_loss = self._validate_hubert(val_loader, iteration, epoch)
 
                 if hasattr(self, "_optuna_trial"):
-                    self._optuna_trial.report(loss.item(), epoch)
+                    self._optuna_trial.report(avg_val_loss, epoch)
                     if self._optuna_trial.should_prune():
                         raise optuna.TrialPruned()
 
