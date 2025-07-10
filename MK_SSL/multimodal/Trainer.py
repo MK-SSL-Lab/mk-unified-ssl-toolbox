@@ -9,6 +9,7 @@ from datetime import datetime
 # from torch.utils.tensorboard import SummaryWriter # Commented out: Replaced by WandbLogger for unified logging
 from torch.nn.utils.clip_grad import clip_grad_norm_
 from typing import Optional, Type, Dict, Any
+import optuna
 
 from MK_SSL.multimodal.models import *
 
@@ -20,7 +21,8 @@ from MK_SSL.multimodal.models.utils import get_method
 # Import your WandbLogger utility
 # Make sure your_library.wandb_utils is accessible, e.g., in the same directory
 # or properly installed as part of your package.
-from your_library.wandb_utils import WandbLogger
+from MK_SSL.utils import WandbLogger
+from MK_SSL.utils import optimize_hyperparameters
 
 
 class Trainer:
@@ -224,11 +226,7 @@ class Trainer:
                 bias=self.model.b.item(),
                 lr=optimizer.param_groups[0]["lr"],
             )
-        
-            if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(loss.item(), tepoch)
-                if self._optuna_trial.should_prune():
-                    raise optuna.TrialPruned()            
+                  
 
         return epoch_loss
 
@@ -282,10 +280,7 @@ class Trainer:
                 lr=optimizer.param_groups[0]["lr"],
             )
 
-            if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(loss.item(), tepoch)
-                if self._optuna_trial.should_prune():
-                    raise optuna.TrialPruned()            
+          
 
         return epoch_loss
 
@@ -319,11 +314,7 @@ class Trainer:
                 }, step=global_batch_step)
 
             tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
-
-            if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(loss.item(), tepoch)
-                if self._optuna_trial.should_prune():
-                    raise optuna.TrialPruned()            
+          
 
         return epoch_loss
 
@@ -364,11 +355,7 @@ class Trainer:
                 }, step=global_batch_step)
 
             tepoch.set_postfix(loss=loss.item(), epoch_negs=np.mean(num_negs)) # Keep for TQDM
-
-            if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(loss.item(), tepoch)
-                if self._optuna_trial.should_prune():
-                    raise optuna.TrialPruned()            
+           
 
         return epoch_loss
 
@@ -417,10 +404,6 @@ class Trainer:
 
             tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
 
-            if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(loss.item(), epoch)
-                if self._optuna_trial.should_prune():
-                    raise optuna.TrialPruned()
 
         return epoch_loss
 
@@ -453,10 +436,6 @@ class Trainer:
 
             tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
 
-            if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(loss.item(), tepoch)
-                if self._optuna_trial.should_prune():
-                    raise optuna.TrialPruned()  
                           
         return epoch_loss
 
@@ -500,11 +479,7 @@ class Trainer:
                 temp=self.model.temperature.exp().item(),  # scalar temperature
                 lr=optimizer.param_groups[0]["lr"],
             )
-
-            if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(loss.item(), tepoch)
-                if self._optuna_trial.should_prune():
-                    raise optuna.TrialPruned()            
+        
 
         return epoch_loss
     
@@ -567,23 +542,24 @@ class Trainer:
             )
 
 
-        if hasattr(self, "_optuna_trial"):
-            self._optuna_trial.report(loss.item(), tepoch)
-            if self._optuna_trial.should_prune():
-                raise optuna.TrialPruned()            
+        
 
         return epoch_loss
 
 
     def train(
         self,
-        dataset: torch.utils.data.Dataset,
+        train_dataset: torch.utils.data.Dataset,
         batch_size: int = 256,
         start_epoch: int = 1,
         epochs: int = 100,
         optimizer: str = "Adam",
         weight_decay: float = 1e-6,
         learning_rate: float = 1e-3,
+        use_hpo: bool = False,
+        n_trials: int = 20,
+        tuning_max_epochs: int = 5, 
+        **kwargs,
     ):
         # Initialize W&B run at the very beginning of the main train method
         if self.wandb_logger.is_active:
@@ -602,6 +578,24 @@ class Trainer:
             self.logger.info("W&B logging is not active for this run.")
 
         number_of_epochs = epochs - start_epoch + 1
+
+        if use_hpo:
+            self.logger.info("🧪 Running Optuna for hyperparameter tuning...")
+            
+            best_params = optimize_hyperparameters(
+                trainer=self,
+                train_dataset=train_dataset,
+                n_trials=n_trials,
+                max_epochs=tuning_max_epochs,
+            )
+            self.logger.info(f"🌟 Best hyperparameters found: {best_params}")
+            
+            batch_size = best_params.get("batch_size", batch_size)
+            weight_decay = best_params.get("weight_decay", weight_decay)
+            optimizer = best_params.get("optimizer", optimizer)
+
+            kwargs.update({k: v for k, v in best_params.items() if k not in {"lr", "batch_size", "weight_decay", "optimizer"}})
+
 
         match optimizer.lower():
             case "adam":
@@ -631,7 +625,7 @@ class Trainer:
             start_epoch = self._reload_latest_checkpoint() + 1 # +1 because _reload returns 0-indexed epoch
 
         train_loader = torch.utils.data.DataLoader(
-            dataset,
+            train_dataset,
             batch_size=batch_size,
             shuffle=True,
             num_workers=self.num_workers,
@@ -678,10 +672,16 @@ class Trainer:
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
 
+                    if hasattr(self, "_optuna_trial"):
+                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        if self._optuna_trial.should_prune():
+                            raise optuna.TrialPruned() 
+
                     if (epoch + 1) % self.checkpoint_interval == 0:
                         model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
                             self.method, self.timestamp, epoch + 1
-                        )
+                        ) 
+
                         torch.save(self.model.state_dict(), model_path)
                         self.logger.info(f"Model checkpoint saved: {model_path}")
                         # Save model checkpoint as W&B artifact
@@ -724,6 +724,11 @@ class Trainer:
                             f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
+
+                    if hasattr(self, "_optuna_trial"):
+                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        if self._optuna_trial.should_prune():
+                            raise optuna.TrialPruned()  
 
                     if (epoch + 1) % self.checkpoint_interval == 0:
                         model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
@@ -772,6 +777,11 @@ class Trainer:
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
 
+                    if hasattr(self, "_optuna_trial"):
+                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        if self._optuna_trial.should_prune():
+                            raise optuna.TrialPruned() 
+
                     if (epoch + 1) % self.checkpoint_interval == 0:
                         model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
                             self.method, self.timestamp, epoch + 1
@@ -818,6 +828,11 @@ class Trainer:
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
 
+                    if hasattr(self, "_optuna_trial"):
+                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        if self._optuna_trial.should_prune():
+                            raise optuna.TrialPruned()  
+
                     if (epoch + 1) % self.checkpoint_interval == 0:
                         model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
                             self.method, self.timestamp, epoch + 1
@@ -858,6 +873,11 @@ class Trainer:
                             f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
+
+                    if hasattr(self, "_optuna_trial"):
+                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        if self._optuna_trial.should_prune():
+                            raise optuna.TrialPruned() 
 
                     if (epoch + 1) % self.checkpoint_interval == 0:
                         model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
@@ -902,6 +922,11 @@ class Trainer:
                             # If you need a global average, you'd need to accumulate it.
                         }, step=epoch + 1)
 
+                    if hasattr(self, "_optuna_trial"):
+                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        if self._optuna_trial.should_prune():
+                            raise optuna.TrialPruned() 
+
                     if (epoch + 1) % self.checkpoint_interval == 0:
                         model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
                             self.method, self.timestamp, epoch + 1
@@ -936,6 +961,11 @@ class Trainer:
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
 
+                    if hasattr(self, "_optuna_trial"):
+                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        if self._optuna_trial.should_prune():
+                            raise optuna.TrialPruned() 
+
                     if (epoch + 1) % self.checkpoint_interval == 0:
                         model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format(
                             self.method, self.timestamp, epoch + 1
@@ -969,6 +999,11 @@ class Trainer:
                             f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
+
+                    if hasattr(self, "_optuna_trial"):
+                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        if self._optuna_trial.should_prune():
+                            raise optuna.TrialPruned()         
 
                     if (epoch + 1) % self.checkpoint_interval == 0:
                         model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format(
