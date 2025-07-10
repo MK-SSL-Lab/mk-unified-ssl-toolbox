@@ -687,37 +687,35 @@ class Trainer:
 
     def _reload_latest_checkpoint(self):
         checkpoints = os.listdir(self.checkpoint_path)
-        method_prefix = self.method + "_model_" # Filter by method
-        filtered_checkpoints = [
-            ckpt
-            for ckpt in checkpoints
-            if ckpt.endswith(".pth") and ckpt.startswith(method_prefix)
-        ]
-
         sorted_checkpoints = sorted(
-            [os.path.join(self.checkpoint_path, i) for i in filtered_checkpoints], # Use filtered checkpoints
+            [os.path.join(self.checkpoint_path, i) for i in checkpoints],
             key=os.path.getmtime,
         )
 
         if len(sorted_checkpoints) == 0:
-            self.logger.warning(f"No checkpoints found for method '{self.method}' in {self.checkpoint_path}. Starting from scratch.")
-            return 0 # Return 0 for 0-indexed epoch if no checkpoint found
+
+
+            self.logger.error(f"No checkpoints found in the directory")
+            
+            raise ValueError("No checkpoints found in the directory")
 
         self.load_checkpoint(sorted_checkpoints[-1])
 
         match = re.search(r"epoch(\d+)", sorted_checkpoints[-1])
         if match:
-            epoch = int(match.group(1)) -1 # Return 0-indexed epoch for consistency with range(start-1, epochs)
+            epoch = int(match.group(1))
+
             self.logger.info(
                 "\n"
                 "---------------- Checkpoint Reload ----------------\n"
-                f"Starting Epoch : {epoch + 1}\n" # Log 1-indexed epoch for user
+                f"Starting Epoch : {epoch}\n"
                 "---------------------------------------------------"
             )
 
 
         else:
-            self.logger.warning("No epoch number found in the checkpoint name. Resuming from epoch 0.")
-            epoch = 0 # Default to epoch 0 if not found
+            self.logger.error(f"No epoch number found in the checkpoint name.")
+            
+            raise ValueError("No epoch number found in the checkpoint name.")
 
-        return epoch # Return 0-indexed epoch
+        return epoch
