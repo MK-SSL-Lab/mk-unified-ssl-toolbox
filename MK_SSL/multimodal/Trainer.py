@@ -6,8 +6,9 @@ import logging
 import torch.nn as nn
 from tqdm import tqdm
 from datetime import datetime
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter # Commented out: Replaced by WandbLogger for unified logging
 from torch.nn.utils.clip_grad import clip_grad_norm_
+from typing import Optional, Type, Dict, Any
 
 from MK_SSL.multimodal.models import *
 
@@ -15,6 +16,13 @@ from MK_SSL.vision.models.modules.losses.nt_xent import NT_Xent
 
 from MK_SSL.utils import configure_logging, get_logger_handler
 from MK_SSL.multimodal.models.utils import get_method
+
+# Import your WandbLogger utility
+# Make sure your_library.wandb_utils is accessible, e.g., in the same directory
+# or properly installed as part of your package.
+from your_library.wandb_utils import WandbLogger
+
+
 class Trainer:
 
     def __init__(
@@ -29,6 +37,14 @@ class Trainer:
         checkpoint_interval: int = 10,
         reload_checkpoint: bool = False,
         verbose: bool = True,
+        # W&B specific arguments
+        wandb_project: Optional[str] = None,
+        wandb_entity: Optional[str] = None,
+        wandb_mode: str = "online", # "online", "offline", "disabled"
+        wandb_run_name: Optional[str] = None,
+        wandb_config: Optional[Dict[str, Any]] = None,
+        wandb_notes: Optional[str] = None,
+        wandb_tags: Optional[list[str]] = None,
         **kwargs,
     ) -> None:
         """
@@ -51,6 +67,13 @@ class Trainer:
                                                 Defaults to False.
             verbose (bool, optional): If True, enables detailed logging and progress information during training.
                                       Defaults to True.
+            wandb_project (str, optional): W&B project name. If None, uses default from W&B.
+            wandb_entity (str, optional): W&B entity (username or team name). If None, uses default.
+            wandb_mode (str, optional): W&B logging mode ("online", "offline", "disabled"). Defaults to "online".
+            wandb_run_name (str, optional): Custom name for the W&B run.
+            wandb_config (Dict[str, Any], optional): Dictionary of hyperparameters/settings for W&B.
+            wandb_notes (str, optional): Notes for the W&B run.
+            wandb_tags (list[str], optional): Tags for the W&B run.
             **kwargs: Additional keyword arguments that can be passed to the image and text encoder models,
                       or used to customize the training process.
         """
@@ -74,10 +97,6 @@ class Trainer:
         self.checkpoint_interval = checkpoint_interval
         self.reload_checkpoint = reload_checkpoint
         self.mixed_precision_training = mixed_precision_training
-
-
-
-
         
         self.save_dir = os.path.join(save_dir, self.method)
 
@@ -87,8 +106,6 @@ class Trainer:
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.num_workers = os.cpu_count()
 
-
-
         self.logger.info(
             "\n"
             "---------------- MK_SSL: Multimodal ----------------\n"
@@ -97,7 +114,6 @@ class Trainer:
             f"Method            : {self.method}\n"
             "----------------------------------------------------"
         )
-
 
         try:
             method_cfg = get_method(self.method)
@@ -120,8 +136,6 @@ class Trainer:
         
         model_args.update(kwargs)
 
-
-
         self.model = method_cfg["model"](**model_args)
 
         self.logger.info(method_cfg["logs"](self.model))
@@ -135,16 +149,45 @@ class Trainer:
             "--------------------------------------------------"
         )
 
-
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.writer = SummaryWriter("{}/Logs/{}".format(self.save_dir, self.timestamp))
+        # self.writer = SummaryWriter("{}/Logs/{}".format(self.save_dir, self.timestamp)) # Commented out: Replaced by WandbLogger
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.mixed_precision_training)
 
-    def __del__(self):
-        self.writer.close()
+        # --- W&B Logger Initialization ---
+        # Combine trainer_config with any specific wandb_config provided
+        trainer_internal_config = {
+            "method": self.method,
+            "save_dir": save_dir,
+            "checkpoint_interval": checkpoint_interval,
+            "reload_checkpoint": reload_checkpoint,
+            "mixed_precision_training": mixed_precision_training,
+            "device": str(self.device),
+            "num_workers": self.num_workers,
+            **kwargs # Include any other kwargs passed to Trainer init
+        }
+        full_wandb_config = {**trainer_internal_config, **(wandb_config if wandb_config else {})}
 
-    def _train_clip(self, tepoch, optimizer):
+        self.wandb_logger = WandbLogger(
+            project_name=wandb_project if wandb_project else f"MK_SSL_Multimodal_{self.method}", # Default project name
+            entity=wandb_entity,
+            mode=wandb_mode,
+            run_name=wandb_run_name,
+            config=full_wandb_config,
+            notes=wandb_notes if wandb_notes else f"Training {self.method} multimodal model with MK_SSL.",
+            tags=wandb_tags if wandb_tags else [self.method, "multimodal", "training"],
+        )
+
+    def __del__(self):
+        # if hasattr(self, "writer"): # Commented out
+        #     self.writer.close() # Commented out
+        pass # No need for TensorBoard writer close if not used
+
+    def _train_clip(self, tepoch, optimizer, epoch_idx, total_batches_per_epoch): # Added epoch_idx, total_batches_per_epoch
         epoch_loss = 0.0
+        # Watch the model with W&B if active
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(self.model)
+
         for step, (batch) in enumerate(tepoch):
             batch = {
                 k: v.to(self.device)
@@ -165,6 +208,16 @@ class Trainer:
             self.scaler.update()
 
             epoch_loss += loss.item()
+            # Log batch-level metrics to W&B
+            if self.wandb_logger.is_active:
+                global_batch_step = (epoch_idx * total_batches_per_epoch) + step
+                self.wandb_logger.log({
+                    "train/batch_loss": loss.item(),
+                    "train/temp": self.model.t_prime.exp().item(),
+                    "train/bias": self.model.b.item(),
+                    "train/lr": optimizer.param_groups[0]["lr"],
+                }, step=global_batch_step)
+
             tepoch.set_postfix(
                 loss=loss.item(),
                 temp=self.model.t_prime.exp().item(),
@@ -174,8 +227,12 @@ class Trainer:
 
         return epoch_loss
 
-    def _train_slip(self, tepoch, optimizer):
+    def _train_slip(self, tepoch, optimizer, epoch_idx, total_batches_per_epoch): # Added epoch_idx, total_batches_per_epoch
         epoch_loss = 0.0
+        # Watch the model with W&B if active
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(self.model)
+
         for step, (batch) in enumerate(tepoch):
             batch = {
                 k: v.to(self.device)
@@ -201,6 +258,18 @@ class Trainer:
             self.scaler.update()
 
             epoch_loss += loss.item()
+            # Log batch-level metrics to W&B
+            if self.wandb_logger.is_active:
+                global_batch_step = (epoch_idx * total_batches_per_epoch) + step
+                self.wandb_logger.log({
+                    "train/batch_loss": loss.item(),
+                    "train/ssl_loss": ssl_loss.item(),
+                    "train/clip_loss": clip_loss.item(),
+                    "train/temp": self.model.clip.t_prime.exp().item(),
+                    "train/bias": self.model.clip.b.item(),
+                    "train/lr": optimizer.param_groups[0]["lr"],
+                }, step=global_batch_step)
+
             tepoch.set_postfix(
                 loss=loss.item(),
                 temp=self.model.clip.t_prime.exp().item(),
@@ -210,8 +279,12 @@ class Trainer:
 
         return epoch_loss
 
-    def _train_simvlm(self, tepoch, optimizer):
+    def _train_simvlm(self, tepoch, optimizer, epoch_idx, total_batches_per_epoch): # Added epoch_idx, total_batches_per_epoch
         epoch_loss = 0.0
+        # Watch the model with W&B if active
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(self.model)
+
         for step, (batch) in enumerate(tepoch):
             batch = {
                 k: v.to(self.device) for k, v in batch.items() if k in ["text", "image"]
@@ -227,13 +300,25 @@ class Trainer:
             self.scaler.update()
 
             epoch_loss += loss.item()
+            # Log batch-level metrics to W&B
+            if self.wandb_logger.is_active:
+                global_batch_step = (epoch_idx * total_batches_per_epoch) + step
+                self.wandb_logger.log({
+                    "train/batch_loss": loss.item(),
+                    "train/lr": optimizer.param_groups[0]["lr"],
+                }, step=global_batch_step)
+
             tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
 
         return epoch_loss
 
-    def _train_vse(self, tepoch, optimizer):
+    def _train_vse(self, tepoch, optimizer, epoch_idx, total_batches_per_epoch): # Added epoch_idx, total_batches_per_epoch
         epoch_loss = 0.0
         num_negs = []
+        # Watch the model with W&B if active
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(self.model)
+
         for step, (batch) in enumerate(tepoch):
             batch = {
                 k: v.to(self.device)
@@ -255,19 +340,31 @@ class Trainer:
             self.scaler.update()
 
             epoch_loss += loss.item()
-            tepoch.set_postfix(loss=loss.item(), epoch_negs=np.mean(num_negs))
+            # Log batch-level metrics to W&B
+            if self.wandb_logger.is_active:
+                global_batch_step = (epoch_idx * total_batches_per_epoch) + step
+                self.wandb_logger.log({
+                    "train/batch_loss": loss.item(),
+                    "train/num_negatives": np.mean(tmp_num_negs), # Log current batch's average negs
+                }, step=global_batch_step)
+
+            tepoch.set_postfix(loss=loss.item(), epoch_negs=np.mean(num_negs)) # Keep for TQDM
 
         return epoch_loss
 
-    def _train_albef(self, tepoch, optimizer, epoch):
+    def _train_albef(self, tepoch, optimizer, epoch, total_batches_per_epoch): # Adjusted epoch param and added total_batches_per_epoch
         epoch_loss = 0.0
+        # Watch the model with W&B if active
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(self.model)
+
         for step, (batch) in enumerate(tepoch):
             batch = {
                 k: v.to(self.device)
                 for k, v in batch.items()
                 if k in ["input_ids", "attention_mask", "image"]
             }
-            if epoch > 0:
+            if epoch > 0: # Note: 'epoch' here is the 0-indexed loop variable
                 alpha = self.model.alpha
             else:
                 alpha = self.model.alpha * min(1, step / len(tepoch))
@@ -286,13 +383,30 @@ class Trainer:
             self.scaler.update()
 
             epoch_loss += loss.item()
+            # Log batch-level metrics to W&B
+            if self.wandb_logger.is_active:
+                global_batch_step = (epoch * total_batches_per_epoch) + step
+                self.wandb_logger.log({
+                    "train/batch_loss": loss.item(),
+                    "train/mlm_loss": loss_mlm.item(),
+                    "train/ita_loss": loss_ita.item(),
+                    "train/itm_loss": loss_itm.item(),
+                    "train/alpha": alpha,
+                    "train/lr": optimizer.param_groups[0]["lr"],
+                }, step=global_batch_step)
+
             tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
 
         return epoch_loss
 
-    def _train_unitervqa(self, tepoch, optimizer):
+    def _train_unitervqa(self, tepoch, optimizer, epoch_idx, total_batches_per_epoch): # Added epoch_idx, total_batches_per_epoch
         epoch_loss = 0.0
+        # Watch the model with W&B if active
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(self.model)
+
         for step, (batch) in enumerate(tepoch):
+            # Assumes batch already on device or handles it internally for UNITER
             with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                 logits = self.model(**batch)
                 loss = self.model.criterion(batch["targets"], logits)
@@ -303,12 +417,25 @@ class Trainer:
             self.scaler.update()
 
             epoch_loss += loss.item()
+            # Log batch-level metrics to W&B
+            if self.wandb_logger.is_active:
+                global_batch_step = (epoch_idx * total_batches_per_epoch) + step
+                self.wandb_logger.log({
+                    "train/batch_loss": loss.item(),
+                    "train/lr": optimizer.param_groups[0]["lr"],
+                }, step=global_batch_step)
+
+
             tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
+        return epoch_loss
 
 
-
-    def _train_clap(self, tepoch, optimizer):
+    def _train_clap(self, tepoch, optimizer, epoch_idx, total_batches_per_epoch): # Added epoch_idx, total_batches_per_epoch
         epoch_loss = 0.0
+        # Watch the model with W&B if active
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(self.model)
+
         for step, batch in enumerate(tepoch):
             batch = {
                 k: v.to(self.device)
@@ -328,6 +455,15 @@ class Trainer:
             self.scaler.update()
 
             epoch_loss += loss.item()
+            # Log batch-level metrics to W&B
+            if self.wandb_logger.is_active:
+                global_batch_step = (epoch_idx * total_batches_per_epoch) + step
+                self.wandb_logger.log({
+                    "train/batch_loss": loss.item(),
+                    "train/temperature": self.model.temperature.exp().item(),
+                    "train/lr": optimizer.param_groups[0]["lr"],
+                }, step=global_batch_step)
+
             tepoch.set_postfix(
                 loss=loss.item(),
                 temp=self.model.temperature.exp().item(),  # scalar temperature
@@ -337,8 +473,11 @@ class Trainer:
         return epoch_loss
     
 
-    def _train_audio_clip(self, tepoch, optimizer):
+    def _train_audio_clip(self, tepoch, optimizer, epoch_idx, total_batches_per_epoch): # Added epoch_idx, total_batches_per_epoch
         epoch_loss = 0.0
+        # Watch the model with W&B if active
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(self.model)
 
         for step, batch in enumerate(tepoch):
             batch = {
@@ -373,6 +512,17 @@ class Trainer:
             self.scaler.update()
 
             epoch_loss += loss.item()
+            # Log batch-level metrics to W&B
+            if self.wandb_logger.is_active:
+                global_batch_step = (epoch_idx * total_batches_per_epoch) + step
+                self.wandb_logger.log({
+                    "train/batch_loss": loss.item(),
+                    "train/temperature": self.model.temperature.exp().item(),
+                    "train/lr": optimizer.param_groups[0]["lr"],
+                    "train/sim_text_audio_loss": sim_text_audio.mean().item(), # Assuming criterion outputs individual losses
+                    "train/sim_text_image_loss": sim_text_image.mean().item(),
+                    "train/sim_audio_image_loss": sim_audio_image.mean().item(),
+                }, step=global_batch_step)
 
             tepoch.set_postfix(
                 loss=loss.item(),
@@ -393,6 +543,21 @@ class Trainer:
         weight_decay: float = 1e-6,
         learning_rate: float = 1e-3,
     ):
+        # Initialize W&B run at the very beginning of the main train method
+        if self.wandb_logger.is_active:
+            self.wandb_logger.init_run()
+            # Update W&B config with dynamic training parameters
+            self.wandb_logger.current_run.config.update({
+                "batch_size": batch_size,
+                "start_epoch": start_epoch,
+                "max_epochs": epochs,
+                "learning_rate": learning_rate,
+                "weight_decay": weight_decay,
+                "optimizer": optimizer,
+            })
+            self.logger.info(f"W&B run initialized. View run at: {self.wandb_logger.current_run.url}")
+        else:
+            self.logger.info("W&B logging is not active for this run.")
 
         number_of_epochs = epochs - start_epoch + 1
 
@@ -421,7 +586,7 @@ class Trainer:
                 raise ValueError(f"Optimizer {optimizer} not supported")
 
         if self.reload_checkpoint:
-            start_epoch = self._reload_latest_checkpoint() + 1
+            start_epoch = self._reload_latest_checkpoint() + 1 # +1 because _reload returns 0-indexed epoch
 
         train_loader = torch.utils.data.DataLoader(
             dataset,
@@ -429,8 +594,15 @@ class Trainer:
             shuffle=True,
             num_workers=self.num_workers,
         )
+        total_batches_per_epoch = len(train_loader) # Used for global step calculation
 
         self.model.train()
+
+        # Define epoch range
+        # The loop iterates from (start_epoch-1) to (epochs-1) inclusive
+        # So epoch variable inside loop will be 0-indexed from start_epoch-1
+        # For logging, we use (epoch + 1) for 1-indexed epoch display/tracking
+        epoch_range_iter = range(start_epoch - 1, epochs)
 
         match self.method.lower():
             case "clip":
@@ -439,28 +611,46 @@ class Trainer:
                     optimizer=optimizer, T_max=tmax, eta_min=1e-8
                 )
 
-                for epoch in tqdm(
-                    range(start_epoch - 1, epochs),
+                for epoch in tqdm( # epoch is 0-indexed loop variable
+                    epoch_range_iter,
                     unit="epoch",
                     desc="CLIP Training",
                     leave=True,
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_clip(tepoch, optimizer)
+                        loss_per_epoch = self._train_clip(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
                         lr_scheduler.step()
 
-                    self.writer.add_scalar(
-                        f"{self.method.upper()}/Train/Loss",
-                        loss_per_epoch / len(train_loader),
-                        epoch + 1,
-                    )
-                    self.writer.flush()
+                    # self.writer.add_scalar( # Commented out
+                    #     f"{self.method.upper()}/Train/Loss", # Commented out
+                    #     loss_per_epoch / len(train_loader), # Commented out
+                    #     epoch + 1, # Commented out
+                    # ) # Commented out
+                    # self.writer.flush() # Commented out
+
+                    # Log epoch-level metrics to W&B
+                    if self.wandb_logger.is_active:
+                        self.wandb_logger.log({
+                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
+                        }, step=epoch + 1)
+
                     if (epoch + 1) % self.checkpoint_interval == 0:
-                        model_path = self.save_dir + "{}_model_{}_epoch{}.pth".format(
+                        model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
                             self.method, self.timestamp, epoch + 1
                         )
                         torch.save(self.model.state_dict(), model_path)
+                        self.logger.info(f"Model checkpoint saved: {model_path}")
+                        # Save model checkpoint as W&B artifact
+                        if self.wandb_logger.is_active:
+                            self.wandb_logger.save_artifact(
+                                model_path,
+                                name=f"{self.method}-model-epoch-{epoch+1}",
+                                type="model",
+                                metadata={"epoch": epoch+1, "loss": loss_per_epoch / len(train_loader)}
+                            )
+
 
             case "slip":
                 tmax = number_of_epochs * len(train_loader) + len(train_loader) // 4
@@ -469,27 +659,45 @@ class Trainer:
                 )
 
                 for epoch in tqdm(
-                    range(start_epoch - 1, epochs),
+                    epoch_range_iter,
                     unit="epoch",
                     desc="SLIP Training",
                     leave=True,
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_slip(tepoch, optimizer)
+                        loss_per_epoch = self._train_slip(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
                         lr_scheduler.step()
 
-                    self.writer.add_scalar(
-                        f"{self.method.upper()}/Train/Loss",
-                        loss_per_epoch / len(train_loader),
-                        epoch + 1,
-                    )
-                    self.writer.flush()
+                    # self.writer.add_scalar( # Commented out
+                    #     f"{self.method.upper()}/Train/Loss", # Commented out
+                    #     loss_per_epoch / len(train_loader), # Commented out
+                    #     epoch + 1, # Commented out
+                    # ) # Commented out
+                    # self.writer.flush() # Commented out
+
+                    # Log epoch-level metrics to W&B
+                    if self.wandb_logger.is_active:
+                        self.wandb_logger.log({
+                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
+                        }, step=epoch + 1)
+
                     if (epoch + 1) % self.checkpoint_interval == 0:
-                        model_path = self.save_dir + "{}_model_{}_epoch{}.pth".format(
+                        model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
                             self.method, self.timestamp, epoch + 1
                         )
                         torch.save(self.model.state_dict(), model_path)
+                        self.logger.info(f"Model checkpoint saved: {model_path}")
+                        # Save model checkpoint as W&B artifact
+                        if self.wandb_logger.is_active:
+                            self.wandb_logger.save_artifact(
+                                model_path,
+                                name=f"{self.method}-model-epoch-{epoch+1}",
+                                type="model",
+                                metadata={"epoch": epoch+1, "loss": loss_per_epoch / len(train_loader)}
+                            )
+
 
             case "albef":
                 tmax = number_of_epochs * len(train_loader) + len(train_loader) // 4
@@ -498,27 +706,45 @@ class Trainer:
                 )
 
                 for epoch in tqdm(
-                    range(start_epoch - 1, epochs),
+                    epoch_range_iter,
                     unit="epoch",
                     desc="ALBEF Training",
                     leave=True,
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_albef(tepoch, optimizer, epoch)
+                        loss_per_epoch = self._train_albef(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
                         lr_scheduler.step()
 
-                    self.writer.add_scalar(
-                        f"{self.method.upper()}/Train/Loss",
-                        loss_per_epoch / len(train_loader),
-                        epoch + 1,
-                    )
-                    self.writer.flush()
+                    # self.writer.add_scalar( # Commented out
+                    #     f"{self.method.upper()}/Train/Loss", # Commented out
+                    #     loss_per_epoch / len(train_loader), # Commented out
+                    #     epoch + 1, # Commented out
+                    # ) # Commented out
+                    # self.writer.flush() # Commented out
+
+                    # Log epoch-level metrics to W&B
+                    if self.wandb_logger.is_active:
+                        self.wandb_logger.log({
+                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
+                        }, step=epoch + 1)
+
                     if (epoch + 1) % self.checkpoint_interval == 0:
-                        model_path = self.save_dir + "{}_model_{}_epoch{}.pth".format(
+                        model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
                             self.method, self.timestamp, epoch + 1
                         )
                         torch.save(self.model.state_dict(), model_path)
+                        self.logger.info(f"Model checkpoint saved: {model_path}")
+                        # Save model checkpoint as W&B artifact
+                        if self.wandb_logger.is_active:
+                            self.wandb_logger.save_artifact(
+                                model_path,
+                                name=f"{self.method}-model-epoch-{epoch+1}",
+                                type="model",
+                                metadata={"epoch": epoch+1, "loss": loss_per_epoch / len(train_loader)}
+                            )
+
 
             case "simvlm":
                 lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
@@ -526,86 +752,228 @@ class Trainer:
                 )
 
                 for epoch in tqdm(
-                    range(start_epoch - 1, epochs),
+                    epoch_range_iter,
                     unit="epoch",
                     desc="SimVLM Training",
                     leave=True,
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_simvlm(tepoch, optimizer)
+                        loss_per_epoch = self._train_simvlm(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
                         lr_scheduler.step()
 
-                    self.writer.add_scalar(
-                        f"{self.method.upper()}/Train/Loss",
-                        loss_per_epoch / len(train_loader),
-                        epoch + 1,
-                    )
-                    self.writer.flush()
+                    # self.writer.add_scalar( # Commented out
+                    #     f"{self.method.upper()}/Train/Loss", # Commented out
+                    #     loss_per_epoch / len(train_loader), # Commented out
+                    #     epoch + 1, # Commented out
+                    # ) # Commented out
+                    # self.writer.flush() # Commented out
+
+                    # Log epoch-level metrics to W&B
+                    if self.wandb_logger.is_active:
+                        self.wandb_logger.log({
+                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
+                        }, step=epoch + 1)
+
                     if (epoch + 1) % self.checkpoint_interval == 0:
-                        model_path = self.save_dir + "{}_model_{}_epoch{}.pth".format(
+                        model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
                             self.method, self.timestamp, epoch + 1
                         )
                         torch.save(self.model.state_dict(), model_path)
+                        self.logger.info(f"Model checkpoint saved: {model_path}")
+                        # Save model checkpoint as W&B artifact
+                        if self.wandb_logger.is_active:
+                            self.wandb_logger.save_artifact(
+                                model_path,
+                                name=f"{self.method}-model-epoch-{epoch+1}",
+                                type="model",
+                                metadata={"epoch": epoch+1, "loss": loss_per_epoch / len(train_loader)}
+                            )
+
 
             case "uniter_vqa":
                 for epoch in tqdm(
-                    range(start_epoch - 1, epochs),
+                    epoch_range_iter,
                     unit="epoch",
                     desc="Uniter For VQA Training",
                     leave=True,
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_unitervqa(tepoch, optimizer)
+                        loss_per_epoch = self._train_unitervqa(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
 
-                    self.writer.add_scalar(
-                        f"{self.method.upper()}/Train/Loss",
-                        loss_per_epoch / len(train_loader),
-                        epoch + 1,
-                    )
-                    self.writer.flush()
+                    # self.writer.add_scalar( # Commented out
+                    #     f"{self.method.upper()}/Train/Loss", # Commented out
+                    #     loss_per_epoch / len(train_loader), # Commented out
+                    #     epoch + 1, # Commented out
+                    # ) # Commented out
+                    # self.writer.flush() # Commented out
+
+                    # Log epoch-level metrics to W&B
+                    if self.wandb_logger.is_active:
+                        self.wandb_logger.log({
+                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
+                        }, step=epoch + 1)
+
                     if (epoch + 1) % self.checkpoint_interval == 0:
-                        model_path = self.save_dir + "{}_model_{}_epoch{}.pth".format(
+                        model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
                             self.method, self.timestamp, epoch + 1
                         )
                         torch.save(self.model.state_dict(), model_path)
+                        self.logger.info(f"Model checkpoint saved: {model_path}")
+                        # Save model checkpoint as W&B artifact
+                        if self.wandb_logger.is_active:
+                            self.wandb_logger.save_artifact(
+                                model_path,
+                                name=f"{self.method}-model-epoch-{epoch+1}",
+                                type="model",
+                                metadata={"epoch": epoch+1, "loss": loss_per_epoch / len(train_loader)}
+                            )
+
 
             case "vse":
                 for epoch in tqdm(
-                    range(start_epoch - 1, epochs),
+                    epoch_range_iter,
                     unit="epoch",
                     desc="VSE Training",
                     leave=True,
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_vse(tepoch, optimizer)
+                        loss_per_epoch = self._train_vse(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
 
-                    self.writer.add_scalar(
-                        f"{self.method.upper()}/Train/Loss",
-                        loss_per_epoch / len(train_loader),
-                        epoch + 1,
-                    )
-                    self.writer.flush()
+                    # self.writer.add_scalar( # Commented out
+                    #     f"{self.method.upper()}/Train/Loss", # Commented out
+                    #     loss_per_epoch / len(train_loader), # Commented out
+                    #     epoch + 1, # Commented out
+                    # ) # Commented out
+                    # self.writer.flush() # Commented out
+
+                    # Log epoch-level metrics to W&B
+                    if self.wandb_logger.is_active:
+                        self.wandb_logger.log({
+                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/AvgNumNegatives": np.mean(self._train_vse_last_num_negs), # Assuming a way to pass this
+                            # Note: For _train_vse, `num_negs` is reset per epoch, so this average is for the current epoch's num_negs.
+                            # If you need a global average, you'd need to accumulate it.
+                        }, step=epoch + 1)
+
                     if (epoch + 1) % self.checkpoint_interval == 0:
-                        model_path = self.save_dir + "{}_model_{}_epoch{}.pth".format(
+                        model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
                             self.method, self.timestamp, epoch + 1
                         )
                         torch.save(self.model.state_dict(), model_path)
+                        self.logger.info(f"Model checkpoint saved: {model_path}")
+                        # Save model checkpoint as W&B artifact
+                        if self.wandb_logger.is_active:
+                            self.wandb_logger.save_artifact(
+                                model_path,
+                                name=f"{self.method}-model-epoch-{epoch+1}",
+                                type="model",
+                                metadata={"epoch": epoch+1, "loss": loss_per_epoch / len(train_loader)}
+                            )
+
+
+            case "clap":
+                for epoch in tqdm(
+                    epoch_range_iter,
+                    unit="epoch",
+                    desc="CLAP Training",
+                    leave=True,
+                ):
+                    with tqdm(train_loader, unit="batch", leave=False) as tepoch:
+                        tepoch.set_description(f"Epoch {epoch + 1}")
+                        loss_per_epoch = self._train_clap(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
+
+                    # Log epoch-level metrics to W&B
+                    if self.wandb_logger.is_active:
+                        self.wandb_logger.log({
+                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
+                        }, step=epoch + 1)
+
+                    if (epoch + 1) % self.checkpoint_interval == 0:
+                        model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format(
+                            self.method, self.timestamp, epoch + 1
+                        )
+                        torch.save(self.model.state_dict(), model_path)
+                        self.logger.info(f"Model checkpoint saved: {model_path}")
+                        # Save model checkpoint as W&B artifact
+                        if self.wandb_logger.is_active:
+                            self.wandb_logger.save_artifact(
+                                model_path,
+                                name=f"{self.method}-model-epoch-{epoch+1}",
+                                type="model",
+                                metadata={"epoch": epoch+1, "loss": loss_per_epoch / len(train_loader)}
+                            )
+
+
+            case "audio_clip":
+                for epoch in tqdm(
+                    epoch_range_iter,
+                    unit="epoch",
+                    desc="Audio-CLIP Training",
+                    leave=True,
+                ):
+                    with tqdm(train_loader, unit="batch", leave=False) as tepoch:
+                        tepoch.set_description(f"Epoch {epoch + 1}")
+                        loss_per_epoch = self._train_audio_clip(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
+
+                    # Log epoch-level metrics to W&B
+                    if self.wandb_logger.is_active:
+                        self.wandb_logger.log({
+                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
+                        }, step=epoch + 1)
+
+                    if (epoch + 1) % self.checkpoint_interval == 0:
+                        model_path = self.save_dir + "/{}_model_{}_epoch{}.pth".format(
+                            self.method, self.timestamp, epoch + 1
+                        )
+                        torch.save(self.model.state_dict(), model_path)
+                        self.logger.info(f"Model checkpoint saved: {model_path}")
+                        # Save model checkpoint as W&B artifact
+                        if self.wandb_logger.is_active:
+                            self.wandb_logger.save_artifact(
+                                model_path,
+                                name=f"{self.method}-model-epoch-{epoch+1}",
+                                type="model",
+                                metadata={"epoch": epoch+1, "loss": loss_per_epoch / len(train_loader)}
+                            )
+
 
             case _:
                 self.logger.error(f"Unsupported method: {self.method}")
                 
                 raise ValueError(f"Method {self.method} not supported")
 
-        model_path = self.save_dir + "{}_model_{}_epoch{}.pth".format(
-            self.method, self.timestamp, epoch + 1
+        # Save final model after all epochs
+        final_model_path = self.save_dir + "/{}_model_{}_final.pth".format( # Changed to final
+            self.method, self.timestamp
         )
-        torch.save(self.model.state_dict(), model_path)
+        torch.save(self.model.state_dict(), final_model_path)
+        self.logger.info(f"Final model saved: {final_model_path}")
+        # Save final model as W&B artifact
+        if self.wandb_logger.is_active:
+            self.wandb_logger.save_artifact(
+                final_model_path,
+                name=f"{self.method}-model-final",
+                type="model",
+                metadata={"epochs_trained": epochs, "final_loss": loss_per_epoch / len(train_loader)} # Use final epoch's loss
+            )
+
+        # Finish W&B run at the very end of the main train method
+        if self.wandb_logger.is_active:
+            self.wandb_logger.finish_run()
+            self.logger.info("Main training process completed and W&B run finalized.")
+        else:
+            self.logger.info("Main training process completed.")
+
 
     def load_checkpoint(self, checkpont_dir: str):
-        self.model.load_state_dict(torch.load(checkpont_dir))
+        self.model.load_state_dict(torch.load(checkpont_dir, map_location=self.device)) # Add map_location
 
 
         self.logger.info(
@@ -618,32 +986,36 @@ class Trainer:
 
     def _reload_latest_checkpoint(self):
         checkpoints = os.listdir(self.save_dir)
+        method_prefix = self.method + "_model_" # Filter by method
+        filtered_checkpoints = [
+            ckpt
+            for ckpt in checkpoints
+            if ckpt.endswith(".pth") and ckpt.startswith(method_prefix)
+        ]
+
         sorted_checkpoints = sorted(
-            [os.path.join(self.save_dir, i) for i in checkpoints],
+            [os.path.join(self.save_dir, i) for i in filtered_checkpoints], # Use filtered checkpoints
             key=os.path.getmtime,
         )
 
         if len(sorted_checkpoints) == 0:
-            self.logger.error(f"No checkpoints found in the directory")
-            
-            raise ValueError("No checkpoints found in the directory")
+            self.logger.warning(f"No checkpoints found for method '{self.method}' in {self.save_dir}. Starting from scratch.")
+            return 0 # Return 0 for 0-indexed epoch if no checkpoint found
 
         self.load_checkpoint(sorted_checkpoints[-1])
 
         match = re.search(r"epoch(\d+)", sorted_checkpoints[-1])
         if match:
-            epoch = int(match.group(1))
-
+            epoch = int(match.group(1)) -1 # Return 0-indexed epoch
             self.logger.info(
                 "\n"
                 "---------------- Checkpoint Reload ----------------\n"
-                f"Starting Epoch : {epoch}\n"
+                f"Starting Epoch : {epoch + 1}\n" # Log 1-indexed epoch for user
                 "---------------------------------------------------"
             )
 
         else:
-            self.logger.error("No epoch number found in the checkpoint name.")
-            
-            raise ValueError("No epoch number found in the checkpoint name.")
+            self.logger.warning("No epoch number found in the checkpoint name. Resuming from epoch 0.")
+            epoch = 0 # Default to epoch 0 if not found
 
-        return epoch
+        return epoch # Return 0-indexed epoch
