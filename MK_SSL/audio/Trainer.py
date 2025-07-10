@@ -859,7 +859,7 @@ class Trainer:
         lr: float = 1e-4,
         weight_decay: float = 1e-2,
         optimizer: str = "adamw",
-        use_optuna: bool = False,
+        use_HPO: bool = False,
         n_trials: int = 20,
         tuning_max_epochs: int = 5, 
         **kwargs,
@@ -900,7 +900,7 @@ class Trainer:
 
 
         # Auto hyperparameter tuning
-        if use_optuna:
+        if use_HPO:
             self.logger.info("🧪 Running Optuna for hyperparameter tuning...")
             
             best_params = optimize_hyperparameters(
