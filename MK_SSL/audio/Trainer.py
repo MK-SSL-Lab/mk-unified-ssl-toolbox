@@ -15,8 +15,8 @@ from torcheval.metrics.functional import (
 )
 from torch.optim import AdamW
 from typing import Optional, Type, Dict, Any
+import optuna
 
-# Assuming these imports are correctly set up in your library structure
 from MK_SSL.utils import configure_logging, get_logger_handler
 from MK_SSL.audio.models.utils import get_method
 from MK_SSL.audio.models.modules.tools import PseudoLabelGenerator
@@ -291,10 +291,10 @@ class Trainer:
                     )
 
             if val_loader:
-                self._validate_wav2vec2(val_loader, epoch)
+                avg_val_loss = self._validate_wav2vec2(val_loader, epoch)
 
             if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(loss.item(), epoch)
+                self._optuna_trial.report(avg_val_loss, epoch)
                 if self._optuna_trial.should_prune():
                     raise optuna.TrialPruned()                
 
@@ -361,6 +361,7 @@ class Trainer:
                     step=epoch + 1 # Use epoch number as step for epoch-level metrics
                 )
         self.model.train()
+        return avg_val_loss
 
 
     def _train_simclr(
@@ -444,10 +445,10 @@ class Trainer:
                     )
             
             if val_loader:
-                self._validate_simclr(val_loader, epoch)
+                avg_val_loss = self._validate_simclr(val_loader, epoch)
 
             if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(loss.item(), epoch)
+                self._optuna_trial.report(avg_val_loss, epoch)
                 if self._optuna_trial.should_prune():
                     raise optuna.TrialPruned()                
 
@@ -492,6 +493,7 @@ class Trainer:
                     step=epoch + 1
                 )
         self.model.train()
+        return avg_val_loss
 
     def _train_cola(
         self,
@@ -576,10 +578,10 @@ class Trainer:
                     )
 
             if val_loader:
-                self._validate_cola(val_loader, epoch)
+                avg_val_loss = self._validate_cola(val_loader, epoch)
 
             if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(loss.item(), epoch)
+                self._optuna_trial.report(avg_val_loss, epoch)
                 if self._optuna_trial.should_prune():
                     raise optuna.TrialPruned()                
 
@@ -623,6 +625,7 @@ class Trainer:
                     step=epoch + 1
                 )
         self.model.train()
+        return avg_val_loss
 
     def _train_hubert(
         self,
@@ -808,7 +811,7 @@ class Trainer:
                         )
 
                 if val_loader:
-                    self._validate_hubert(val_loader, iteration, epoch)
+                    avg_val_loss = self._validate_hubert(val_loader, iteration, epoch)
 
             final_iteration_model_path = os.path.join(
                 self.checkpoint_path,
@@ -862,6 +865,7 @@ class Trainer:
                     step=epoch + 1
                 )
         self.model.train()
+        return avg_val_loss
 
     def train(
         self,
@@ -874,7 +878,7 @@ class Trainer:
         lr: float = 1e-4,
         weight_decay: float = 1e-2,
         optimizer: str = "adamw",
-        use_HPO: bool = False,
+        use_hpo: bool = False,
         n_trials: int = 20,
         tuning_max_epochs: int = 5, 
         **kwargs,
@@ -915,7 +919,7 @@ class Trainer:
 
 
         # Auto hyperparameter tuning
-        if use_HPO:
+        if use_hpo:
             self.logger.info("🧪 Running Optuna for hyperparameter tuning...")
             
             best_params = optimize_hyperparameters(
