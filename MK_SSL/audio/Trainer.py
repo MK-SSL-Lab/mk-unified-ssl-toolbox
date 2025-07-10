@@ -810,6 +810,11 @@ class Trainer:
                 if val_loader:
                     self._validate_hubert(val_loader, iteration, epoch)
 
+                if hasattr(self, "_optuna_trial"):
+                    self._optuna_trial.report(loss.item(), epoch)
+                    if self._optuna_trial.should_prune():
+                        raise optuna.TrialPruned()
+
             final_iteration_model_path = os.path.join(
                 self.checkpoint_path,
                 f"{self.method}_iter{iteration+1}_final_model_{self.timestamp}.pth",
