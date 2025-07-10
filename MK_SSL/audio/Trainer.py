@@ -293,6 +293,11 @@ class Trainer:
             if val_loader:
                 self._validate_wav2vec2(val_loader, epoch)
 
+            if hasattr(self, "_optuna_trial"):
+                self._optuna_trial.report(loss.item(), epoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()                
+
         # Final checkpoint after all epochs
         final_path = os.path.join(
             self.checkpoint_path,
@@ -441,6 +446,11 @@ class Trainer:
             if val_loader:
                 self._validate_simclr(val_loader, epoch)
 
+            if hasattr(self, "_optuna_trial"):
+                self._optuna_trial.report(loss.item(), epoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()                
+
         final_path = os.path.join(
             self.checkpoint_path,
             f"{self.method}_model_{self.timestamp}_final.pth", # Changed to final
@@ -567,6 +577,11 @@ class Trainer:
 
             if val_loader:
                 self._validate_cola(val_loader, epoch)
+
+            if hasattr(self, "_optuna_trial"):
+                self._optuna_trial.report(loss.item(), epoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()                
 
         final_path = os.path.join(
             self.checkpoint_path,
