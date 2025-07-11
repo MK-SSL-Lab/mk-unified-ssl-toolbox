@@ -7,6 +7,7 @@ from MK_SSL.vision.models.modules.losses.barlow_twins_loss import BarlowTwinsLos
 from MK_SSL.vision.models.modules.losses.negative_cosine_similarity import (
     NegativeCosineSimilarity,
 )
+from MK_SSL.vision.models.modules.losses.mae_loss import MAELoss
 
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "InfoNCE_MoCoV3",
     "BarlowTwinsLoss",
     "NegativeCosineSimilarity",
+    "MAELoss",
 ]
