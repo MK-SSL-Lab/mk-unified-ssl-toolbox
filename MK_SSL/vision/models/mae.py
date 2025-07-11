@@ -1,11 +1,10 @@
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple
-from MK_SSL.audio.models.modules.backbones import ViTAudioEncoder
-from MK_SSL.audio.models.modules.heads import MAEDecoder
-from MK_SSL.audio.models.modules.losses import MAEMaskedLoss
-from MK_SSL.audio.models.modules.transformations import MAEAudioTransform
-from MK_SSL.audio.models.utils import register_method
+from MK_SSL.vision.models.modules.mae_encoder import ViTAudioEncoder
+from MK_SSL.vision.models.modules.mae_decoder import MAEDecoder
+from MK_SSL.vision.models.modules.transformations import MAEVisionTransform
+from MK_SSL.vision.models.utils import register_method
 
 
 class MAE(nn.Module):
@@ -63,7 +62,7 @@ register_method(
     name="mae",
     model_cls=MAE,
     loss=MAEMaskedLoss,
-    transformation=MAEAudioTransform,
+    transformation=MAEVsionTransform,
     params={},
     logs=lambda model, loss: (
         "\n"
