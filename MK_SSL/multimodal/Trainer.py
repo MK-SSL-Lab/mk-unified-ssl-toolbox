@@ -47,6 +47,7 @@ class Trainer:
         wandb_config: Optional[Dict[str, Any]] = None,
         wandb_notes: Optional[str] = None,
         wandb_tags: Optional[list[str]] = None,
+        use_data_parallel: bool = False,
         **kwargs,
     ) -> None:
         """
@@ -105,6 +106,18 @@ class Trainer:
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir)
 
+        if use_data_parallel and not torch.cuda.is_available():
+
+            self.logger.error(
+                "DataParallel requires at least one CUDA-enabled GPU, but none were found. "
+                "Please set `use_data_parallel=False` or ensure CUDA is available."
+            )
+
+            raise RuntimeError(
+                "DataParallel requires at least one CUDA-enabled GPU, but none were found. "
+                "Please set `use_data_parallel=False` or ensure CUDA is available."
+            )
+
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.num_workers = os.cpu_count()
 
@@ -112,6 +125,7 @@ class Trainer:
             "\n"
             "---------------- MK_SSL: Multimodal ----------------\n"
             f"Number of workers : {self.num_workers}\n"
+            f"Number of GPUs    : {torch.cuda.device_count()}\n"
             f"Device            : {self.device}\n"
             f"Method            : {self.method}\n"
             "----------------------------------------------------"
@@ -136,6 +150,10 @@ class Trainer:
         if "params" in method_cfg:
             model_args.update(method_cfg["default_params"])
         
+        if use_data_parallel:
+            self.logger.info(f"Wrapping model with DataParallel using {torch.cuda.device_count()} GPUs.")
+            self.model = nn.DataParallel(self.model)
+
         model_args.update(kwargs)
 
         self.model = method_cfg["model"](**model_args)
@@ -164,6 +182,7 @@ class Trainer:
             "reload_checkpoint": reload_checkpoint,
             "mixed_precision_training": mixed_precision_training,
             "device": str(self.device),
+            "num_gpus" : torch.cuda.device_count(),
             "num_workers": self.num_workers,
             **kwargs # Include any other kwargs passed to Trainer init
         }

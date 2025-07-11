@@ -51,6 +51,7 @@ class Trainer:
         wandb_config: Optional[Dict[str, Any]] = None,
         wandb_notes: Optional[str] = None,
         wandb_tags: Optional[list[str]] = None,
+        use_data_parallel: bool = False,
         **kwargs,
     ) -> None:
         """
@@ -98,6 +99,18 @@ class Trainer:
         self.checkpoint_path = os.path.join(self.save_dir, "Pretext")
         os.makedirs(self.checkpoint_path, exist_ok=True)
 
+        if use_data_parallel and not torch.cuda.is_available():
+
+            self.logger.error(
+                "DataParallel requires at least one CUDA-enabled GPU, but none were found. "
+                "Please set `use_data_parallel=False` or ensure CUDA is available."
+            )
+
+            raise RuntimeError(
+                "DataParallel requires at least one CUDA-enabled GPU, but none were found. "
+                "Please set `use_data_parallel=False` or ensure CUDA is available."
+            )
+
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.num_workers = os.cpu_count()
 
@@ -105,6 +118,7 @@ class Trainer:
             "\n"
             "---------------- MK_SSL: Audio ----------------\n"
             f"Number of workers : {self.num_workers}\n"
+            f"Number of GPUs    : {torch.cuda.device_count()}\n"
             f"Device            : {self.device}\n"
             f"Method            : {self.method}\n"
             "----------------------------------------------------"
@@ -153,6 +167,11 @@ class Trainer:
 
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.mixed_precision_training)
+
+        if use_data_parallel:
+            self.logger.info(f"Wrapping model with DataParallel using {torch.cuda.device_count()} GPUs.")
+            self.model = nn.DataParallel(self.model)
+
         self.model = self.model.to(self.device)
         self.loss = self.loss.to(self.device)
 
@@ -179,6 +198,7 @@ class Trainer:
             "mixed_precision_training": mixed_precision_training,
             "device": str(self.device),
             "num_workers": self.num_workers,
+            "num_gpus" : torch.cuda.device_count(),
             "kmeans_clusters": kmeans_clusters,
             "sample_rate": sample_rate,
             **kwargs # Include any other kwargs passed to Trainer init
