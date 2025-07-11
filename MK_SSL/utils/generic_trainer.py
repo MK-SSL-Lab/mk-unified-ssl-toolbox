@@ -12,7 +12,7 @@ class GenericSSLTrainer:
         dataloader,
         optimizer_ctor: Callable,
         epochs: int = 100,
-        device: torch.device = None,
+        use_data_parallel: bool = False,
     ):
         
         """
@@ -46,16 +46,34 @@ class GenericSSLTrainer:
             epochs (int): Number of training epochs.
             device (torch.device, optional): The device to run training on.
         """     
-        
+
+        if use_data_parallel and not torch.cuda.is_available():
+
+            self.logger.error(
+                "DataParallel requires at least one CUDA-enabled GPU, but none were found. "
+                "Please set `use_data_parallel=False` or ensure CUDA is available."
+            )
+
+            raise RuntimeError(
+                "DataParallel requires at least one CUDA-enabled GPU, but none were found. "
+                "Please set `use_data_parallel=False` or ensure CUDA is available."
+            )
+
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
         self.model = model
+
+        if use_data_parallel:
+            # self.logger.info(f"Wrapping model with DataParallel using {torch.cuda.device_count()} GPUs.")
+            self.model = nn.DataParallel(self.model)
+
+        self.model.to(self.device)
         self.loss_fn = loss_fn
         self.dataloader = dataloader
         self.optimizer = optimizer_ctor(model.parameters())
         self.epochs = epochs
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def fit(self):
-        self.model.to(self.device)
         self.model.train()
         for epoch in range(self.epochs):
             print(f"Epoch {epoch+1}/{self.epochs}")
