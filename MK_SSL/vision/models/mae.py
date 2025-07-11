@@ -1,77 +1,76 @@
+
 import torch
 import torch.nn as nn
-from typing import Optional, Tuple
-from MK_SSL.vision.models.modules.mae_encoder import ViTAudioEncoder
-from MK_SSL.vision.models.modules.mae_decoder import MAEDecoder
-from MK_SSL.vision.models.modules.transformations import MAEVisionTransform
-from MK_SSL.vision.models.utils import register_method
+import torch.nn.functional as F
+import numpy as np
+
+# from .mae_blocks import PatchEmbed, PositionalEncoding2D, MAEEncoder, MAEDecoder, Patchify, Unpatchify
 
 
 class MAE(nn.Module):
-    """
-    Masked Autoencoder (MAE) for audio spectrogram inputs.
-
-    Based on: "Masked Autoencoders Are Scalable Vision Learners"
-    (https://arxiv.org/abs/2111.06377)
-
-    This class uses a ViT-based encoder on visible patches only, and a lightweight
-    transformer decoder to reconstruct masked patches from learned latent features.
-    """
-
     def __init__(
         self,
-        encoder: nn.Module = None,
-        decoder: nn.Module = None,
-        patch_size: int = 16,
-        masking_ratio: float = 0.75,
-        input_dim: Tuple[int, int] = (128, 1024),  # (freq, time) dimension
-        **kwargs
+        encoder,
+        img_size=224,
+        patch_size=16,
+        in_chans=3,
+        embed_dim=768,
+        decoder_dim=512,
+        decoder_depth=8,
+        decoder_heads=8,
+        mlp_ratio=4.0,
+        mask_ratio=0.75
     ):
         super().__init__()
-        self.masking_ratio = masking_ratio
-        self.input_dim = input_dim
-        self.patch_size = patch_size
 
-        self.encoder = encoder if encoder is not None else ViTAudioEncoder(
-            patch_size=self.patch_size, input_shape=input_dim
+        self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
+        self.pos_embed_enc = PositionalEncoding2D(embed_dim, img_size // patch_size)
+        self.encoder = MAEEncoder(encoder)
+
+        self.decoder = MAEDecoder(
+            dim=embed_dim,
+            decoder_dim=decoder_dim,
+            depth=decoder_depth,
+            num_heads=decoder_heads,
+            mlp_ratio=mlp_ratio
         )
+        self.decoder.pos_embed = PositionalEncoding2D(decoder_dim, img_size // patch_size).pos_embed
 
-        self.decoder = decoder if decoder is not None else MAEDecoder(
-            embed_dim=self.encoder.embed_dim,
-            patch_size=self.patch_size,
-            input_dim=input_dim,
-        )
+        self.patchify = Patchify(patch_size)
+        self.unpatchify = Unpatchify(patch_size, img_size)
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Args:
-            x (torch.Tensor): Input log-mel spectrograms (B, 1, F, T)
+        self.mask_ratio = mask_ratio
+        self.head = nn.Linear(decoder_dim, patch_size * patch_size * in_chans, bias=True)
 
-        Returns:
-            Tuple:
-                - reconstruction (torch.Tensor): Reconstructed masked patches
-                - target (torch.Tensor): Ground truth of masked patches
-                - mask (torch.Tensor): Binary mask indicating which patches were masked
-        """
-        visible_patches, target, mask, ids_restore = self.encoder.forward_masked(x, self.masking_ratio)
-        reconstruction = self.decoder(visible_patches, ids_restore)
-        return reconstruction, target, mask
+    def random_masking(self, x, mask_ratio):
+        B, N, D = x.shape
+        len_keep = int(N * (1 - mask_ratio))
 
+        noise = torch.rand(B, N, device=x.device)  # noise in [0, 1)
+        ids_shuffle = torch.argsort(noise, dim=1)
+        ids_restore = torch.argsort(ids_shuffle, dim=1)
 
-register_method(
-    name="mae",
-    model_cls=MAE,
-    loss=MAEMaskedLoss,
-    transformation=MAEVsionTransform,
-    params={},
-    logs=lambda model, loss: (
-        "\n"
-        "---------------- MAE Configuration ----------------\n"
-        f"Input Type                       : Log-mel spectrograms (B, 1, F, T)\n"
-        f"Encoder Architecture             : {model.encoder.__class__.__name__}\n"
-        f"Decoder Architecture             : {model.decoder.__class__.__name__}\n"
-        f"Masking Ratio                    : {model.masking_ratio}\n"
-        "Loss                             : MAE Masked MSE\n"
-        "Augmentation                     : MAEAudioTransform"
-    )
-)
+        ids_keep = ids_shuffle[:, :len_keep]
+        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).expand(-1, -1, D))
+
+        return x_masked, ids_restore, ids_keep
+
+    def forward(self, imgs):
+        x = self.patch_embed(imgs)  # (B, N, D)
+        x = self.pos_embed_enc(x)
+
+        x_masked, ids_restore, ids_keep = self.random_masking(x, self.mask_ratio)
+        x_encoded = self.encoder(x_masked)
+        x_decoded = self.decoder(x_encoded, ids_restore)
+
+        pred = self.head(x_decoded)  # (B, N, patch_dim)
+        pred_img = self.unpatchify(pred)
+
+        return pred, pred_img, ids_restore
+
+    def encode(self, imgs):
+        x = self.patch_embed(imgs)
+        x = self.pos_embed_enc(x)
+        x_masked, ids_restore, ids_keep = self.random_masking(x, self.mask_ratio)
+        x_encoded = self.encoder(x_masked)
+        return x_encoded
