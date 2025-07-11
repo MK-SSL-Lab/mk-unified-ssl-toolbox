@@ -23,6 +23,11 @@ from MK_SSL.utils import configure_logging, get_logger_handler
 from MK_SSL.vision.models.utils import get_method
 from MK_SSL.utils import optimize_hyperparameters
 
+
+from MK_SSL.vision.models.modules.losses import MAELoss  
+from MK_SSL.vision.models.modules import Patchify
+from MK_SSL.vision.models import MAE
+
 from typing import Optional, Dict, Any 
 
 
@@ -51,6 +56,7 @@ class Trainer:
         wandb_notes: Optional[str] = None,
         wandb_tags: Optional[list[str]] = None,
         use_data_parallel: bool = False,
+        mae_variant: str= "vit-b",
         **kwargs,
     ) -> None:
         """
@@ -90,6 +96,8 @@ class Trainer:
             wandb_config (Dict[str, Any], optional): Dictionary of hyperparameters/settings for W&B.
             wandb_notes (str, optional): Notes for the W&B run.
             wandb_tags (list[str], optional): Tags for the W&B run.
+            mae_variant (str): One of 'vit-b', 'vit-l', 'vit-h' specifying model size.
+
             **kwargs: Additional keyword arguments for extending functionality or overriding default settings
                       specific to the training method or the backbone architecture.
         """
@@ -116,6 +124,7 @@ class Trainer:
         self.reload_checkpoint = reload_checkpoint
         self.checkpoint_interval = checkpoint_interval
         self.mixed_precision_training = mixed_precision_training
+        self.mae_variant = mae_variant
 
         self.save_dir = os.path.join(save_dir, self.method)
         
@@ -262,6 +271,67 @@ class Trainer:
             notes=wandb_notes if wandb_notes else f"Training {self.method} vision model with MK_SSL.",
             tags=wandb_tags if wandb_tags else [self.method, "vision", "training"],
         )
+
+
+    def _train_mae(self, train_loader, optimizer, max_epochs, start_epoch=0):
+
+        self.model.train()
+        patchify = Patchify(patch_size=self.model.patch_embed.patch_size)
+        loss_fn = MAELoss(normalize_target=True).to(self.device)
+
+        for epoch in range(start_epoch, max_epochs):
+            running_loss = 0.0
+            pbar = tqdm(train_loader, desc=f"MAE Training [Epoch {epoch+1}/{max_epochs}]", leave=False)
+
+            for step, (images, _) in enumerate(pbar):
+                images = images.to(self.device)
+                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
+                    target = patchify(images)
+                    pred, _, ids_restore = self.model(images)
+                    B, N, _ = pred.shape
+
+                    # Build mask for loss computation
+                    mask = torch.ones((B, N), device=self.device)
+                    len_keep = int(N * (1 - self.model.mask_ratio))
+                    ids_keep = torch.argsort(torch.rand(B, N, device=self.device), dim=1)[:, :len_keep]
+                    mask.scatter_(1, ids_keep, 0)
+
+                    loss = loss_fn(pred, target, mask)
+
+                optimizer.zero_grad()
+                self.scaler.scale(loss).backward()
+                self.scaler.step(optimizer)
+                self.scaler.update()
+
+                running_loss += loss.item()
+                pbar.set_postfix({"loss": loss.item()})
+
+                if self.wandb_logger.is_active:
+                    global_step = epoch * len(train_loader) + step
+                    self.wandb_logger.log({
+                        f"{self.method.upper()}/Train/Batch_Loss": loss.item(),
+                        f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"]
+                    }, step=global_step)
+
+            epoch_loss = running_loss / len(train_loader)
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({
+                    f"{self.method.upper()}/Train/Epoch_Loss": epoch_loss,
+                    f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"]
+                }, step=epoch + 1)
+
+            # Save checkpoint if needed
+            if (epoch + 1) % self.checkpoint_interval == 0:
+                ckpt_path = os.path.join(self.checkpoint_path, f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth")
+                torch.save(self.model.state_dict(), ckpt_path)
+                if self.wandb_logger.is_active:
+                    self.wandb_logger.save_artifact(
+                        ckpt_path,
+                        name=f"{self.method}-model-epoch-{epoch+1}",
+                        type="model",
+                        metadata={"epoch": epoch+1, "loss": epoch_loss}
+                    )
+
 
     def __del__(self):
         pass # No need for TensorBoard writer close if not used
@@ -420,6 +490,22 @@ class Trainer:
             self.train_dataset, batch_size=batch_size, shuffle=True, drop_last=True,
             num_workers=self.num_workers # Add num_workers for consistency
         )
+
+        ## Train MAE
+        self.model = MAE(
+            backbone =self.backbone,
+            variant = self.mae_variant,
+            img_size =self.image_size,
+        )
+        if self.method == "mae":
+            return self._train_mae(
+                train_loader=train_loader,
+                optimizer=optimizer,
+                max_epochs=epochs,
+                start_epoch=start_epoch
+            )
+
+
         total_batches_per_epoch = len(train_loader) # Used for global step calculation
 
         self.model.train()
