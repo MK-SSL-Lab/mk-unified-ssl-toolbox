@@ -3,29 +3,43 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from typing import Optional, Type
 
-# from .mae_blocks import PatchEmbed, PositionalEncoding2D, MAEEncoder, MAEDecoder, Patchify, Unpatchify
-
+from MK_SSL.vision.models.modules import PatchEmbed, PositionalEncoding2D, MAEEncoder, MAEDecoder, Patchify, Unpatchify
+from MK_SSL.vision.models.modules import MAEVisionTransformer
 
 class MAE(nn.Module):
     def __init__(
         self,
-        encoder,
-        img_size=224,
-        patch_size=16,
-        in_chans=3,
-        embed_dim=768,
-        decoder_dim=512,
-        decoder_depth=8,
-        decoder_heads=8,
-        mlp_ratio=4.0,
-        mask_ratio=0.75
+        backbone: nn.modules =None,
+        variant:str = "vit-b",
+        img_size: int =224,
+        patch_size: int =16,
+        in_chans: int =3,
+        embed_dim:int =768,
+        decoder_dim:int =512,
+        decoder_depth:int =8,
+        decoder_heads:int =8,
+        mlp_ratio:int =4.0,
+        mask_ratio:int =0.75,
+        encoder_dropout : Optional[int] = 0,
     ):
         super().__init__()
 
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         self.pos_embed_enc = PositionalEncoding2D(embed_dim, img_size // patch_size)
-        self.encoder = MAEEncoder(encoder)
+
+        if backbone is None:
+            backbone = MAEVisionTransformer(
+                variant=variant,
+                image_size=img_size,
+                in_chans=in_chans,
+                dropout=encoder_dropout,
+                use_cls_token=False,
+                num_classes=0
+            )
+
+        self.encoder = MAEEncoder(backbone)
 
         self.decoder = MAEDecoder(
             dim=embed_dim,
