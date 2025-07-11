@@ -6,6 +6,7 @@ from MK_SSL.vision.models.moco import MoCov3, MoCoV2
 from MK_SSL.vision.models.simsiam import SimSiam
 from MK_SSL.vision.models.evaluate import EvaluateNet
 from MK_SSL.vision.models.barlowtwins import BarlowTwins
+from MK_SSL.vision.models.mae import MAE
 
 __all__ = [
     "BYOL",
@@ -17,4 +18,5 @@ __all__ = [
     "SimSiam",
     "EvaluateNet",
     "BarlowTwins",
+    "MAE"
 ]
