@@ -16,12 +16,15 @@ class CLAP(nn.Module):
 
     def __init__(
         self,
-        audio_embedding_dim: int,
-        text_embedding_dim: int,
+        audio_embedding_dim: Optional[int] = 2048,
+        text_embedding_dim: Optional[int] = 768,
         audio_encoder: Optional[nn.Module] = None,
         text_encoder: Optional[nn.Module] = None,
         projection_dim: int = 1024,
         temperature_init: float = 0.007,
+        device: str = 'cpu',
+        **kwargs
+
     ):
         """
         Args:
@@ -37,6 +40,7 @@ class CLAP(nn.Module):
             temperature_init (float): Initial value for the temperature scaling factor. Default is 0.007 as in the paper.
         """
         super().__init__()
+        self.device = device
         self.audio_encoder = audio_encoder
         self.text_encoder = text_encoder
         # Projection heads for mapping raw encoder outputs into a shared embedding space.
@@ -92,6 +96,15 @@ register_method(
     name= "clap",
     model_cls= CLAP,
     logs=lambda model: (
-
+        "\n"
+        "---------------- CLAP Configuration ----------------\n"
+        f"Audio Encoder                    : {model.audio_encoder.__class__.__name__}\n"
+        f"Text Encoder                     : {model.text_encoder.__class__.__name__}\n"
+        f"Audio Embedding Dim              : {model.audio_proj.in_features}\n"
+        f"Text Embedding Dim               : {model.text_proj.in_features}\n"
+        f"Shared Projection Dimension      : {model.audio_proj.out_features}\n"
+        f"Contrastive Temperature          : {model.temperature.item():.6f}\n"
+        "Modality Pairing                 : Audio ↔ Text contrastive alignment\n"
+        "Loss                             : Symmetric InfoNCE (CLAPLoss)\n"
     )
 )

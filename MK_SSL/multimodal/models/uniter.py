@@ -29,6 +29,8 @@ class UNITER(nn.Module):
         hidden_size: int = 768,
         attention_probs_dropout_prob: float = 0.1,
         initializer_range: float = 0.02,
+        **kwargs
+
     ):
         """
         Initialize the UNITER model for VQA task.

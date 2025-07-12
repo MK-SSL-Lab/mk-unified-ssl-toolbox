@@ -34,6 +34,8 @@ class ALBEF(nn.Module):
         momentum: float = 0.9,
         alpha: float = 0.4,
         device: str = "cpu",
+        **kwargs
+
     ):
         """
         Initializes the ALBEF model with the given parameters.

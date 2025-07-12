@@ -17,7 +17,7 @@ class VSE(nn.Module):
     """
 
     def __init__(
-        self, image_encoder: nn.Module, text_encoder: nn.Module, margin: float = 0.2
+        self, image_encoder: nn.Module, text_encoder: nn.Module, margin: float = 0.2, **kwargs
     ):
         """
         Initializes the VSE model.

@@ -171,11 +171,17 @@ class Trainer:
             self.logger.error(f"Method {self.method} not found in registry.")
             raise e
         
+
+
         model_special_overrides = {
             "barlowtwins": {"hidden_dim": self.feature_size},
             "simsiam": {
                 "projection_hidden_dim": self.feature_size,
                 "prediction_hidden_dim": self.feature_size // 4
+            }, 
+            "mae": {
+                "variant" : mae_variant,
+                "img_size" : self.img_size
             }
         }
 
@@ -185,9 +191,11 @@ class Trainer:
                 "temp_student": self.model.temp_student,
                 "temp_teacher": self.model.temp_teacher,
             },
-            "swav": {"num_crops": self.model.num_crops + 2,}
-        }
+            "swav": {"num_crops": self.model.num_crops + 2,},
+            "mae" : {"normalize_target" : True
 
+            }
+        }
 
         self.model = method_cfg["model"](
             backbone=self.backbone,
@@ -277,7 +285,6 @@ class Trainer:
 
         self.model.train()
         patchify = Patchify(patch_size=self.model.patch_embed.patch_size)
-        loss_fn = MAELoss(normalize_target=True).to(self.device)
 
         for epoch in range(start_epoch, max_epochs):
             running_loss = 0.0
@@ -296,7 +303,7 @@ class Trainer:
                     ids_keep = torch.argsort(torch.rand(B, N, device=self.device), dim=1)[:, :len_keep]
                     mask.scatter_(1, ids_keep, 0)
 
-                    loss = loss_fn(pred, target, mask)
+                    loss = self.loss(pred, target, mask)
 
                 optimizer.zero_grad()
                 self.scaler.scale(loss).backward()
@@ -491,12 +498,7 @@ class Trainer:
             num_workers=self.num_workers # Add num_workers for consistency
         )
 
-        ## Train MAE
-        self.model = MAE(
-            backbone =self.backbone,
-            variant = self.mae_variant,
-            img_size =self.image_size,
-        )
+
         if self.method == "mae":
             return self._train_mae(
                 train_loader=train_loader,

@@ -7,6 +7,9 @@ from typing import Optional, Type
 
 from MK_SSL.vision.models.modules import PatchEmbed, PositionalEncoding2D, MAEEncoder, MAEDecoder, Patchify, Unpatchify
 from MK_SSL.vision.models.modules import MAEVisionTransformer
+from MK_SSL.vision.models.utils import register_method
+from MK_SSL.vision.models.modules.losses import MAELoss  
+
 
 class MAE(nn.Module):
     def __init__(
@@ -23,6 +26,7 @@ class MAE(nn.Module):
         mlp_ratio:int =4.0,
         mask_ratio:int =0.75,
         encoder_dropout : Optional[int] = 0,
+        **kwargs,
     ):
         super().__init__()
 
@@ -88,3 +92,27 @@ class MAE(nn.Module):
         x_masked, ids_restore, ids_keep = self.random_masking(x, self.mask_ratio)
         x_encoded = self.encoder(x_masked)
         return x_encoded
+
+
+register_method(
+    name= "mae",
+    model_cls= MAE,
+    loss= MAELoss,
+    transformation= None,
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- MAE Configuration ----------------\n"
+        f"Vision Transformer Variant        : {model.variant}\n"
+        f"Image Size                        : {model.img_size}\n"
+        f"Patch Size                        : {model.patchify.patch_size} x {model.patchify.patch_size}\n"
+        f"Input Channels                    : {model.patch_embed.in_chans}\n"
+        f"Encoder Embedding Dimension       : {model.patch_embed.proj.out_channels}\n"
+        f"Decoder Dimension                 : {model.decoder.decoder_dim}\n"
+        f"Decoder Depth                     : {model.decoder.depth}\n"
+        f"Decoder Attention Heads           : {model.decoder.num_heads}\n"
+        f"Decoder MLP Ratio                 : {model.decoder.mlp_ratio}\n"
+        f"Mask Ratio                        : {model.mask_ratio}\n"
+        f"Encoder Dropout                   : {model.encoder_dropout}\n"
+        f"Loss                              : Pixel Reconstruction (MAELoss)\n"
+    )
+)

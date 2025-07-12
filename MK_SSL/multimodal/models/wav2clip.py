@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 
 from MK_SSL.multimodal.models.modules.backbones import Wav2ClipEncoder
 from MK_SSL.multimodal.models.modules.feature_extractors import ResNetFeatureExtractor
+from MK_SSL.multimodal.models.utils import register_method
 
 
 class Wav2Clip(nn.Module):
@@ -23,8 +24,13 @@ class Wav2Clip(nn.Module):
         image_encoder: Optional[nn.Module] = None,
         projection_dim: int = 512,
         freeze_image_encoder: bool = True,
+        device: str = 'cpu',
+        **kwargs
     ):
         super().__init__()
+        
+        self.device = device
+
 
         if image_encoder is None:
             raise ValueError("You must provide a pretrained (frozen) CLIP image encoder.")
@@ -59,3 +65,18 @@ class Wav2Clip(nn.Module):
         audio_embed = self.audio_encoder(audio_waveform)
         image_embed = self.image_encoder(image_input)
         return audio_embed, image_embed
+
+register_method(
+    name="wav2clip", 
+    model_cls=Wav2Clip, 
+    logs=lambda model: (
+        "\n"
+        "---------------- Wav2CLIP Configuration ----------------\n"
+        f"Audio Encoder                    : {model.audio_encoder.__class__.__name__}\n"
+        f"Image Encoder                    : {model.image_encoder.__class__.__name__}\n"
+        f"Projection Dimension             : {model.audio_encoder.projection.out_features if hasattr(model.audio_encoder, 'projection') else 'N/A'}\n"
+        f"Image Encoder Frozen             : {'Yes' if not any(p.requires_grad for p in model.image_encoder.parameters()) else 'No'}\n"
+        "Contrastive Learning             : Audio ↔ Image modality alignment\n"
+        "Loss                             : Contrastive (user-defined externally)\n"
+    )
+)
