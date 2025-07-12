@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch import Tensor
 from typing import Optional
 
-from MK_SSL.audio.models.wav2vec2 import Wav2Vec2
+from MK_SSL.audio.models import Wav2Vec2
 
 
 class Wav2Vec2Backbone(nn.Module):
@@ -21,6 +21,7 @@ class Wav2Vec2Backbone(nn.Module):
         super().__init__()
         self.feature_extractor = pretrained_model.feature_extractor
         self.encoder = pretrained_model.encoder
+        self.feature_proj = pretrained_model.feature_proj
 
         # Optional: freeze weights (up to user)
         # for p in self.parameters():
@@ -38,5 +39,6 @@ class Wav2Vec2Backbone(nn.Module):
             Tensor: Contextualized feature representations (B, T', C)
         """
         z, lengths = self.feature_extractor(waveforms, lengths)
+        z = self.feature_proj(z)
         context = self.encoder(z, lengths)
-        return context
+        return context.mean(dim=1)
