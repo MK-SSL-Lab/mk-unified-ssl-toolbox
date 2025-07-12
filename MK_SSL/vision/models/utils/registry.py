@@ -8,12 +8,16 @@ def register_method(
     loss: Type,
     transformation: Callable,
     logs: Union[str, Callable[[object, Optional[object]], str]] = None,
+    default_params: Optional[dict] = None,
+
 ):
     _METHOD_REGISTRY[name.lower()] = {
         "model": model_cls,
         "loss": loss,
         "transformation": transformation,
         "logs": logs,
+        "params": default_params or {},
+
     }
 
 def get_method(name: str):

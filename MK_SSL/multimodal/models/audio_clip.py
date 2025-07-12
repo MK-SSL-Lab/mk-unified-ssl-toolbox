@@ -22,6 +22,9 @@ class AudioCLIP(nn.Module):
         text_encoder: Optional[nn.Module] = None,
         temperature_init: float = 0.07,
         text_template: str = "{}",
+        device: str = 'cpu',
+        **kwargs
+
     ):
         """
         Initializes the AudioCLIP pretraining module.
@@ -40,6 +43,8 @@ class AudioCLIP(nn.Module):
         """
 
         super().__init__()
+        self.device = device
+
         self.audio_encoder = audio_encoder
         self.image_encoder = image_encoder
         self.text_encoder = text_encoder
@@ -140,4 +145,18 @@ class AudioCLIP(nn.Module):
         )
 
 
-register_method(name="audio_clip", model_cls=AudioCLIP, logs=lambda model: ())
+register_method(
+    name="audio_clip", 
+    model_cls=AudioCLIP, 
+    logs=lambda model: (
+        "\n"
+        "---------------- AudioCLIP Configuration ----------------\n"
+        f"Audio Encoder                    : {model.audio_encoder.__class__.__name__}\n"
+        f"Image Encoder                    : {model.image_encoder.__class__.__name__}\n"
+        f"Text Encoder                     : {model.text_encoder.__class__.__name__}\n"
+        f"Contrastive Temperature          : {model.temperature.item():.4f}\n"
+        f"Text Template                    : \"{model.text_template}\"\n"
+        "Modality Fusion                 : Similarity matrices computed for all present modality pairs\n"
+        "Loss                            : Contrastive Triplet Loss (AudioCLIPLoss)\n"
+    )
+)

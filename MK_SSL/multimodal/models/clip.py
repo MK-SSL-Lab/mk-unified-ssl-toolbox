@@ -23,7 +23,9 @@ class CLIP(nn.Module):
         init_tau: float = np.log(1.0),
         init_bias: float = 0.0,
         use_siglip: bool = False,
-        device: str = 'cpu'
+        device: str = 'cpu',
+        **kwargs
+
     ):
         """
         Initialize the CLIP model.

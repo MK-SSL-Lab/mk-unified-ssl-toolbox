@@ -31,6 +31,7 @@ class PatchEmbed(nn.Module):
         self.patch_size = patch_size
         self.grid_size = img_size // patch_size
         self.num_patches = self.grid_size ** 2
+        self.in_chans = in_chans
 
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
 
@@ -122,6 +123,10 @@ class MAEDecoder(nn.Module):
         self.pos_embed = None  # added later externally
         self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_dim))
         nn.init.trunc_normal_(self.mask_token, std=0.02)
+        self.decoder_dim = decoder_dim
+        self.depth = depth
+        self.num_heads = num_heads
+        self.mlp_ratio = mlp_ratio
 
         self.decoder_embed = nn.Linear(dim, decoder_dim, bias=True)
         self.decoder_blocks = nn.Sequential(*[

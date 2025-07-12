@@ -30,8 +30,9 @@ class Trainer:
     def __init__(
         self,
         method: str,
-        image_encoder: nn.Module,
-        text_encoder: nn.Module,
+        image_encoder: Optional[nn.Module] = None,
+        text_encoder: Optional[nn.Module] = None,
+        audio_encoder: Optional[nn.Module] = None,
         configure_logger: bool = True,
         log_level: int = logging.INFO,
         mixed_precision_training: bool = True,
@@ -48,6 +49,7 @@ class Trainer:
         wandb_notes: Optional[str] = None,
         wandb_tags: Optional[list[str]] = None,
         use_data_parallel: bool = False,
+        audio_clip_text_template: Optional[str] = "{}",
         **kwargs,
     ) -> None:
         """
@@ -142,6 +144,8 @@ class Trainer:
         model_args = {
             "image_encoder": image_encoder,
             "text_encoder": text_encoder,
+            "audio_encoder": audio_encoder,
+            "text_template" : audio_clip_text_template,
             "transformer_encoder": image_encoder,
             "transformer_decoder": text_encoder,
             "device": self.device,

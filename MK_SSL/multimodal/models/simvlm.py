@@ -55,6 +55,8 @@ class SimVLM(nn.Module):
         image_resolution: int = 224,
         patch_size: int = 16,
         num_channels: int = 3,
+        **kwargs
+
     ) -> None:
         """
         Initialize the SimVLM model.
