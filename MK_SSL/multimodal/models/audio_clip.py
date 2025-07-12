@@ -49,14 +49,14 @@ class AudioCLIP(nn.Module):
         if audio_encoder is not None:
             self.audio_encoder = audio_encoder
         else:
-            self.image_encoder = AudioResNeXtStem()
+            self.audio_encoder = AudioResNeXtStem()
 
         if image_encoder is not None:
             self.image_encoder = image_encoder
         else:
             self.image_encoder = AttentionPool2d()
 
-        if audio_encoder is not None:
+        if text_encoder is not None:
             self.text_encoder = text_encoder
         else:
             self.text_encoder = TransformerLayer()

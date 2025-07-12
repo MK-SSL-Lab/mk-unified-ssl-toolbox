@@ -273,7 +273,7 @@ class AttentionPool2d(nn.Module):
         return attn[0][:, 0]  # return [CLS] token output
 
 
-class CLIPResNetImageEncoder(nn.Module):
+class AudioResNeXtStem(nn.Module):
     def __init__(self, embed_dim=512, num_heads=8):
         super().__init__()
         base = resnet50(pretrained=False)
