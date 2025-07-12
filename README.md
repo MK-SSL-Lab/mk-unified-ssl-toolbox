@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://s33.picofile.com/file/8485413726/MK_SSL_LOGO.png" alt="Project Logo" width="300"/>
+  <img src="logo2.png" alt="Project Logo" width="300"/>
 </p>
 
 # MK-SSL

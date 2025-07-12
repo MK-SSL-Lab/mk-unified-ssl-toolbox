@@ -17,6 +17,12 @@ from torch.optim import AdamW
 from typing import Optional, Type, Dict, Any
 import optuna
 
+
+from torch.optim import Adam
+from torcheval.metrics.functional import multiclass_accuracy
+
+
+
 from MK_SSL.utils import configure_logging, get_logger_handler
 from MK_SSL.audio.models.utils import get_method
 from MK_SSL.audio.models.modules.tools import PseudoLabelGenerator
@@ -1151,6 +1157,9 @@ class Trainer:
         )
         self.logger.info(f"Checkpoint loaded from: {checkpoint_path}")
 
+
+
+
     def _reload_latest_checkpoint(self) -> int:
         """
         Reloads the most recent model checkpoint from the checkpoint directory.
@@ -1202,4 +1211,6 @@ class Trainer:
         """
         if hasattr(self, "writer"):
             self.writer.close()
+
+
 
