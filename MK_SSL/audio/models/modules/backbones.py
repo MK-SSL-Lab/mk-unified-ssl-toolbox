@@ -4,7 +4,7 @@ from torch import Tensor
 import torchaudio.transforms as T
 import torchaudio
 from torchvision.models import efficientnet_b0
-from typing import Optional, Tuple, List
+from typing import Optional, List
 
 
 class PositionalConvEmbedding(nn.Module):

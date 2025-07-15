@@ -29,10 +29,10 @@ from MK_SSL.utils import optimize_hyperparameters
 from MK_SSL.utils import WandbLogger
 import wandb
 
-from MK_SSL.audio.models.modules import COLABackbone
-from MK_SSL.audio.models.modules import Wav2Vec2Backbone
-from MK_SSL.audio.models.modules import HuBERTBackbone
-from MK_SSL.audio.models.modules import SimCLRBackbone
+from MK_SSL.audio.models.modules.cola_backbone import COLABackbone
+from MK_SSL.audio.models.modules.wav2vec2_backbone import Wav2Vec2Backbone
+from MK_SSL.audio.models.modules.hubert_backbone import HuBERTBackbone
+from MK_SSL.audio.models.modules.simclr_backbone import SimCLRBackbone
 
 from MK_SSL.utils import EvaluateNet
 from MK_SSL.utils import EmbeddingLogger
