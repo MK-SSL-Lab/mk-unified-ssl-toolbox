@@ -103,7 +103,7 @@ register_method(
     model_cls= COLA,
     loss= InfoNCELoss,
     transformation= COLAAudioTransform,
-    params={},
+    default_params={},
     logs=lambda model, loss: (
         "\n"
         "---------------- COLA Configuration ----------------\n"
