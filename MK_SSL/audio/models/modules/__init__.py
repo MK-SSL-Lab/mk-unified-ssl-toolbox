@@ -6,13 +6,21 @@ from MK_SSL.audio.models.modules.heads import SpeechSimCLRProjectionHead
 from MK_SSL.audio.models.modules.feature_extractors import FBANKFeatureExtractor
 from MK_SSL.audio.models.modules.feature_extractors import ConvFeatureExtractor
 
+from MK_SSL.audio.models.modules.cola_backbone import COLABackbone
+from MK_SSL.audio.models.modules.wav2vec2_backbone import Wav2Vec2Backbone
+from MK_SSL.audio.models.modules.hubert_backbone import HuBERTBackbone
+from MK_SSL.audio.models.modules.simclr_backbone import SimCLRBackbone
+
 
 
 __all__= ["TransformerEncoder", 
           "GumbelVectorQuantizer",
-          "Wav2Vec2Backbone",
           "COLAProjectionHead",
           "SpeechSimCLRProjectionHead",
           "FBANKFeatureExtractor",
-          "ConvFeatureExtractor"
+          "ConvFeatureExtractor",
+          "COLABackbone",
+          "Wav2Vec2Backbone",
+          "HuBERTBackbone",
+          "SimCLRBackbone",
 ]

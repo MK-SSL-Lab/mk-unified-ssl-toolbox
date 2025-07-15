@@ -8,18 +8,13 @@ from tqdm.auto import (
 )
 from tqdm import tqdm
 from datetime import datetime
-from torch.utils.data import Subset, DataLoader, Dataset, RandomSampler
+from torch.utils.data import DataLoader, Dataset, RandomSampler
 import logging
-from torcheval.metrics.functional import (
-    multiclass_accuracy,
-)
-from torch.optim import AdamW
-from typing import Optional, Type, Dict, Any
+
+from typing import Optional, Dict, Any
 import optuna
+from sklearn.metrics import classification_report
 
-
-from torch.optim import Adam
-from torcheval.metrics.functional import multiclass_accuracy
 
 
 
@@ -30,10 +25,15 @@ from MK_SSL.audio.models.modules.utils import HuBERTWrapperDataset
 
 from MK_SSL.utils import optimize_hyperparameters
 
-# Import your WandbLogger utility
-# Make sure your_library.wandb_utils is accessible, e.g., in the same directory
-# or properly installed as part of your package.
+
 from MK_SSL.utils import WandbLogger
+
+from MK_SSL.audio.models.modules import COLABackbone
+from MK_SSL.audio.models.modules import Wav2Vec2Backbone
+from MK_SSL.audio.models.modules import HuBERTBackbone
+from MK_SSL.audio.models.modules import SimCLRBackbone
+
+from MK_SSL.utils import EvaluateNet
 
 
 class Trainer:
@@ -1158,7 +1158,437 @@ class Trainer:
         self.logger.info(f"Checkpoint loaded from: {checkpoint_path}")
 
 
+    def _evaluate_wav2vec2(
+        self,
+        train_dataset: torch.utils.data.Dataset,
+        test_dataset: torch.utils.data.Dataset,
+        num_classes: int,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        max_epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs
+    ):
+        """
+        Evaluation for Wav2Vec2 using linear probing or fine-tuning.
 
+        Args:
+            train_dataset (Dataset): Supervised training dataset with (waveform, label) pairs.
+            test_dataset (Dataset): Supervised test dataset for evaluation.
+            num_classes (int): Number of output classes.
+            batch_size (int): Evaluation batch size.
+            lr (float): Learning rate.
+            max_epochs (int): Max number of epochs.
+            freeze_backbone (bool): Whether to freeze the backbone during evaluation.
+        """
+
+
+        # === Instantiate backbone and classifier ===
+        backbone = Wav2Vec2Backbone(pretrained_model=self.model)
+        feature_size = self.model.model_config["encoder_embed_dim"]
+
+        model = EvaluateNet(
+            backbone=backbone,
+            feature_size=feature_size,
+            num_classes=num_classes,
+            is_linear=freeze_backbone,
+        ).to(self.device)
+
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr)
+        criterion = nn.CrossEntropyLoss()
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        # ✅ Watch the classifier model
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(model)
+
+        # === Training loop ===
+        model.train()
+        for epoch in range(max_epochs):
+            for waveforms, labels in train_loader:
+                waveforms = waveforms.to(self.device)
+                labels = labels.to(self.device)
+
+                logits = model(waveforms)
+                loss = criterion(logits, labels)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            self.logger.info(f"[Wav2Vec2 Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({
+                    "wav2vec2/train_loss": loss.item(),
+                    "wav2vec2/epoch": epoch + 1,
+                    "wav2vec2/lr": optimizer.param_groups[0]["lr"]
+                }, step=epoch + 1)
+
+        # === Evaluation loop ===
+        model.eval()
+        all_preds, all_labels = [], []
+
+        with torch.no_grad():
+            for waveforms, labels in test_loader:
+                waveforms = waveforms.to(self.device)
+                labels = labels.to(self.device)
+
+                logits = model(waveforms)
+                preds = torch.argmax(logits, dim=1)
+
+                all_preds.append(preds.cpu())
+                all_labels.append(labels.cpu())
+
+        all_preds = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+
+        self.logger.info("\n📊 [Wav2Vec2 Evaluation Report]:\n" +
+                         classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
+
+        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({
+                "wav2vec2/test_accuracy": report["accuracy"],
+                "wav2vec2/test_macro_avg_f1": report["macro avg"]["f1-score"],
+                "wav2vec2/test_macro_avg_precision": report["macro avg"]["precision"],
+                "wav2vec2/test_macro_avg_recall": report["macro avg"]["recall"]
+            })
+
+
+    def _evaluate_simclr(
+        self,
+        train_dataset: torch.utils.data.Dataset,
+        test_dataset: torch.utils.data.Dataset,
+        num_classes: int,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        max_epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs
+    ):
+        """
+        Evaluation for SimCLR Speech using linear probing or fine-tuning.
+
+        Args:
+            train_dataset (Dataset): Dataset for training the downstream classifier.
+            test_dataset (Dataset): Dataset for evaluation after training.
+            num_classes (int): Number of output classes.
+            batch_size (int): Evaluation batch size.
+            lr (float): Learning rate.
+            max_epochs (int): Max number of epochs.
+            freeze_backbone (bool): Whether to freeze the backbone during evaluation.
+        """
+
+        model = self.model
+        backbone = SimCLRBackbone(model)
+        feature_size = model.backbone.embed_dim
+
+        classifier = EvaluateNet(
+            backbone=backbone,
+            feature_size=feature_size,
+            num_classes=num_classes,
+            is_linear=freeze_backbone,
+        ).to(self.device)
+
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr)
+        criterion = nn.CrossEntropyLoss()
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        # ✅ Watch the classifier model
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(classifier)
+
+        # === Training loop ===
+        classifier.train()
+        for epoch in range(max_epochs):
+            for wavs, labels in train_loader:
+                wavs, labels = wavs.to(self.device), labels.to(self.device)
+                logits = classifier(wavs)
+                loss = criterion(logits, labels)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            self.logger.info(f"[SimCLR Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({
+                    "simclr/train_loss": loss.item(),
+                    "simclr/epoch": epoch + 1,
+                    "simclr/lr": optimizer.param_groups[0]["lr"]
+                }, step=epoch + 1)
+
+        # === Evaluation loop ===
+        classifier.eval()
+        all_preds, all_labels = [], []
+
+        with torch.no_grad():
+            for wavs, labels in test_loader:
+                wavs, labels = wavs.to(self.device), labels.to(self.device)
+                logits = classifier(wavs)
+                preds = torch.argmax(logits, dim=1)
+                all_preds.append(preds.cpu())
+                all_labels.append(labels.cpu())
+
+        all_preds = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+
+        self.logger.info("\n📊 [SimCLR Speech Evaluation Report]:\n" +
+                         classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
+
+        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({
+                "simclr/test_accuracy": report["accuracy"],
+                "simclr/test_macro_avg_f1": report["macro avg"]["f1-score"],
+                "simclr/test_macro_avg_precision": report["macro avg"]["precision"],
+                "simclr/test_macro_avg_recall": report["macro avg"]["recall"]
+            })
+
+
+    def _evaluate_hubert(
+        self,
+        train_dataset: torch.utils.data.Dataset,
+        test_dataset: torch.utils.data.Dataset,
+        num_classes: int,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        max_epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs
+    ):
+        """
+        Evaluation for HuBERT using linear probing or fine-tuning.
+
+        Args:
+            train_dataset (Dataset): Supervised training dataset with (waveform, label) pairs.
+            test_dataset (Dataset): Supervised test dataset for evaluation.
+            num_classes (int): Number of output classes.
+            batch_size (int): Evaluation batch size.
+            lr (float): Learning rate.
+            max_epochs (int): Max number of epochs.
+            freeze_backbone (bool): Whether to freeze the backbone during evaluation.
+        """
+
+        model = self.model
+        feature_size = model.config["encoder_embed_dim"]
+
+        backbone = HuBERTBackbone(model)
+
+        classifier = EvaluateNet(
+            backbone=backbone,
+            feature_size=feature_size,
+            num_classes=num_classes,
+            is_linear=freeze_backbone,
+        ).to(self.device)
+
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr)
+        criterion = nn.CrossEntropyLoss()
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        # ✅ Watch the classifier model
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(classifier)
+
+        # === Training loop ===
+        classifier.train()
+        for epoch in range(max_epochs):
+            for waveforms, labels in train_loader:
+                waveforms = waveforms.to(self.device)
+                labels = labels.to(self.device)
+
+                logits = classifier(waveforms)
+                loss = criterion(logits, labels)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            self.logger.info(f"[HuBERT Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({
+                    "hubert/train_loss": loss.item(),
+                    "hubert/epoch": epoch + 1,
+                    "hubert/lr": optimizer.param_groups[0]["lr"]
+                }, step=epoch + 1)
+
+        # === Evaluation loop ===
+        classifier.eval()
+        all_preds, all_labels = [], []
+
+        with torch.no_grad():
+            for waveforms, labels in test_loader:
+                waveforms = waveforms.to(self.device)
+                labels = labels.to(self.device)
+
+                logits = classifier(waveforms)
+                preds = torch.argmax(logits, dim=1)
+
+                all_preds.append(preds.cpu())
+                all_labels.append(labels.cpu())
+
+        all_preds = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+
+        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+
+        self.logger.info("\n📊 [HuBERT Evaluation Report]:\n" +
+                         classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
+
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({
+                "hubert/test_accuracy": report["accuracy"],
+                "hubert/test_macro_avg_f1": report["macro avg"]["f1-score"],
+                "hubert/test_macro_avg_precision": report["macro avg"]["precision"],
+                "hubert/test_macro_avg_recall": report["macro avg"]["recall"]
+            })
+
+
+    def _evaluate_cola(
+        self,
+        train_dataset: torch.utils.data.Dataset,
+        test_dataset: torch.utils.data.Dataset,
+        num_classes: int,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        max_epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs
+    ):
+        """
+        Evaluation for COLA using linear probing or fine-tuning.
+
+        Args:
+            train_dataset (Dataset): Dataset for training the downstream classifier.
+            test_dataset (Dataset): Dataset for evaluation after training.
+            num_classes (int): Number of output classes.
+            batch_size (int): Evaluation batch size.
+            lr (float): Learning rate.
+            max_epochs (int): Max number of epochs.
+            freeze_backbone (bool): Whether to freeze the backbone during evaluation.
+        """
+
+        backbone = COLABackbone(self.model)
+        feature_size = self.model.feature_size
+
+        classifier = EvaluateNet(
+            backbone=backbone,
+            feature_size=feature_size,
+            num_classes=num_classes,
+            is_linear=freeze_backbone,
+        ).to(self.device)
+
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr)
+        criterion = nn.CrossEntropyLoss()
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        # ✅ Watch the classifier model
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(classifier)
+
+        # === Training ===
+        classifier.train()
+        for epoch in range(max_epochs):
+            for waveforms, labels in train_loader:
+                waveforms = waveforms.to(self.device)
+                labels = labels.to(self.device)
+
+                logits = classifier(waveforms)
+                loss = criterion(logits, labels)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            self.logger.info(f"[COLA Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({
+                    "cola/train_loss": loss.item(),
+                    "cola/epoch": epoch + 1,
+                    "cola/lr": optimizer.param_groups[0]["lr"]
+                }, step=epoch + 1)
+
+        # === Evaluation ===
+        classifier.eval()
+        all_preds, all_labels = [], []
+
+        with torch.no_grad():
+            for waveforms, labels in test_loader:
+                waveforms = waveforms.to(self.device)
+                labels = labels.to(self.device)
+
+                logits = classifier(waveforms)
+                preds = torch.argmax(logits, dim=1)
+
+                all_preds.append(preds.cpu())
+                all_labels.append(labels.cpu())
+
+        all_preds = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+
+        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+
+        self.logger.info("\n📊 [COLA Evaluation Report]:\n" +
+                         classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
+
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({
+                "cola/test_accuracy": report["accuracy"],
+                "cola/test_macro_avg_f1": report["macro avg"]["f1-score"],
+                "cola/test_macro_avg_precision": report["macro avg"]["precision"],
+                "cola/test_macro_avg_recall": report["macro avg"]["recall"]
+            })
+
+
+    def evaluate(
+        self,
+        train_dataset: torch.utils.data.Dataset,
+        test_dataset: torch.utils.data.Dataset,
+        num_classes: int,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        max_epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs
+    ):
+        """
+        Evaluate the current model using the correct evaluation method.
+        """
+        if not self.wandb_logger.is_active:
+            self.wandb_logger.init_run('Evaluation')
+
+        self.logger.info(f"🔍 Starting evaluation for method: {self.method}")
+
+        match self.method:
+            case "cola":
+                self._evaluate_cola(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+            case "hubert":
+                self._evaluate_hubert(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+            case "simclr":
+                self._evaluate_simclr(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+            case "wav2vec2":
+                self._evaluate_wav2vec2(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+            case _:
+                raise ValueError(f"❌ Unknown method '{self.method}' for evaluation.")
+
+        self.logger.info(f"✅ Evaluation for '{self.method}' completed.")
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({f"{self.method}/status": "evaluation_complete"})
+            self.wandb_logger.finish()
 
     def _reload_latest_checkpoint(self) -> int:
         """
