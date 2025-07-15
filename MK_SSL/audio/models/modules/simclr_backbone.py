@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Optional
-from MK_SSL.audio.models import SimCLRSpeech
+from MK_SSL.audio.models.simclr import SimCLRSpeech
 
 
 class SimCLRBackbone(nn.Module):

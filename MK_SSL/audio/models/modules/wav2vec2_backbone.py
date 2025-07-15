@@ -3,8 +3,7 @@ import torch.nn as nn
 from torch import Tensor
 from typing import Optional
 
-from MK_SSL.audio.models import Wav2Vec2
-
+from MK_SSL.audio.models.wav2vec2 import Wav2Vec2
 
 class Wav2Vec2Backbone(nn.Module):
     """
