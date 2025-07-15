@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 from MK_SSL.multimodal.models.modules.backbones import Wav2ClipEncoder
 from MK_SSL.multimodal.models.modules.feature_extractors import ResNetFeatureExtractor
 from MK_SSL.multimodal.models.utils import register_method
+from MK_SSL.multimodal.models.modules.losses import Wav2ClipLoss
 
 
 class Wav2Clip(nn.Module):
@@ -46,6 +47,7 @@ class Wav2Clip(nn.Module):
         if freeze_image_encoder:
             for param in self.image_encoder.parameters():
                 param.requires_grad = False
+        self.clap_loss = Wav2ClipLoss()
 
     def forward(
         self,
@@ -65,6 +67,12 @@ class Wav2Clip(nn.Module):
         audio_embed = self.audio_encoder(audio_waveform)
         image_embed = self.image_encoder(image_input)
         return audio_embed, image_embed
+    
+    def criterion(self, image_embeddings: torch.Tensor, audio_embeddings: torch.Tensor) -> torch.Tensor:
+        return self.wav2clip_loss(
+            image_embeddings, 
+            audio_embeddings
+        )
 
 register_method(
     name="wav2clip", 

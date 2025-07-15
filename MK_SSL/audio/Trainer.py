@@ -27,6 +27,7 @@ from MK_SSL.utils import optimize_hyperparameters
 
 
 from MK_SSL.utils import WandbLogger
+import wandb
 
 from MK_SSL.audio.models.modules import COLABackbone
 from MK_SSL.audio.models.modules import Wav2Vec2Backbone
@@ -34,7 +35,7 @@ from MK_SSL.audio.models.modules import HuBERTBackbone
 from MK_SSL.audio.models.modules import SimCLRBackbone
 
 from MK_SSL.utils import EvaluateNet
-
+from MK_SSL.utils import EmbeddingLogger
 
 class Trainer:
 
@@ -229,6 +230,7 @@ class Trainer:
         max_epochs: int,
         start_epoch: int = 0,
         val_loader: Optional[DataLoader] = None,
+        use_embedding_logger: bool = False,
     ):
         """
         Trains the Wav2Vec2 model using the specified optimizer and data loader.
@@ -239,22 +241,31 @@ class Trainer:
             max_epochs (int): Total number of training epochs.
             start_epoch (int, optional): Epoch to start training from. Defaults to 0.
             val_loader (DataLoader, optional): PyTorch DataLoader for validation data.
+            use_embedding_logger (bool): Whether to enable embedding visualization during training.
         """
         self.logger.info(f"Starting training for Wav2Vec2 for {max_epochs} epochs.")
         self.model.train()
 
-        # Watch the model with W&B if active
+        # === Initialize EmbeddingLogger ===
+        if use_embedding_logger:
+            embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
+            embedding_logger = EmbeddingLogger(
+                log_dir=embedding_log_dir,
+                method_name=self.method,
+                reduce_method="tsne",
+            )
+
+        # === Watch model with W&B ===
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
         for epoch in range(start_epoch, max_epochs):
             running_loss = 0.0
-            pbar = tqdm(
-                train_loader, desc=f"Wav2Vec2 Epoch {epoch+1}/{max_epochs}"
-            )
+            pbar = tqdm(train_loader, desc=f"Wav2Vec2 Epoch {epoch+1}/{max_epochs}")
 
-            for batch_idx, batch in enumerate(pbar): # Added batch_idx for logging step
+            for batch_idx, batch in enumerate(pbar):
                 audio = batch['audio'].to(self.device)
+                labels = batch['label'].to(self.device) if 'label' in batch else None
 
                 optimizer.zero_grad()
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
@@ -279,11 +290,20 @@ class Trainer:
                 running_loss += loss.item()
                 pbar.set_postfix({"loss": loss.item()})
 
-                # Log batch loss to W&B
+                # === Log embeddings ===
+                global_step = epoch * len(train_loader) + batch_idx
+                if use_embedding_logger and labels is not None:
+                    embedding_logger.log_step(
+                        step=global_step,
+                        embeddings=context_features,
+                        labels=labels,
+                    )
+
+                # === Log batch loss to W&B ===
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log(
                         {"train/batch_loss": loss.item()},
-                        step=epoch * len(train_loader) + batch_idx
+                        step=global_step
                     )
 
             avg_loss = running_loss / len(train_loader)
@@ -291,22 +311,14 @@ class Trainer:
                 f"[Wav2Vec2 - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}"
             )
 
-            # Log epoch-level train loss to W&B
+            # === Log epoch-level train loss to W&B ===
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
                     {"train/epoch_loss": avg_loss},
-                    step=epoch + 1 # Use epoch number as step for epoch-level metrics
+                    step=epoch + 1
                 )
 
-            if (
-                epoch + 1
-            ) % self.checkpoint_interval == 0:
-                model_path = os.path.join(
-                    self.checkpoint_path,
-                    f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth",
-                )
-
-            # Save checkpoint
+            # === Save checkpoint ===
             if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
                 model_path = os.path.join(
                     self.checkpoint_path,
@@ -314,7 +326,7 @@ class Trainer:
                 )
                 torch.save(self.model.state_dict(), model_path)
                 self.logger.info(f"Model checkpoint saved: {model_path}")
-                # Save model checkpoint as W&B artifact
+
                 if self.wandb_logger.is_active:
                     self.wandb_logger.save_artifact(
                         model_path,
@@ -329,16 +341,16 @@ class Trainer:
             if hasattr(self, "_optuna_trial"):
                 self._optuna_trial.report(avg_val_loss, epoch)
                 if self._optuna_trial.should_prune():
-                    raise optuna.TrialPruned()                
+                    raise optuna.TrialPruned()
 
-        # Final checkpoint after all epochs
+        # === Final checkpoint ===
         final_path = os.path.join(
             self.checkpoint_path,
             f"{self.method}_model_{self.timestamp}_final.pth",
         )
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
-        # Save final model as W&B artifact
+
         if self.wandb_logger.is_active:
             self.wandb_logger.save_artifact(
                 final_path,
@@ -346,6 +358,17 @@ class Trainer:
                 type="model",
                 metadata={"epochs_trained": max_epochs, "final_loss": avg_loss}
             )
+
+        # === Final embedding plots & W&B logging ===
+        if use_embedding_logger:
+            for step in embedding_logger.steps:
+                plot_path = embedding_logger.plot_step(step)
+                if self.wandb_logger.is_active:
+                    self.wandb_logger.log(
+                        {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
+                        step=step
+                    )
+
         self.logger.info("Wav2Vec2 training complete.")
 
 
@@ -404,63 +427,88 @@ class Trainer:
         max_epochs: int,
         start_epoch: int = 0,
         val_loader: Optional[DataLoader] = None,
+        use_embedding_logger: bool = False,
     ) -> None:
         """
         Trains the SimCLR model using the specified optimizer and data loader.
-    
+
         Args:
             train_loader (DataLoader): PyTorch DataLoader for training data.
             optimizer (Optimizer): Optimizer instance for training.
             max_epochs (int): Total number of training epochs.
             start_epoch (int, optional): Epoch to start training from. Defaults to 0.
+            val_loader (DataLoader, optional): Optional validation loader.
+            use_embedding_logger (bool): Whether to enable embedding visualization.
         """
         if self.transformation is None:
             self.logger.error("Transformation not given!")
             raise ValueError("Transformation not given!")
-    
+
         self.model.train()
-        # Watch the model with W&B if active
+
+        # === Initialize EmbeddingLogger ===
+        if use_embedding_logger:
+            embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
+            embedding_logger = EmbeddingLogger(
+                log_dir=embedding_log_dir,
+                method_name=self.method,
+                reduce_method="tsne",
+            )
+
+        # === Watch model with W&B ===
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
         for epoch in range(start_epoch, max_epochs):
             running_loss = 0.0
-            pbar = tqdm(train_loader, desc=f"SimCLR Epoch {epoch+1}/{max_epochs}") # Changed desc
-    
-            for batch_idx, batch in enumerate(pbar): # Added batch_idx for logging step
-                audio = batch['audio'].to(self.device)
+            pbar = tqdm(train_loader, desc=f"SimCLR Epoch {epoch+1}/{max_epochs}")
+
+            for batch_idx, batch in enumerate(pbar):
+                audio = batch["audio"].to(self.device)
+                labels = batch["label"].to(self.device) if "label" in batch else None
                 view0, view1 = self.transformation(audio)
-    
+
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     out0, out1 = self.model(view0, view1)
                     loss = self.loss(out0, out1)
-    
+
                 optimizer.zero_grad()
                 self.scaler.scale(loss).backward()
                 self.scaler.step(optimizer)
                 self.scaler.update()
-    
+
                 running_loss += loss.item()
                 pbar.set_postfix({"loss": loss.item()})
 
-                # Log batch loss to W&B
+                global_step = epoch * len(train_loader) + batch_idx
+
+                # === Log embeddings ===
+                if use_embedding_logger and labels is not None:
+                    # SimCLR: choose one view (e.g., out0) for embedding visualization
+                    embedding_logger.log_step(
+                        step=global_step,
+                        embeddings=out0,
+                        labels=labels,
+                    )
+
+                # === Log batch loss to W&B ===
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log(
                         {"train/batch_loss": loss.item()},
-                        step=epoch * len(train_loader) + batch_idx
+                        step=global_step
                     )
-    
-            avg_loss = running_loss / len(train_loader)
-            self.logger.info(f"[SimCLR - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}") # Changed log message
 
-            # Log epoch-level train loss to W&B
+            avg_loss = running_loss / len(train_loader)
+            self.logger.info(f"[SimCLR - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
+
+            # === Log epoch-level train loss to W&B ===
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
                     {"train/epoch_loss": avg_loss},
                     step=epoch + 1
                 )
-    
-            # Save checkpoint
+
+            # === Save checkpoint ===
             if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
                 model_path = os.path.join(
                     self.checkpoint_path,
@@ -468,7 +516,7 @@ class Trainer:
                 )
                 torch.save(self.model.state_dict(), model_path)
                 self.logger.info(f"Model checkpoint saved: {model_path}")
-                # Save model checkpoint as W&B artifact
+
                 if self.wandb_logger.is_active:
                     self.wandb_logger.save_artifact(
                         model_path,
@@ -476,22 +524,23 @@ class Trainer:
                         type="model",
                         metadata={"epoch": epoch+1, "loss": avg_loss}
                     )
-            
+
             if val_loader:
                 avg_val_loss = self._validate_simclr(val_loader, epoch)
 
             if hasattr(self, "_optuna_trial"):
                 self._optuna_trial.report(avg_val_loss, epoch)
                 if self._optuna_trial.should_prune():
-                    raise optuna.TrialPruned()                
+                    raise optuna.TrialPruned()
 
+        # === Final checkpoint ===
         final_path = os.path.join(
             self.checkpoint_path,
-            f"{self.method}_model_{self.timestamp}_final.pth", # Changed to final
+            f"{self.method}_model_{self.timestamp}_final.pth",
         )
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
-        # Save final model as W&B artifact
+
         if self.wandb_logger.is_active:
             self.wandb_logger.save_artifact(
                 final_path,
@@ -499,8 +548,19 @@ class Trainer:
                 type="model",
                 metadata={"epochs_trained": max_epochs, "final_loss": avg_loss}
             )
+
+        # === Final embedding plots & W&B logging ===
+        if use_embedding_logger:
+            for step in embedding_logger.steps:
+                plot_path = embedding_logger.plot_step(step)
+                if self.wandb_logger.is_active:
+                    self.wandb_logger.log(
+                        {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
+                        step=step
+                    )
+
         self.logger.info("SimCLR training complete.")
-    
+
 
     def _validate_simclr(self, val_loader: DataLoader, epoch: int):
 
@@ -535,6 +595,7 @@ class Trainer:
         max_epochs: int,
         start_epoch: int = 0,
         val_loader: Optional[DataLoader] = None,
+        use_embedding_logger: bool = False,
     ) -> None:
         """
         Trains the COLA model using the specified optimizer and data loader.
@@ -544,24 +605,37 @@ class Trainer:
             optimizer (Optimizer): Optimizer instance for training.
             max_epochs (int): Total number of training epochs.
             start_epoch (int, optional): Epoch to start training from. Defaults to 0.
+            val_loader (DataLoader, optional): Optional validation loader.
+            use_embedding_logger (bool): Whether to enable embedding visualization.
         """
         if self.transformation is None:
-            self.logger.error(f"Transformation not given!")
+            self.logger.error("Transformation not given!")
             raise ValueError("Transformation not given!")
 
         self.model.train()
-        # Watch the model with W&B if active
+
+        # === Initialize EmbeddingLogger ===
+        if use_embedding_logger:
+            embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
+            embedding_logger = EmbeddingLogger(
+                log_dir=embedding_log_dir,
+                method_name=self.method,
+                reduce_method="tsne",
+            )
+
+        # === Watch model with W&B ===
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
         for epoch in range(start_epoch, max_epochs):
             running_loss = 0.0
-            pbar = tqdm(train_loader, desc=f"COLA Epoch {epoch+1}/{max_epochs}") # Changed desc
+            pbar = tqdm(train_loader, desc=f"COLA Epoch {epoch+1}/{max_epochs}")
 
-            for batch_idx, batch in enumerate(pbar): # Added batch_idx for logging step
-
-                audio = batch['audio'].to(self.device)
+            for batch_idx, batch in enumerate(pbar):
+                audio = batch["audio"].to(self.device)
+                labels = batch["label"].to(self.device) if "label" in batch else None
                 view0, view1 = self.transformation(audio)
+
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     out0, out1 = self.model(view0, view1)
                     loss = self.loss(out0, out1)
@@ -574,34 +648,42 @@ class Trainer:
                 running_loss += loss.item()
                 pbar.set_postfix({"loss": loss.item()})
 
-                # Log batch loss to W&B
+                global_step = epoch * len(train_loader) + batch_idx
+
+                # === Log embeddings ===
+                if use_embedding_logger and labels is not None:
+                    embedding_logger.log_step(
+                        step=global_step,
+                        embeddings=out0,  # or out1
+                        labels=labels,
+                    )
+
+                # === Log batch loss to W&B ===
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log(
                         {"train/batch_loss": loss.item()},
-                        step=epoch * len(train_loader) + batch_idx
+                        step=global_step
                     )
 
             avg_loss = running_loss / len(train_loader)
-            self.logger.info(f"[COLA - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}") # Changed log message
+            self.logger.info(f"[COLA - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
 
-            # Log epoch-level train loss to W&B
+            # === Log epoch-level train loss to W&B ===
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
                     {"train/epoch_loss": avg_loss},
                     step=epoch + 1
                 )
 
-            # Save checkpoint
-            if (
-                epoch + 1
-            ) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
+            # === Save checkpoint ===
+            if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
                 model_path = os.path.join(
                     self.checkpoint_path,
                     f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth",
                 )
                 torch.save(self.model.state_dict(), model_path)
                 self.logger.info(f"Model checkpoint saved: {model_path}")
-                # Save model checkpoint as W&B artifact
+
                 if self.wandb_logger.is_active:
                     self.wandb_logger.save_artifact(
                         model_path,
@@ -616,15 +698,16 @@ class Trainer:
             if hasattr(self, "_optuna_trial"):
                 self._optuna_trial.report(avg_val_loss, epoch)
                 if self._optuna_trial.should_prune():
-                    raise optuna.TrialPruned()                
+                    raise optuna.TrialPruned()
 
+        # === Final checkpoint ===
         final_path = os.path.join(
             self.checkpoint_path,
-            f"{self.method}_model_{self.timestamp}_final.pth", # Changed to final
+            f"{self.method}_model_{self.timestamp}_final.pth",
         )
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
-        # Save final model as W&B artifact
+
         if self.wandb_logger.is_active:
             self.wandb_logger.save_artifact(
                 final_path,
@@ -632,7 +715,19 @@ class Trainer:
                 type="model",
                 metadata={"epochs_trained": max_epochs, "final_loss": avg_loss}
             )
+
+        # === Final embedding plots & W&B logging ===
+        if use_embedding_logger:
+            for step in embedding_logger.steps:
+                plot_path = embedding_logger.plot_step(step)
+                if self.wandb_logger.is_active:
+                    self.wandb_logger.log(
+                        {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
+                        step=step
+                    )
+
         self.logger.info("COLA training complete.")
+
 
     def _validate_cola(self, val_loader: DataLoader, epoch: int):
 
@@ -671,6 +766,7 @@ class Trainer:
         val_loader: Optional[DataLoader] = None,
         num_hubert_iterations: int = 5,
         pseudo_label_sample_ratio: float = 0.1,
+        use_embedding_logger: bool = False,
         **kwargs,
     ):
         transformer_layer = kwargs.get(
@@ -681,7 +777,15 @@ class Trainer:
                 "No 'transformer_layer' specified for HuBERT. Defaulting to model's internal default (e.g., last layer of encoder)."
             )
 
-        # Watch the model with W&B if active (for the entire HuBERT training process)
+        # === Initialize EmbeddingLogger ===
+        if use_embedding_logger:
+            embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
+            embedding_logger = EmbeddingLogger(
+                log_dir=embedding_log_dir,
+                method_name=self.method,
+                reduce_method="tsne",
+            )
+
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
@@ -689,72 +793,32 @@ class Trainer:
             self.logger.info(
                 f"--- Starting HuBERT Iteration {iteration + 1}/{num_hubert_iterations} ---"
             )
-            # Log current iteration to W&B config or summary
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({"hubert_iteration": iteration + 1})
-
 
             iteration_pseudo_labels_path = os.path.join(
                 self.pseudo_label_generator.save_dir,
                 f"pseudo_labels_iter_{iteration}.npy",
             )
 
-            pseudo_labels_dict = {}
             if os.path.exists(iteration_pseudo_labels_path):
-                self.logger.info(
-                    f"Loading existing pseudo-labels for iteration {iteration} from {iteration_pseudo_labels_path}"
-                )
-                pseudo_labels_dict = np.load(
-                    iteration_pseudo_labels_path, allow_pickle=True
-                ).item()
+                self.logger.info(f"Loading existing pseudo-labels from {iteration_pseudo_labels_path}")
+                pseudo_labels_dict = np.load(iteration_pseudo_labels_path, allow_pickle=True).item()
             else:
-                self.logger.info(
-                    f"Generating pseudo-labels for iteration {iteration + 1} (This may take a while)..."
-                )
+                self.logger.info("Generating pseudo-labels...")
 
-                dataloader_for_clustering = None
                 if iteration == 0:
-                    self.logger.info(
-                        "Using full dataset for pseudo-label generation in iteration 0 (MFCCs)."
-                    )
                     dataloader_for_clustering = train_loader_full_dataset
                 else:
-                    self.logger.info(
-                        f"Sampling {pseudo_label_sample_ratio * 100}% of the dataset for pseudo-label generation in iteration {iteration + 1}."
-                    )
-                    wrapped_dataset = (
-                        train_loader_full_dataset.dataset
-                    )
-
-                    num_samples_to_sample = int(
-                        len(wrapped_dataset) * pseudo_label_sample_ratio
-                    )
-                    if num_samples_to_sample == 0 and len(wrapped_dataset) > 0:
-                        self.logger.warning(
-                            "Calculated sample size is 0. Using at least 1 sample if dataset is not empty."
-                        )
-                        num_samples_to_sample = 1
-                    elif num_samples_to_sample > len(wrapped_dataset):
-                        self.logger.warning(
-                            f"Calculated sample size {num_samples_to_sample} is greater than dataset size {len(wrapped_dataset)}. Using full dataset for sampling."
-                        )
-                        num_samples_to_sample = len(wrapped_dataset)
-
-                    sampler = RandomSampler(
-                        wrapped_dataset,
-                        num_samples=num_samples_to_sample,
-                        replacement=False,
-                    )
-
+                    dataset = train_loader_full_dataset.dataset
+                    num_samples = max(1, int(len(dataset) * pseudo_label_sample_ratio))
+                    sampler = RandomSampler(dataset, num_samples=num_samples, replacement=False)
                     dataloader_for_clustering = DataLoader(
-                        wrapped_dataset,
+                        dataset,
                         batch_size=train_loader_full_dataset.batch_size,
                         sampler=sampler,
                         num_workers=train_loader_full_dataset.num_workers,
                         pin_memory=train_loader_full_dataset.pin_memory,
-                    )
-                    self.logger.info(
-                        f"Created dataloader for clustering with {len(dataloader_for_clustering.sampler)} samples."
                     )
 
                 pseudo_labels_dict = self.pseudo_label_generator.generate_pseudo_labels(
@@ -765,38 +829,29 @@ class Trainer:
                     device=self.device,
                 )
                 np.save(iteration_pseudo_labels_path, pseudo_labels_dict)
-                self.logger.info(
-                    f"Generated and saved pseudo-labels for iteration {iteration + 1}."
-                )
+                self.logger.info(f"Saved pseudo-labels for iteration {iteration + 1}.")
 
             train_loader_for_training.dataset.set_pseudo_labels(pseudo_labels_dict)
-            self.logger.info(
-                f"Updated train_dataset with pseudo-labels for iteration {iteration + 1}."
-            )
+            self.logger.info("Updated training dataset with pseudo-labels.")
 
             self.logger.info(
                 f"Starting model training for HuBERT Iteration {iteration + 1} for {max_epochs} epochs."
             )
             self.model.train()
 
-            current_iter_start_epoch = (
-                start_epoch if iteration == start_iteration else 0
-            )
+            current_iter_start_epoch = start_epoch if iteration == start_iteration else 0
 
             for epoch in range(current_iter_start_epoch, max_epochs):
                 running_loss = 0.0
-                pbar = tqdm(
-                    train_loader_for_training,
-                    desc=f"HuBERT Iter {iteration+1}, Epoch {epoch+1}/{max_epochs}",
-                )
+                pbar = tqdm(train_loader_for_training, desc=f"HuBERT Iter {iteration+1}, Epoch {epoch+1}/{max_epochs}")
 
-                for batch_idx, batch in enumerate(pbar): # Added batch_idx
+                for batch_idx, batch in enumerate(pbar):
                     audio = batch["audio"].to(self.device)
                     pseudo_labels = batch["pseudo_labels"].to(self.device)
 
                     optimizer.zero_grad()
                     with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
-                        logits, mask_indices, _, _ = self.model(audio)
+                        logits, mask_indices, features, _ = self.model(audio)
                         loss = self.loss(logits, pseudo_labels, mask_indices)
 
                     self.scaler.scale(loss).backward()
@@ -806,27 +861,42 @@ class Trainer:
                     running_loss += loss.item()
                     pbar.set_postfix({"loss": loss.item()})
 
-                    # Log batch loss to W&B
-                    if self.wandb_logger.is_active:
-                        self.wandb_logger.log(
-                            {"train/batch_loss": loss.item(),
-                             f"train/iter_{iteration+1}_batch_loss": loss.item()},
-                            step=epoch * len(train_loader_for_training) + batch_idx
+                    global_step = epoch * len(train_loader_for_training) + batch_idx
+
+                    # === Log embeddings ===
+                    if use_embedding_logger:
+                        embedding_logger.log_step(
+                            step=global_step,
+                            embeddings=features,
+                            labels=pseudo_labels,
                         )
 
+                    # === W&B batch loss ===
+                    if self.wandb_logger.is_active:
+                        self.wandb_logger.log(
+                            {
+                                "train/batch_loss": loss.item(),
+                                f"train/iter_{iteration+1}_batch_loss": loss.item(),
+                            },
+                            step=global_step
+                        )
 
                 avg_loss = running_loss / len(train_loader_for_training)
                 self.logger.info(
                     f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}"
                 )
-                # Log epoch-level train loss to W&B
+
+                # === W&B epoch loss ===
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log(
-                        {"train/epoch_loss": avg_loss,
-                         f"train/iter_{iteration+1}_epoch_loss": avg_loss},
+                        {
+                            "train/epoch_loss": avg_loss,
+                            f"train/iter_{iteration+1}_epoch_loss": avg_loss,
+                        },
                         step=epoch + 1
                     )
 
+                # === Save checkpoint ===
                 if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
                     model_path = os.path.join(
                         self.checkpoint_path,
@@ -834,7 +904,7 @@ class Trainer:
                     )
                     torch.save(self.model.state_dict(), model_path)
                     self.logger.info(f"Model checkpoint saved: {model_path}")
-                    # Save model checkpoint as W&B artifact
+
                     if self.wandb_logger.is_active:
                         self.wandb_logger.save_artifact(
                             model_path,
@@ -851,24 +921,34 @@ class Trainer:
                     if self._optuna_trial.should_prune():
                         raise optuna.TrialPruned()
 
-            final_iteration_model_path = os.path.join(
+            # === Final checkpoint ===
+            final_model_path = os.path.join(
                 self.checkpoint_path,
                 f"{self.method}_iter{iteration+1}_final_model_{self.timestamp}.pth",
             )
-            torch.save(self.model.state_dict(), final_iteration_model_path)
-            self.logger.info(
-                f"Final model for HuBERT Iteration {iteration+1} saved: {final_iteration_model_path}"
-            )
-            # Save final model for this iteration as W&B artifact
+            torch.save(self.model.state_dict(), final_model_path)
+            self.logger.info(f"Final model for HuBERT Iteration {iteration+1} saved: {final_model_path}")
+
             if self.wandb_logger.is_active:
                 self.wandb_logger.save_artifact(
-                    final_iteration_model_path,
+                    final_model_path,
                     name=f"{self.method}-iter{iteration+1}-final-model",
                     type="model",
                     metadata={"iteration": iteration+1, "epochs_trained": max_epochs, "final_loss": avg_loss}
                 )
 
+            # === Final embedding plots per iteration ===
+            if use_embedding_logger:
+                for step in embedding_logger.steps:
+                    plot_path = embedding_logger.plot_step(step)
+                    if self.wandb_logger.is_active:
+                        self.wandb_logger.log(
+                            {f"embedding_plot/iter{iteration+1}_step_{step}": wandb.Image(plot_path)},
+                            step=step
+                        )
+
         self.logger.info("HuBERT training complete across all specified iterations.")
+
 
     def _validate_hubert(
         self, val_loader: DataLoader, iteration: int, epoch: int

@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 from sklearn.metrics import classification_report
 
 
-
+import wandb
 import optuna
 
 from typing import Optional, Dict, Any 
@@ -28,6 +28,8 @@ from MK_SSL.vision.models.modules import Patchify
 from MK_SSL.utils import WandbLogger
 from MK_SSL.vision.models.modules import MAEBackbone
 from MK_SSL.utils import EvaluateNet
+from MK_SSL.utils import EmbeddingLogger
+
 
 
 class Trainer:
@@ -277,10 +279,35 @@ class Trainer:
         )
 
 
-    def _train_mae(self, train_loader, optimizer, max_epochs, start_epoch=0):
+    def _train_mae(
+        self,
+        train_loader,
+        optimizer,
+        max_epochs,
+        start_epoch=0,
+        use_embedding_logger: bool = False,
+    ):
+        """
+        Trains the MAE (Masked Autoencoder) model.
 
+        Args:
+            train_loader: PyTorch DataLoader with training data.
+            optimizer: Optimizer instance.
+            max_epochs: Number of training epochs.
+            start_epoch: Epoch to resume training from.
+            use_embedding_logger (bool): Whether to enable embedding visualization.
+        """
         self.model.train()
         patchify = Patchify(patch_size=self.model.patch_embed.patch_size)
+
+        # === Initialize EmbeddingLogger ===
+        if use_embedding_logger:
+            embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
+            embedding_logger = EmbeddingLogger(
+                log_dir=embedding_log_dir,
+                method_name=self.method,
+                reduce_method="tsne",
+            )
 
         for epoch in range(start_epoch, max_epochs):
             running_loss = 0.0
@@ -288,12 +315,13 @@ class Trainer:
 
             for step, (images, _) in enumerate(pbar):
                 images = images.to(self.device)
+
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     target = patchify(images)
                     pred, _, ids_restore = self.model(images)
                     B, N, _ = pred.shape
 
-                    # Build mask for loss computation
+                    # Build random mask for loss computation
                     mask = torch.ones((B, N), device=self.device)
                     len_keep = int(N * (1 - self.model.mask_ratio))
                     ids_keep = torch.argsort(torch.rand(B, N, device=self.device), dim=1)[:, :len_keep]
@@ -309,23 +337,38 @@ class Trainer:
                 running_loss += loss.item()
                 pbar.set_postfix({"loss": loss.item()})
 
+                global_step = epoch * len(train_loader) + step
+
+                # === Log embeddings ===
+                if use_embedding_logger:
+                    embedding_logger.log_step(
+                        step=global_step,
+                        embeddings=pred,
+                        labels=torch.zeros(B, dtype=torch.long, device=self.device),  # dummy labels
+                    )
+
+                # === W&B Batch Logging ===
                 if self.wandb_logger.is_active:
-                    global_step = epoch * len(train_loader) + step
                     self.wandb_logger.log({
                         f"{self.method.upper()}/Train/Batch_Loss": loss.item(),
                         f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"]
                     }, step=global_step)
 
             epoch_loss = running_loss / len(train_loader)
+
+            # === W&B Epoch Logging ===
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
                     f"{self.method.upper()}/Train/Epoch_Loss": epoch_loss,
                     f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
 
-            # Save checkpoint if needed
+            # === Save Checkpoint ===
             if (epoch + 1) % self.checkpoint_interval == 0:
-                ckpt_path = os.path.join(self.checkpoint_path, f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth")
+                ckpt_path = os.path.join(
+                    self.checkpoint_path,
+                    f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth"
+                )
                 torch.save(self.model.state_dict(), ckpt_path)
                 if self.wandb_logger.is_active:
                     self.wandb_logger.save_artifact(
@@ -334,6 +377,17 @@ class Trainer:
                         type="model",
                         metadata={"epoch": epoch+1, "loss": epoch_loss}
                     )
+
+        # === Final Embedding Plots ===
+        if use_embedding_logger:
+            for step in embedding_logger.steps:
+                plot_path = embedding_logger.plot_step(step)
+                if self.wandb_logger.is_active:
+                    self.wandb_logger.log(
+                        {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
+                        step=step
+                    )
+
 
 
     def __del__(self):
