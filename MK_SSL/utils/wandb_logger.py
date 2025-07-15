@@ -18,6 +18,7 @@ class WandbLogger:
                  notes: Optional[str] = None,
                  tags: Optional[list[str]] = None,
                  verbose: bool=True,
+                 api_key: Optional[str] = None,
                  **kwargs): # Allow arbitrary wandb.init kwargs
         """
         Initializes the W&B logger.
@@ -60,10 +61,23 @@ class WandbLogger:
         self.logger.info("Audio Trainer initialized.")
 
 
-    def init_run(self):
+        if self.mode == "online" and api_key:
+            try:
+                wandb.login(key=api_key, relogin=True)
+                self.logger.info("W&B login successful.")
+            except Exception as e:
+                self.logger.error(f"Failed to login to W&B with provided API key: {e}")
+
+
+    def init_run(self,
+                 run_name: Optional[str] = None,
+                 ):
         """
         Initializes a new W&B run based on the logger's configuration.
         """
+
+        self.run_name = run_name if run_name else self.run_name
+
         if self._run is not None and self._run.id is not None:
             self._logger.warning("W&B run already active. Finishing previous run before starting a new one.")
             self.finish_run()

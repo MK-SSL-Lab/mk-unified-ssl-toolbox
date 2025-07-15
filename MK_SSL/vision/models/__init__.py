@@ -4,7 +4,6 @@ from MK_SSL.vision.models.swav import SwAV
 from MK_SSL.vision.models.simclr import SimCLR
 from MK_SSL.vision.models.moco import MoCov3, MoCoV2
 from MK_SSL.vision.models.simsiam import SimSiam
-from MK_SSL.vision.models.evaluate import EvaluateNet
 from MK_SSL.vision.models.barlowtwins import BarlowTwins
 from MK_SSL.vision.models.mae import MAE
 
@@ -16,7 +15,6 @@ __all__ = [
     "MoCoV2",
     "MoCov3",
     "SimSiam",
-    "EvaluateNet",
     "BarlowTwins",
     "MAE"
 ]

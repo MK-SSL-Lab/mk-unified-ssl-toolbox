@@ -8,8 +8,13 @@ from tqdm import tqdm
 from datetime import datetime
 # from torch.utils.tensorboard import SummaryWriter # Commented out: Replaced by WandbLogger for unified logging
 from torch.nn.utils.clip_grad import clip_grad_norm_
+from torch.utils.data import Subset, DataLoader, Dataset, RandomSampler
+
 from typing import Optional, Type, Dict, Any
 import optuna
+
+from sklearn.metrics import classification_report
+
 
 from MK_SSL.multimodal.models import *
 
@@ -23,6 +28,13 @@ from MK_SSL.multimodal.models.utils import get_method
 # or properly installed as part of your package.
 from MK_SSL.utils import WandbLogger
 from MK_SSL.utils import optimize_hyperparameters
+
+from MK_SSL.multimodal.models.modules import CLAPAudioBackbone
+from MK_SSL.multimodal.models.modules import CLAPTextBackbone
+from MK_SSL.multimodal.models.modules import AudioCLIPAudioBackbone
+from MK_SSL.multimodal.models.modules import Wav2CLIPAudioBackbone
+
+from MK_SSL.utils import EvaluateNet
 
 
 class Trainer:
@@ -1070,6 +1082,346 @@ class Trainer:
             self.logger.info("Main training process completed and W&B run finalized.")
         else:
             self.logger.info("Main training process completed.")
+
+
+    def _evaluate_audioclip(
+        self,
+        train_dataset: Dataset,
+        test_dataset: Dataset,
+        num_classes: int,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        max_epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs,
+    ):
+        """
+        Evaluate AudioCLIP audio branch via linear probing or fine-tuning.
+
+        Args:
+            train_dataset (Dataset): Dataset with (audio_waveform, label) for training.
+            test_dataset (Dataset): Dataset with (audio_waveform, label) for evaluation.
+            num_classes (int): Number of target classes.
+            freeze_backbone (bool): Whether to freeze the backbone.
+        """
+
+
+        # === Wrap AudioCLIP audio encoder ===
+        backbone = AudioCLIPAudioBackbone(self.model)
+        feature_size = self.model.audio_encoder.fc.out_features  # usually 512
+
+        classifier = EvaluateNet(
+            backbone=backbone,
+            feature_size=feature_size,
+            num_classes=num_classes,
+            is_linear=freeze_backbone,
+        ).to(self.device)
+
+        optimizer = torch.optim.Adam(classifier.parameters(), lr=lr)
+        criterion = nn.CrossEntropyLoss()
+
+        # ✅ Watch the model with W&B if active
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(classifier)
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        # === Training loop ===
+        classifier.train()
+        for epoch in range(max_epochs):
+            for x, y in train_loader:
+                x, y = x.to(self.device), y.to(self.device)
+                logits = classifier(x)
+                loss = criterion(logits, y)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            self.logger.info(f"[AudioCLIP Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+
+            # ✅ Log training metrics
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({
+                    "audio_eval/train_loss": loss.item(),
+                    "audio_eval/epoch": epoch + 1,
+                    "audio_eval/lr": optimizer.param_groups[0]["lr"]
+                }, step=epoch + 1)
+
+        # === Evaluation loop ===
+        classifier.eval()
+        y_true, y_pred = [], []
+        with torch.no_grad():
+            for x, y in test_loader:
+                x = x.to(self.device)
+                logits = classifier(x)
+                preds = torch.argmax(logits, dim=1).cpu().numpy()
+                y_true.extend(y.cpu().numpy())
+                y_pred.extend(preds)
+
+        report = classification_report(y_true, y_pred, digits=4, output_dict=True)
+
+        self.logger.info("\n📊 [AudioCLIP Evaluation Report]:\n" +
+                         classification_report(y_true, y_pred, digits=4))
+
+        # ✅ Log evaluation metrics
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({
+                "audio_eval/test_accuracy": report["accuracy"],
+                "audio_eval/test_macro_avg_f1": report["macro avg"]["f1-score"],
+                "audio_eval/test_macro_avg_precision": report["macro avg"]["precision"],
+                "audio_eval/test_macro_avg_recall": report["macro avg"]["recall"]
+            })
+
+
+    def _evaluate_wav2clip(
+        self,
+        train_dataset: Dataset,
+        test_dataset: Dataset,
+        num_classes: int,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        max_epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs
+    ):
+        """
+        Evaluation for Wav2CLIP's audio encoder using linear probing or fine-tuning.
+
+        Args:
+            train_dataset (Dataset): Supervised training dataset with (waveform, label) pairs.
+            test_dataset (Dataset): Supervised test dataset with (waveform, label) pairs.
+            num_classes (int): Number of output classes.
+            batch_size (int): Evaluation batch size.
+            lr (float): Learning rate.
+            max_epochs (int): Max number of epochs.
+            freeze_backbone (bool): Whether to freeze the audio backbone.
+        """
+
+
+        backbone = Wav2CLIPAudioBackbone(self.model)
+        feature_size = 512  # ResNetAudio default output dim if projection skipped
+
+        classifier = EvaluateNet(
+            backbone=backbone,
+            feature_size=feature_size,
+            num_classes=num_classes,
+            is_linear=freeze_backbone,
+        ).to(self.device)
+
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr)
+        criterion = nn.CrossEntropyLoss()
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(classifier)
+
+        # === Training loop ===
+        classifier.train()
+        for epoch in range(max_epochs):
+            for waveforms, labels in train_loader:
+                waveforms = waveforms.to(self.device)
+                labels = labels.to(self.device)
+
+                logits = classifier(waveforms)
+                loss = criterion(logits, labels)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            self.logger.info(f"[Wav2CLIP Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({
+                    "wav2clip/train_loss": loss.item(),
+                    "wav2clip/epoch": epoch + 1,
+                    "wav2clip/lr": optimizer.param_groups[0]["lr"]
+                }, step=epoch + 1)
+
+        # === Evaluation loop ===
+        classifier.eval()
+        all_preds, all_labels = [], []
+
+        with torch.no_grad():
+            for waveforms, labels in test_loader:
+                waveforms = waveforms.to(self.device)
+                labels = labels.to(self.device)
+
+                logits = classifier(waveforms)
+                preds = torch.argmax(logits, dim=1)
+
+                all_preds.append(preds.cpu())
+                all_labels.append(labels.cpu())
+
+        all_preds = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+
+        self.logger.info("\n📊 [Wav2CLIP Evaluation Report]:\n" +
+                         classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
+
+        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({
+                "wav2clip/test_accuracy": report["accuracy"],
+                "wav2clip/test_macro_avg_f1": report["macro avg"]["f1-score"],
+                "wav2clip/test_macro_avg_precision": report["macro avg"]["precision"],
+                "wav2clip/test_macro_avg_recall": report["macro avg"]["recall"]
+            })
+
+
+    def _evaluate_clap(
+        self,
+        train_dataset: Dataset,
+        test_dataset: Dataset,
+        num_classes: int,
+        modality: str = "audio",  # or "text"
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        max_epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs
+    ):
+        """
+        Evaluation for CLAP using either audio or text modality.
+
+        Args:
+            train_dataset (Dataset): Supervised training dataset. (input, label) pairs.
+            test_dataset (Dataset): Supervised test dataset. (input, label) pairs.
+            modality (str): Either "audio" or "text"
+            num_classes (int): Number of output classes.
+            batch_size (int): Evaluation batch size.
+            lr (float): Learning rate.
+            max_epochs (int): Max number of epochs.
+            freeze_backbone (bool): Whether to freeze the backbone.
+        """
+        model = self.model
+
+        if modality == "audio":
+            backbone = CLAPAudioBackbone(model)
+            feature_size = model.audio_proj.in_features  # 2048
+        elif modality == "text":
+            backbone = CLAPTextBackbone(model)
+            feature_size = model.text_proj.in_features  # 768
+        else:
+            raise ValueError(f"Invalid modality: {modality}. Must be 'audio' or 'text'.")
+
+        classifier = EvaluateNet(
+            backbone=backbone,
+            feature_size=feature_size,
+            num_classes=num_classes,
+            is_linear=freeze_backbone,
+        ).to(self.device)
+
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr)
+        criterion = nn.CrossEntropyLoss()
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        # ✅ Watch the classifier model
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(classifier)
+
+        # === Training loop ===
+        classifier.train()
+        for epoch in range(max_epochs):
+            for inputs, labels in train_loader:
+                if modality == "text":
+                    inputs = (inputs[0].to(self.device), inputs[1].to(self.device))
+                else:
+                    inputs = inputs.to(self.device)
+
+                labels = labels.to(self.device)
+
+                logits = classifier(inputs)
+                loss = criterion(logits, labels)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            self.logger.info(f"[CLAP {modality.upper()} Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({
+                    f"clap_{modality}/train_loss": loss.item(),
+                    f"clap_{modality}/epoch": epoch + 1,
+                    f"clap_{modality}/lr": optimizer.param_groups[0]["lr"]
+                }, step=epoch + 1)
+
+        # === Evaluation loop ===
+        classifier.eval()
+        all_preds, all_labels = [], []
+
+        with torch.no_grad():
+            for inputs, labels in test_loader:
+                if modality == "text":
+                    inputs = (inputs[0].to(self.device), inputs[1].to(self.device))
+                else:
+                    inputs = inputs.to(self.device)
+
+                labels = labels.to(self.device)
+
+                logits = classifier(inputs)
+                preds = torch.argmax(logits, dim=1)
+
+                all_preds.append(preds.cpu())
+                all_labels.append(labels.cpu())
+
+        all_preds = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+
+        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+
+        self.logger.info(f"\n📊 [CLAP {modality.upper()} Evaluation Report]:\n" +
+                        classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
+
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({
+                f"clap_{modality}/test_accuracy": report["accuracy"],
+                f"clap_{modality}/test_macro_avg_f1": report["macro avg"]["f1-score"],
+                f"clap_{modality}/test_macro_avg_precision": report["macro avg"]["precision"],
+                f"clap_{modality}/test_macro_avg_recall": report["macro avg"]["recall"]
+            })
+
+
+    def evaluate(
+        self,
+        train_dataset: torch.utils.data.Dataset,
+        test_dataset: torch.utils.data.Dataset,
+        num_classes: int,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        max_epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs
+    ):
+        """
+        Evaluate the current model using the correct evaluation method.
+        """
+        if not self.wandb_logger.is_active:
+            self.wandb_logger.init_run('Evaluation')
+
+        self.logger.info(f"🔍 Starting evaluation for method: {self.method}")
+
+        match self.method:
+            case "wav2clip":
+                self._evaluate_wav2clip(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+            case "audio_clip":
+                self._evaluate_audioclip(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+            case "clap":
+                self._evaluate_clap(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+
+            case _:
+                raise ValueError(f"❌ Unknown method '{self.method}' for evaluation.")
+
+        self.logger.info(f"✅ Evaluation for '{self.method}' completed.")
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({f"{self.method}/status": "evaluation_complete"})
+            self.wandb_logger.finish()
+
 
 
     def load_checkpoint(self, checkpont_dir: str):

@@ -9,29 +9,25 @@ from datetime import datetime
 from torch.utils.data import Subset, DataLoader # Added DataLoader for clarity
 import logging
 from torcheval.metrics.functional import multiclass_accuracy
+from torch.utils.data import DataLoader, Dataset
+from sklearn.metrics import classification_report
+
+
 
 import optuna
 
-# from torch.utils.tensorboard import SummaryWriter # Commented out: Replaced by WandbLogger
-
+from typing import Optional, Dict, Any 
 
 from MK_SSL.vision.models import *
 from MK_SSL.vision.models.modules.losses import *
 from MK_SSL.vision.models.modules.transformations import *
 from MK_SSL.utils import configure_logging, get_logger_handler
-
 from MK_SSL.vision.models.utils import get_method
 from MK_SSL.utils import optimize_hyperparameters
-
-
-from MK_SSL.vision.models.modules.losses import MAELoss  
 from MK_SSL.vision.models.modules import Patchify
-from MK_SSL.vision.models import MAE
-
-from typing import Optional, Dict, Any 
-
-
 from MK_SSL.utils import WandbLogger
+from MK_SSL.vision.models.modules import MAEBackbone
+from MK_SSL.utils import EvaluateNet
 
 
 class Trainer:
@@ -506,54 +502,54 @@ class Trainer:
                 max_epochs=epochs,
                 start_epoch=start_epoch
             )
+        
+        else: 
+            total_batches_per_epoch = len(train_loader) # Used for global step calculation
 
+            self.model.train()
 
-        total_batches_per_epoch = len(train_loader) # Used for global step calculation
+            if self.reload_checkpoint:
+                start_epoch = self._reload_latest_checkpoint() + 1
 
-        self.model.train()
+            for epoch in tqdm( # epoch is 0-indexed loop variable (range(start-1, epochs))
+                range(start_epoch - 1, epochs),
+                unit="epoch",
+                desc="Pretext Task Model Training",
+                leave=True,
+            ):
+                with tqdm(train_loader, unit="batch", leave=False) as tepoch:
+                    tepoch.set_description(f"Epoch {epoch + 1}")
+                    loss_per_epoch = self.train_one_epoch(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
+                
+                # To stop from full training for optuna
+                if hasattr(self, "_optuna_trial"):
+                    self._optuna_trial.report(loss_per_epoch, epoch)
+                    if self._optuna_trial.should_prune():
+                        raise optuna.TrialPruned()
+        
 
-        if self.reload_checkpoint:
-            start_epoch = self._reload_latest_checkpoint() + 1
-
-        for epoch in tqdm( # epoch is 0-indexed loop variable (range(start-1, epochs))
-            range(start_epoch - 1, epochs),
-            unit="epoch",
-            desc="Pretext Task Model Training",
-            leave=True,
-        ):
-            with tqdm(train_loader, unit="batch", leave=False) as tepoch:
-                tepoch.set_description(f"Epoch {epoch + 1}")
-                loss_per_epoch = self.train_one_epoch(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
-            
-            # To stop from full training for optuna
-            if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(loss_per_epoch, epoch)
-                if self._optuna_trial.should_prune():
-                    raise optuna.TrialPruned()
-    
-
-            # Log epoch-level metrics to W&B
-            if self.wandb_logger.is_active:
-                self.wandb_logger.log({
-                    f"{self.method.upper()}/Train/Epoch_Loss": loss_per_epoch / len(train_loader),
-                    f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
-                }, step=epoch + 1) # Use epoch + 1 for 1-indexed epoch step
-
-
-            if (epoch + 1) % self.checkpoint_interval == 0:
-                model_path = self.checkpoint_path + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
-                    self.method, self.timestamp, epoch + 1
-                )
-                torch.save(self.model.state_dict(), model_path)
-                self.logger.info(f"Model checkpoint saved: {model_path}")
-                # Save model checkpoint as W&B artifact
+                # Log epoch-level metrics to W&B
                 if self.wandb_logger.is_active:
-                    self.wandb_logger.save_artifact(
-                        model_path,
-                        name=f"{self.method}-model-epoch-{epoch+1}",
-                        type="model",
-                        metadata={"epoch": epoch+1, "loss": loss_per_epoch / len(train_loader)}
+                    self.wandb_logger.log({
+                        f"{self.method.upper()}/Train/Epoch_Loss": loss_per_epoch / len(train_loader),
+                        f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
+                    }, step=epoch + 1) # Use epoch + 1 for 1-indexed epoch step
+
+
+                if (epoch + 1) % self.checkpoint_interval == 0:
+                    model_path = self.checkpoint_path + "/{}_model_{}_epoch{}.pth".format( # Added / for path joining
+                        self.method, self.timestamp, epoch + 1
                     )
+                    torch.save(self.model.state_dict(), model_path)
+                    self.logger.info(f"Model checkpoint saved: {model_path}")
+                    # Save model checkpoint as W&B artifact
+                    if self.wandb_logger.is_active:
+                        self.wandb_logger.save_artifact(
+                            model_path,
+                            name=f"{self.method}-model-epoch-{epoch+1}",
+                            type="model",
+                            metadata={"epoch": epoch+1, "loss": loss_per_epoch / len(train_loader)}
+                        )
 
         # Save final model after all epochs
         # Note: 'epoch' here will be the last value from the loop, which is `epochs - 1` (0-indexed)
@@ -619,7 +615,7 @@ class Trainer:
             # For simplicity, we'll assume a new run if not active.
             # You might want to add a specific project/run_name for evaluation runs.
             self.logger.info("W&B logger not active, initializing for evaluation.")
-            self.wandb_logger.init_run() # This will create a new run if none is active
+            self.wandb_logger.init_run('Evaluation') # This will create a new run if none is active
 
         # Log evaluation parameters to W&B config
         if self.wandb_logger.is_active:
@@ -789,6 +785,129 @@ class Trainer:
             self.logger.info("Evaluation process completed.")
 
         return final_test_accuracy
+
+
+    def _evaluate_mae(
+        self,
+        train_dataset: Dataset,
+        test_dataset: Dataset,
+        num_classes: int,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        max_epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs
+    ):
+        """
+        Evaluation for MAE (linear probing or fine-tuning).
+
+        Args:
+            train_dataset (Dataset): Labeled training dataset (x, y).
+            test_dataset (Dataset): Labeled evaluation dataset (x, y).
+            num_classes (int): Number of output classes.
+            batch_size (int): Evaluation batch size.
+            lr (float): Learning rate.
+            max_epochs (int): Max number of epochs.
+            freeze_backbone (bool): Freeze encoder during linear probing?
+        """
+
+        # === Backbone and classifier ===
+        backbone = MAEBackbone(self.model)
+        feature_size = backbone.encoder.head.in_features  # e.g., 768
+
+        classifier = EvaluateNet(
+            backbone=backbone,
+            feature_size=feature_size,
+            num_classes=num_classes,
+            is_linear=freeze_backbone,
+        ).to(self.device)
+
+        optimizer = torch.optim.AdamW(classifier.parameters(), lr=lr)
+        criterion = torch.nn.CrossEntropyLoss()
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(classifier)
+
+        # === Training ===
+        classifier.train()
+        for epoch in range(max_epochs):
+            for x, y in train_loader:
+                x, y = x.to(self.device), y.to(self.device)
+                logits = classifier(x)
+                loss = criterion(logits, y)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            self.logger.info(f"[MAE Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({
+                    "mae/train_loss": loss.item(),
+                    "mae/epoch": epoch + 1,
+                    "mae/lr": optimizer.param_groups[0]["lr"]
+                }, step=epoch + 1)
+
+        # === Evaluation ===
+        classifier.eval()
+        all_preds, all_labels = [], []
+
+        with torch.no_grad():
+            for x, y in test_loader:
+                x = x.to(self.device)
+                logits = classifier(x)
+                preds = torch.argmax(logits, dim=1)
+
+                all_preds.append(preds.cpu())
+                all_labels.append(y.cpu())
+
+        all_preds = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+
+        self.logger.info("\n📊 [MAE Evaluation Report]:\n" +
+                        classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
+
+        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({
+                "mae/test_accuracy": report["accuracy"],
+                "mae/test_macro_avg_f1": report["macro avg"]["f1-score"],
+                "mae/test_macro_avg_precision": report["macro avg"]["precision"],
+                "mae/test_macro_avg_recall": report["macro avg"]["recall"]
+            })
+
+
+    def run_evaluate_mae(
+        self,
+        train_dataset: torch.utils.data.Dataset,
+        test_dataset: torch.utils.data.Dataset,
+        num_classes: int,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        max_epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs
+    ):
+        """
+        Evaluate the current model using the correct evaluation method.
+        """
+        if not self.wandb_logger.is_active:
+            self.wandb_logger.init_run('Evaluation')
+
+        self.logger.info(f"🔍 Starting evaluation for method: {self.method}")
+
+        self._evaluate_mae(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+
+        self.logger.info(f"✅ Evaluation for '{self.method}' completed.")
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({f"{self.method}/status": "evaluation_complete"})
+            self.wandb_logger.finish()
+
 
     def load_checkpoint(self, checkpont_dir: str):
         self.model.load_state_dict(torch.load(checkpont_dir, map_location=self.device)) # Add map_location
