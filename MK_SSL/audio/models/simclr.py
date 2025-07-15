@@ -114,7 +114,7 @@ register_method(
     model_cls= SimCLRSpeech,
     loss= NTXent_loss,
     transformation= SimCLRAudioTransform,
-    params={},
+    default_params={},
     logs=lambda model, loss: (
         "\n"
         "---------------- SimCLRSpeech Configuration ----------------\n"

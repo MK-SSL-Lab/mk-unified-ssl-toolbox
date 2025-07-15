@@ -246,7 +246,7 @@ register_method(
     model_cls= Wav2Vec2,
     loss= Wav2Vec2Loss,
     transformation= None,
-    params={},
+    default_params={},
     logs=lambda model, loss: (
         "\n"
         "---------------- Wav2Vec2 Configuration ----------------\n"
