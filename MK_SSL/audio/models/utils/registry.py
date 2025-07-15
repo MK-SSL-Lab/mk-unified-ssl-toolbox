@@ -1,4 +1,4 @@
-from typing import Type, Callable, Union, Optional, Tup
+from typing import Type, Callable, Union, Optional
 
 _METHOD_REGISTRY = {}
 
