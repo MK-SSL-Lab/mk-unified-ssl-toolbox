@@ -286,6 +286,7 @@ class Trainer:
         max_epochs,
         start_epoch=0,
         use_embedding_logger: bool = False,
+        logger_loader: Optional[DataLoader] = None,
     ):
         """
         Trains the MAE (Masked Autoencoder) model.
@@ -296,17 +297,19 @@ class Trainer:
             max_epochs: Number of training epochs.
             start_epoch: Epoch to resume training from.
             use_embedding_logger (bool): Whether to enable embedding visualization.
+            logger_loader (Optional[DataLoader]): Labeled image dataloader for visualization only.
         """
         self.model.train()
         patchify = Patchify(patch_size=self.model.patch_embed.patch_size)
 
-        # === Initialize EmbeddingLogger ===
         if use_embedding_logger:
+            assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
             embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
             embedding_logger = EmbeddingLogger(
                 log_dir=embedding_log_dir,
                 method_name=self.method,
                 reduce_method="tsne",
+                log_interval=1,
             )
 
         for epoch in range(start_epoch, max_epochs):
@@ -321,7 +324,6 @@ class Trainer:
                     pred, _, ids_restore = self.model(images)
                     B, N, _ = pred.shape
 
-                    # Build random mask for loss computation
                     mask = torch.ones((B, N), device=self.device)
                     len_keep = int(N * (1 - self.model.mask_ratio))
                     ids_keep = torch.argsort(torch.rand(B, N, device=self.device), dim=1)[:, :len_keep]
@@ -339,15 +341,6 @@ class Trainer:
 
                 global_step = epoch * len(train_loader) + step
 
-                # === Log embeddings ===
-                if use_embedding_logger:
-                    embedding_logger.log_step(
-                        step=global_step,
-                        embeddings=pred,
-                        labels=torch.zeros(B, dtype=torch.long, device=self.device),  # dummy labels
-                    )
-
-                # === W&B Batch Logging ===
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log({
                         f"{self.method.upper()}/Train/Batch_Loss": loss.item(),
@@ -356,12 +349,31 @@ class Trainer:
 
             epoch_loss = running_loss / len(train_loader)
 
-            # === W&B Epoch Logging ===
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
                     f"{self.method.upper()}/Train/Epoch_Loss": epoch_loss,
                     f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
+
+            # === Embedding logger eval on external labeled image dataset ===
+            if use_embedding_logger:
+                self.model.eval()
+                all_embeddings, all_labels = [], []
+
+                with torch.no_grad():
+                    for batch in logger_loader:
+                        images, labels = batch
+                        images = images.to(self.device)
+                        labels = labels.to(self.device)
+
+                        preds, _, _ = self.model(images)
+                        all_embeddings.append(preds)
+                        all_labels.append(labels)
+
+                embeddings = torch.cat(all_embeddings, dim=0)
+                labels = torch.cat(all_labels, dim=0)
+                embedding_logger.log_step(step=epoch + 1, embeddings=embeddings, labels=labels)
+                self.model.train()
 
             # === Save Checkpoint ===
             if (epoch + 1) % self.checkpoint_interval == 0:
@@ -387,6 +399,7 @@ class Trainer:
                         {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
                         step=step
                     )
+
 
 
 

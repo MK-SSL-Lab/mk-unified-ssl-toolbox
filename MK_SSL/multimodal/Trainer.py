@@ -483,6 +483,7 @@ class Trainer:
         epoch_idx,
         total_batches_per_epoch,
         use_embedding_logger: bool = False,
+        logger_loader: Optional[DataLoader] = None,  # NEW
     ):
         """
         Trains the CLAP model for one epoch.
@@ -493,19 +494,21 @@ class Trainer:
             epoch_idx: Index of the current epoch.
             total_batches_per_epoch: Total number of batches per epoch.
             use_embedding_logger (bool): Whether to enable embedding visualization.
+            logger_loader (Optional[DataLoader]): Third dataset with labels for embedding logging.
         """
         epoch_loss = 0.0
 
         # === Initialize EmbeddingLogger ===
         if use_embedding_logger:
+            assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
             embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
             embedding_logger = EmbeddingLogger(
                 log_dir=embedding_log_dir,
                 method_name=self.method,
                 reduce_method="tsne",
+                log_interval=1,
             )
 
-        # === Watch the model with W&B ===
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
@@ -531,15 +534,6 @@ class Trainer:
 
             global_step = (epoch_idx * total_batches_per_epoch) + step
 
-            # === Log embeddings ===
-            if use_embedding_logger:
-                # Optional: log audio and text separately if needed
-                embedding_logger.log_step(
-                    step=global_step,
-                    embeddings=audio_embeds,
-                    labels=torch.zeros(audio_embeds.size(0), dtype=torch.long, device=audio_embeds.device),  # dummy label
-                )
-
             # === Log to W&B ===
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
@@ -557,8 +551,24 @@ class Trainer:
                 lr=optimizer.param_groups[0]["lr"],
             )
 
-        # === Final embedding plots ===
+        # === Run EmbeddingLogger after epoch ===
         if use_embedding_logger:
+            self.model.eval()
+            all_embeddings, all_labels = [], []
+
+            with torch.no_grad():
+                for batch in logger_loader:
+                    audio = batch["audio"].to(self.device)
+                    labels = batch["label"].to(self.device)
+                    audio_embeds = self.model.encode_audio(audio)
+                    all_embeddings.append(audio_embeds)
+                    all_labels.append(labels)
+
+            embeddings = torch.cat(all_embeddings, dim=0)
+            labels = torch.cat(all_labels, dim=0)
+            embedding_logger.log_step(step=epoch_idx + 1, embeddings=embeddings, labels=labels)
+            self.model.train()
+
             for step in embedding_logger.steps:
                 plot_path = embedding_logger.plot_step(step)
                 if self.wandb_logger.is_active:
@@ -569,7 +579,8 @@ class Trainer:
 
         return epoch_loss
 
-    
+
+        
     def _train_audio_clip(
         self,
         tepoch,
@@ -577,6 +588,7 @@ class Trainer:
         epoch_idx,
         total_batches_per_epoch,
         use_embedding_logger: bool = False,
+        logger_loader: Optional[DataLoader] = None,  # NEW: third dataloader
     ):
         """
         Trains the AudioCLIP model for one epoch.
@@ -587,19 +599,20 @@ class Trainer:
             epoch_idx: Index of the current epoch.
             total_batches_per_epoch: Total number of steps per epoch.
             use_embedding_logger (bool): Whether to enable embedding visualization.
+            logger_loader (Optional[DataLoader]): Dataset for embedding evaluation.
         """
         epoch_loss = 0.0
 
-        # === Initialize EmbeddingLogger ===
         if use_embedding_logger:
+            assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
             embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
             embedding_logger = EmbeddingLogger(
                 log_dir=embedding_log_dir,
                 method_name=self.method,
                 reduce_method="tsne",
+                log_interval=1,
             )
 
-        # === Watch model with W&B ===
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
@@ -638,14 +651,6 @@ class Trainer:
             epoch_loss += loss.item()
             global_step = (epoch_idx * total_batches_per_epoch) + step
 
-            # === Log embeddings ===
-            if use_embedding_logger and audio_embeds is not None:
-                embedding_logger.log_step(
-                    step=global_step,
-                    embeddings=audio_embeds,
-                    labels=torch.zeros(audio_embeds.size(0), dtype=torch.long, device=audio_embeds.device),  # dummy labels
-                )
-
             # === W&B batch logging ===
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -663,8 +668,24 @@ class Trainer:
                 lr=optimizer.param_groups[0]["lr"],
             )
 
-        # === Final embedding plots ===
+        # === Embedding logging after the epoch ===
         if use_embedding_logger:
+            self.model.eval()
+            all_embeddings, all_labels = [], []
+
+            with torch.no_grad():
+                for batch in logger_loader:
+                    audio = batch["audio"].to(self.device)
+                    labels = batch["label"].to(self.device)
+                    audio_embeds = self.model.encode_audio(audio)
+                    all_embeddings.append(audio_embeds)
+                    all_labels.append(labels)
+
+            embeddings = torch.cat(all_embeddings, dim=0)
+            labels = torch.cat(all_labels, dim=0)
+            embedding_logger.log_step(step=epoch_idx + 1, embeddings=embeddings, labels=labels)
+            self.model.train()
+
             for step in embedding_logger.steps:
                 plot_path = embedding_logger.plot_step(step)
                 if self.wandb_logger.is_active:
@@ -675,6 +696,8 @@ class Trainer:
 
         return epoch_loss
 
+
+
     def _train_wav2clip(
         self,
         tepoch,
@@ -682,6 +705,7 @@ class Trainer:
         epoch_idx,
         total_batches_per_epoch,
         use_embedding_logger: bool = False,
+        logger_loader: Optional[DataLoader] = None,  # NEW: for post-epoch embedding eval
     ):
         """
         Training loop for Wav2CLIP (contrastive learning between audio and image).
@@ -692,19 +716,20 @@ class Trainer:
             epoch_idx: current epoch index
             total_batches_per_epoch: number of batches in the epoch
             use_embedding_logger (bool): whether to use EmbeddingLogger for logging embeddings
+            logger_loader (Optional[DataLoader]): dataset used for post-epoch embedding logging
         """
         epoch_loss = 0.0
 
-        # === Initialize EmbeddingLogger ===
         if use_embedding_logger:
+            assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
             embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
             embedding_logger = EmbeddingLogger(
                 log_dir=embedding_log_dir,
                 method_name=self.method,
                 reduce_method="tsne",
+                log_interval=1,
             )
 
-        # === Watch model with W&B ===
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
@@ -732,15 +757,7 @@ class Trainer:
             epoch_loss += loss.item()
             global_step = (epoch_idx * total_batches_per_epoch) + step
 
-            # === Log embeddings ===
-            if use_embedding_logger:
-                embedding_logger.log_step(
-                    step=global_step,
-                    embeddings=audio_embeds,
-                    labels=torch.zeros(audio_embeds.size(0), dtype=torch.long, device=audio_embeds.device),
-                )
-
-            # === Log batch metrics to W&B ===
+            # === W&B logging ===
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
                     {
@@ -755,8 +772,24 @@ class Trainer:
                 lr=optimizer.param_groups[0]["lr"]
             )
 
-        # === Plot embeddings and push to W&B ===
+        # === Embedding logging after epoch ===
         if use_embedding_logger:
+            self.model.eval()
+            all_embeddings, all_labels = [], []
+
+            with torch.no_grad():
+                for batch in logger_loader:
+                    audio = batch["audio"].to(self.device)
+                    labels = batch["label"].to(self.device)
+                    audio_embeds = self.model.encode_audio(audio)
+                    all_embeddings.append(audio_embeds)
+                    all_labels.append(labels)
+
+            embeddings = torch.cat(all_embeddings, dim=0)
+            labels = torch.cat(all_labels, dim=0)
+            embedding_logger.log_step(step=epoch_idx + 1, embeddings=embeddings, labels=labels)
+            self.model.train()
+
             for step in embedding_logger.steps:
                 plot_path = embedding_logger.plot_step(step)
                 if self.wandb_logger.is_active:
@@ -766,6 +799,7 @@ class Trainer:
                     )
 
         return epoch_loss
+
 
  
 
