@@ -9,6 +9,8 @@ from tqdm.auto import (
 from tqdm import tqdm
 from datetime import datetime
 from torch.utils.data import DataLoader, Dataset, RandomSampler
+from torch.utils.data.dataloader import default_collate
+
 import logging
 
 from typing import Optional, Dict, Any
@@ -1059,6 +1061,7 @@ class Trainer:
                 shuffle=True,
                 num_workers=self.num_workers,
                 pin_memory=True,
+                collate_fn=self._data_loader_safe_collate,
             )
 
             val_loader = None
@@ -1069,6 +1072,8 @@ class Trainer:
                     shuffle=False,
                     num_workers=self.num_workers,
                     pin_memory=True,
+                    collate_fn=self._data_loader_safe_collate,
+                    
                 )
 
             self._train_wav2vec2(
@@ -1090,6 +1095,8 @@ class Trainer:
                 shuffle=False,
                 num_workers=self.num_workers,
                 pin_memory=True,
+                collate_fn=self._data_loader_safe_collate,
+
             )
 
             train_loader_for_training = DataLoader(
@@ -1098,6 +1105,8 @@ class Trainer:
                 shuffle=True,
                 num_workers=self.num_workers,
                 pin_memory=True,
+                collate_fn=self._data_loader_safe_collate,
+
             )
 
             val_loader = None
@@ -1108,6 +1117,8 @@ class Trainer:
                     shuffle=False,
                     num_workers=self.num_workers,
                     pin_memory=True,
+                    collate_fn=self._data_loader_safe_collate,
+
                 )
 
             self._train_hubert(
@@ -1137,6 +1148,8 @@ class Trainer:
                 shuffle=True,
                 num_workers=self.num_workers,
                 pin_memory=True,
+                collate_fn=self._data_loader_safe_collate,
+
             )
             val_loader = None
             if val_dataset:
@@ -1146,6 +1159,8 @@ class Trainer:
                     shuffle=False,
                     num_workers=self.num_workers,
                     pin_memory=True,
+                    collate_fn=self._data_loader_safe_collate,
+
                 )
             self._train_simclr(
                 train_loader,
@@ -1162,6 +1177,8 @@ class Trainer:
                 shuffle=True,
                 num_workers=self.num_workers,
                 pin_memory=True,
+                collate_fn=self._data_loader_safe_collate,
+
             )
             val_loader = None
             if val_dataset:
@@ -1171,6 +1188,8 @@ class Trainer:
                     shuffle=False,
                     num_workers=self.num_workers,
                     pin_memory=True,
+                    collate_fn=self._data_loader_safe_collate,
+
                 )
             self._train_cola(
                 train_loader,
@@ -1682,6 +1701,13 @@ class Trainer:
             epoch = 0
 
         return epoch
+
+
+
+    def _data_loader_safe_collate(batch):
+        batch = [item for item in batch if item is not None]
+        return default_collate(batch) if batch else None
+
 
     def __del__(self):
         """
