@@ -15,7 +15,7 @@ def register_method(
         "loss": loss,
         "transformation": transformation,
         "logs": logs,
-        "params": default_params or {},
+        "default_params": default_params or {},
     }
 
 def get_method(name: str):
