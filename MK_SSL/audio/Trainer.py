@@ -129,6 +129,8 @@ class Trainer:
                     f"Number of GPUs    : {torch.cuda.device_count()}\n"
                     f"Device            : {self.device}\n"
                     f"Method            : {self.method}\n"
+                    "----------------------------------------------------"
+
                 )
         
 
