@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from MK_SSL.vision.models import MAE
 
 class MAEBackbone(nn.Module):
     """
@@ -11,10 +10,10 @@ class MAEBackbone(nn.Module):
     returning mean-pooled token embeddings suitable for classification or regression.
 
     Args:
-        mae_model (nn.Module): The pretrained MAE model (pretext phase).
+        pretrained_model (nn.Module): The pretrained MAE model (pretext phase).
     """
 
-    def __init__(self, pretrained_model: MAE):
+    def __init__(self, pretrained_model: nn.Module):
         super().__init__()
         self.patch_embed = pretrained_model.patch_embed
         self.pos_embed = pretrained_model.pos_embed_enc

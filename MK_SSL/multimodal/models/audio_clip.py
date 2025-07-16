@@ -26,21 +26,6 @@ class AudioCLIP(nn.Module):
         **kwargs
 
     ):
-        """
-        Initializes the AudioCLIP pretraining module.
-
-        Args:
-            audio_encoder (nn.Module): Audio encoder module.
-            Defaults to ESResNeXt (ResNeXt-50-based model pretrained on AudioSet).
-            image_encoder (nn.Module): Image encoder module.
-                Defaults to ResNet-50 (CLIP version with QKV-attention layer).
-            text_encoder (nn.Module): Text encoder module.
-                Defaults to a 12-layer Transformer (CLIP version with BPE tokenizer, vocab size 49,408).
-            temperature_init (float, optional): Initial temperature scaling factor.
-                Defaults to 0.07.
-            text_template (str, optional): Template for formatting text input.
-                Defaults to "{}".
-        """
 
         super().__init__()
         self.device = device
@@ -74,12 +59,12 @@ class AudioCLIP(nn.Module):
         image_input: Optional[torch.Tensor] = None,
         text_input: Optional[List[str]] = None,
     ) -> Tuple[
-        Optional[torch.Tensor],  # audio_emb
-        Optional[torch.Tensor],  # image_emb
-        Optional[torch.Tensor],  # text_emb
-        Optional[torch.Tensor],  # sim_text_audio
-        Optional[torch.Tensor],  # sim_text_image
-        Optional[torch.Tensor],  # sim_audio_image
+        Optional[torch.Tensor], 
+        Optional[torch.Tensor], 
+        Optional[torch.Tensor], 
+        Optional[torch.Tensor], 
+        Optional[torch.Tensor], 
+        Optional[torch.Tensor],  
     ]:
         """
         Forward pass for contrastive learning over available modality pairs.

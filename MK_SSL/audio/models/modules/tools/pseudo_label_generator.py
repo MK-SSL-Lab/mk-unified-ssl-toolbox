@@ -3,16 +3,13 @@
 import os
 import numpy as np
 import torch
-import torchaudio # Still needed for potential raw audio loading if not coming from DataLoader
 from sklearn.cluster import MiniBatchKMeans
 from tqdm import tqdm
 from typing import Literal, Optional, Dict, List
-from torch.utils.data import DataLoader # New import for DataLoader type hint
+from torch.utils.data import DataLoader 
 import logging
 
-# Assuming these are available, if not, they need to be defined or provided
-from MK_SSL.audio.models.modules.feature_extractors import MFCCFeatureExtractor, ConvFeatureExtractor
-# Note: Ensure MFCCFeatureExtractor and ConvFeatureExtractor are correctly imported or defined.
+from MK_SSL.audio.models.modules.feature_extractors import MFCCFeatureExtractor
 
 
 class PseudoLabelGenerator:

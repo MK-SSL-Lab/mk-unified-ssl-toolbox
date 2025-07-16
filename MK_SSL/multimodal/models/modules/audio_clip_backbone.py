@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from MK_SSL.multimodal.models import AudioCLIP
-
 
 class AudioCLIPAudioBackbone(nn.Module):
     """
@@ -11,10 +9,10 @@ class AudioCLIPAudioBackbone(nn.Module):
     This class wraps only the audio encoder and skips any projection or text components.
 
     Args:
-        pretrained_model (AudioCLIP): The pretrained AudioCLIP model (pretext phase).
+        pretrained_model (nn.Module): The pretrained AudioCLIP model (pretext phase).
     """
 
-    def __init__(self, pretrained_model: AudioCLIP):
+    def __init__(self, pretrained_model: nn.Module):
         super().__init__()
         self.audio_encoder = pretrained_model.audio_encoder
 

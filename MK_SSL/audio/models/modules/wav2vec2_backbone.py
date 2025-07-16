@@ -3,7 +3,6 @@ import torch.nn as nn
 from torch import Tensor
 from typing import Optional
 
-from MK_SSL.audio.models.wav2vec2 import Wav2Vec2
 
 class Wav2Vec2Backbone(nn.Module):
     """
@@ -13,10 +12,10 @@ class Wav2Vec2Backbone(nn.Module):
     contextualized speech representations suitable for classification or regression.
 
     Args:
-        pretrained_model (Wav2Vec2): The pretrained Wav2Vec2 model (pretext phase).
+        pretrained_model (nn.Module): The pretrained Wav2Vec2 model (pretext phase).
     """
 
-    def __init__(self, pretrained_model: Wav2Vec2):
+    def __init__(self, pretrained_model: nn.Module):
         super().__init__()
         self.feature_extractor = pretrained_model.feature_extractor
         self.encoder = pretrained_model.encoder
