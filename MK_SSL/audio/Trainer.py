@@ -129,14 +129,9 @@ class Trainer:
                     f"Number of GPUs    : {torch.cuda.device_count()}\n"
                     f"Device            : {self.device}\n"
                     f"Method            : {self.method}\n"
-                    "-------------------- W&B ---------------------\n"
-                    f"W&B Active        : {self.wandb_logger.is_active}\n"
-                    f"W&B Project       : {self.wandb_logger.project_name}\n"
-                    f"W&B Entity        : {self.wandb_logger.entity}\n"
-                    f"W&B Mode          : {self.wandb_logger.mode}\n"
-                    f"W&B Run Name      : {self.wandb_logger.run_name or 'Auto-generated'}\n"
-                    "----------------------------------------------------"
                 )
+        
+
 
         # --- Load Model Config ---
 
@@ -228,6 +223,17 @@ class Trainer:
             notes=wandb_notes if wandb_notes else f"Training {self.method} model with MK_SSL.",
             tags=wandb_tags if wandb_tags else [self.method, "training"],
         )
+
+        self.logger.info(
+                    "\n"
+                    "-------------------- W&B ---------------------\n"
+                    f"W&B Active        : {self.wandb_logger.is_active}\n"
+                    f"W&B Project       : {self.wandb_logger.project_name}\n"
+                    f"W&B Entity        : {self.wandb_logger.entity}\n"
+                    f"W&B Mode          : {self.wandb_logger.mode}\n"
+                    f"W&B Run Name      : {self.wandb_logger.run_name or 'Auto-generated'}\n"
+                    "----------------------------------------------------"
+                )
 
 
     def _train_wav2vec2(
