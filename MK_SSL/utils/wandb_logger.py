@@ -52,21 +52,21 @@ class WandbLogger:
         # Get a logger for this utility class
         configure_logging()
         
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self._logger = logging.getLogger(self.__class__.__name__)
 
-        if not self.logger.hasHandlers():
-            self.logger.addHandler(get_logger_handler())
+        if not self._logger.hasHandlers():
+            self._logger.addHandler(get_logger_handler())
 
-        self.logger.setLevel(logging.INFO if verbose else logging.WARNING)
-        self.logger.info("Audio Trainer initialized.")
+        self._logger.setLevel(logging.INFO if verbose else logging.WARNING)
+        self._logger.info("Audio Trainer initialized.")
 
 
         if self.mode == "online" and api_key:
             try:
                 wandb.login(key=api_key, relogin=True)
-                self.logger.info("W&B login successful.")
+                self._logger.info("W&B login successful.")
             except Exception as e:
-                self.logger.error(f"Failed to login to W&B with provided API key: {e}")
+                self._logger.error(f"Failed to login to W&B with provided API key: {e}")
 
 
     def init_run(self,
