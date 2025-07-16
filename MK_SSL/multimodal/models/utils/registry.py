@@ -12,7 +12,7 @@ def register_method(
     _METHOD_REGISTRY[name.lower()] = {
         "model": model_cls,
         "logs": logs,
-        "params": default_params or {},
+        "default_params": default_params or {},
 
     }
 
