@@ -1704,7 +1704,7 @@ class Trainer:
 
 
 
-    def _data_loader_safe_collate(batch):
+    def _data_loader_safe_collate(self, batch):
         batch = [item for item in batch if item is not None]
         return default_collate(batch) if batch else None
 
