@@ -77,8 +77,11 @@ class EmbeddingLogger:
         plt.legend(*scatter.legend_elements(), title="Classes", loc="best")
         plt.title(f"Step {step} Embedding Visualization")
         plt.tight_layout()
-        plt.savefig(os.path.join(self.log_dir, f"step_{step}_plot.png"))
+        path = os.path.join(self.log_dir, f"step_{step}_plot.png")
+        plt.savefig(path)
         plt.close()
+        return path
+
 
     def plot_all(self):
         for step in self.steps:
