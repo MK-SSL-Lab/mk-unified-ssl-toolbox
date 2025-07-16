@@ -639,6 +639,8 @@ class Trainer:
 
             # === Embedding logger on third dataloader ===
             if use_embedding_logger:
+                self.logger.info(f"Evaluating on logger_loader for embedding logger...")
+
                 self.model.eval()
                 all_embeddings, all_labels = [], []
 
@@ -702,6 +704,7 @@ class Trainer:
         if use_embedding_logger:
             for step in embedding_logger.steps:
                 plot_path = embedding_logger.plot_step(step)
+                self.logger.info(f"Step {step} saved at {plot_path}")
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log(
                         {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
