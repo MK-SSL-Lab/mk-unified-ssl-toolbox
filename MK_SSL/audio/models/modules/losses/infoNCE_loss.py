@@ -45,7 +45,7 @@ class InfoNCELoss(nn.Module):
         # Compute pairwise similarity using bilinear function
         logits = torch.zeros((2 * batch_size, 2 * batch_size), device=device)
         for i in range(2 * batch_size):
-            logits[i] = self.similarity(z[i].unsqueeze(0).repeat(2 * batch_size, 1), z)
+            logits[i] = self.similarity(z[i].unsqueeze(0).repeat(2 * batch_size, 1), z).squeeze(-1)
 
         # Apply temperature scaling
         logits /= self.temperature
