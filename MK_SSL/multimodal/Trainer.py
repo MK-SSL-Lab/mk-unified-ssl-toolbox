@@ -138,6 +138,9 @@ class Trainer:
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.num_workers = os.cpu_count()
 
+        # This logic mirrors the WandbLogger initialization to accurately log the project name.
+        effective_wandb_project = wandb_project if wandb_project else f"MK_SSL_Multimodal_{self.method}"
+
         self.logger.info(
             "\n"
             "---------------- MK_SSL: Multimodal ----------------\n"
@@ -145,6 +148,12 @@ class Trainer:
             f"Number of GPUs    : {torch.cuda.device_count()}\n"
             f"Device            : {self.device}\n"
             f"Method            : {self.method}\n"
+            "-------------------- W&B ---------------------\n"
+            f"W&B Active        : {wandb_mode != 'disabled'}\n"
+            f"W&B Project       : {effective_wandb_project}\n"
+            f"W&B Entity        : {wandb_entity or 'Default'}\n"
+            f"W&B Mode          : {wandb_mode}\n"
+            f"W&B Run Name      : {wandb_run_name or 'Auto-generated'}\n"
             "----------------------------------------------------"
         )
 
