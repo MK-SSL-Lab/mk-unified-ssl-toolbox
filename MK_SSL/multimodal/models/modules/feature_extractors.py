@@ -1,9 +1,5 @@
-import torch
 import torch.nn as nn
 
-from torch import Tensor
-
-import torchaudio
 import torchaudio.transforms as T
 
 from typing import List, Tuple, Optional

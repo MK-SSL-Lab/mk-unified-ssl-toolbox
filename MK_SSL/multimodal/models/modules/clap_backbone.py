@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Optional
-from MK_SSL.multimodal.models import CLAP
 
 class CLAPAudioBackbone(nn.Module):
     """
@@ -12,10 +11,10 @@ class CLAPAudioBackbone(nn.Module):
     during pretraining, returning fixed-length embeddings.
 
     Args:
-        model (nn.Module): The pretrained CLAP model (pretext phase).
+        pretrained_model (nn.Module): The pretrained CLAP model (pretext phase).
     """
 
-    def __init__(self, pretrained_model: CLAP):
+    def __init__(self, pretrained_model: nn.Module):
         super().__init__()
         self.audio_encoder = pretrained_model.audio_encoder  # CNN14
 
@@ -51,10 +50,10 @@ class CLAPTextBackbone(nn.Module):
     during pretraining, returning fixed-length text embeddings.
 
     Args:
-        model (nn.Module): The pretrained CLAP model (pretext phase).
+        pretrained_model (nn.Module): The pretrained CLAP model (pretext phase).
     """
 
-    def __init__(self, pretrained_model: CLAP):
+    def __init__(self, pretrained_model: nn.Module):
         super().__init__()
         self.text_encoder = pretrained_model.text_encoder  # BERTTextEncoder
 

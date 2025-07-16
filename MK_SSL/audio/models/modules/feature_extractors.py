@@ -125,3 +125,59 @@ class FBANKFeatureExtractor(nn.Module):
             feats = (feats - mean) / std
 
         return feats
+
+
+class MFCCFeatureExtractor(nn.Module):
+    """
+    Extracts MFCC features from raw waveform.
+    Based on torchaudio.transforms.MFCC.
+
+    Args:
+        sample_rate (int): Audio sampling rate (default: 16000).
+        n_mfcc (int): Number of MFCCs to retain (default: 39, common for HuBERT).
+        n_mels (int): Number of Mel filterbanks (default: 80).
+        log_mels (bool): Whether to apply log to Mel spectrogram (default: True).
+        dct_type (int): Type of DCT (default: 2).
+        norm (str): Normalization type for DCT (default: "ortho").
+    """
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        n_mfcc: int = 39,
+        n_mels: int = 80,
+        log_mels: bool = True,
+        dct_type: int = 2,
+        norm: str = "ortho",
+    ):
+        super().__init__()
+        self.mfcc = T.MFCC(
+            sample_rate=sample_rate,
+            n_mfcc=n_mfcc,
+            melkwargs={
+                "n_fft": 400,       # Common value for speech
+                "win_length": 400,  # Common value for speech
+                "hop_length": 160,  # Common value for speech
+                "n_mels": n_mels,
+                "center": True,
+                "power": 2.0,
+                "mel_scale": "htk", # Common scale
+            },
+            log_mels=log_mels,
+            dct_type=dct_type,
+            norm=norm,
+        )
+
+    def forward(self, waveforms: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            waveforms (torch.Tensor): Input tensor of shape (B, T).
+
+        Returns:
+            torch.Tensor: MFCC features of shape (B, T', n_mfcc).
+        """
+        with torch.no_grad():
+            # MFCC transform outputs (B, n_mfcc, T_frames)
+            feats = self.mfcc(waveforms)
+            # Transpose to (B, T_frames, n_mfcc) to match common feature conventions
+            feats = feats.transpose(1, 2)
+        return feats

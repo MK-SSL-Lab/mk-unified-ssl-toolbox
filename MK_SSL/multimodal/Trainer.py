@@ -20,22 +20,24 @@ from MK_SSL.multimodal.models import *
 
 from MK_SSL.vision.models.modules.losses.nt_xent import NT_Xent
 
-from MK_SSL.utils import configure_logging, get_logger_handler
-from MK_SSL.multimodal.models.utils import get_method
+from MK_SSL.multimodal.models.utils.registry import get_method
 
-# Import your WandbLogger utility
-# Make sure your_library.wandb_utils is accessible, e.g., in the same directory
-# or properly installed as part of your package.
-from MK_SSL.utils import WandbLogger
-from MK_SSL.utils import optimize_hyperparameters
+# from MK_SSL.multimodal.models.modules.clap_backbone import CLAPAudioBackbone
+# from MK_SSL.multimodal.models.modules.clap_backbone import CLAPTextBackbone
+# from MK_SSL.multimodal.models.modules.audio_clip_backbone import AudioCLIPAudioBackbone
+# from MK_SSL.multimodal.models.modules.wav2clip_backbone import Wav2CLIPAudioBackbone
 
 from MK_SSL.multimodal.models.modules import CLAPAudioBackbone
 from MK_SSL.multimodal.models.modules import CLAPTextBackbone
 from MK_SSL.multimodal.models.modules import AudioCLIPAudioBackbone
 from MK_SSL.multimodal.models.modules import Wav2CLIPAudioBackbone
 
+
 from MK_SSL.utils import EvaluateNet
 from MK_SSL.utils import EmbeddingLogger
+from MK_SSL.utils import optimize_hyperparameters
+from MK_SSL.utils import WandbLogger
+from MK_SSL.utils import configure_logging, get_logger_handler
 
 
 class Trainer:

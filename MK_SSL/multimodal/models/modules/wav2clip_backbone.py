@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from MK_SSL.multimodal.models import Wav2Clip
 
 
 class Wav2CLIPAudioBackbone(nn.Module):
@@ -11,10 +10,10 @@ class Wav2CLIPAudioBackbone(nn.Module):
     This class removes the projection head (if present) and returns fixed-length audio embeddings.
 
     Args:
-        model (nn.Module): The pretrained Wav2CLIP model (pretext phase).
+        pretrained_model (nn.Module): The pretrained Wav2CLIP model (pretext phase).
     """
 
-    def __init__(self, pretrained_model: Wav2Clip):
+    def __init__(self, pretrained_model: nn.Module):
         super().__init__()
         self.encoder = pretrained_model.audio_encoder
 

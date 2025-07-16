@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Optional
-from MK_SSL.audio.models.simclr import SimCLRSpeech
 
 
 class SimCLRBackbone(nn.Module):
@@ -13,10 +12,10 @@ class SimCLRBackbone(nn.Module):
     the encoder backbone, returning mean-pooled contextual representations.
 
     Args:
-        model (nn.Module): The pretrained SimCLR model (pretext phase).
+        pretrained_model (nn.Module): The pretrained SimCLR model (pretext phase).
     """
 
-    def __init__(self, pretrained_model: SimCLRSpeech):
+    def __init__(self, pretrained_model: nn.Module):
         super().__init__()
         self.fbank = pretrained_model.fbank
         self.input_proj = pretrained_model.input_proj

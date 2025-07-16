@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Optional
-from MK_SSL.audio.models.hubert import HuBERT
 
 
 class HuBERTBackbone(nn.Module):
@@ -13,10 +12,10 @@ class HuBERTBackbone(nn.Module):
     dropout, and transformer encoder, returning mean-pooled representations.
 
     Args:
-        model (nn.Module): The pretrained HuBERT model (pretext phase).
+        pretrained_model (nn.Module): The pretrained HuBERT model (pretext phase).
     """
 
-    def __init__(self, pretrained_model: HuBERT):
+    def __init__(self, pretrained_model: nn.Module):
         super().__init__()
         self.feature_extractor = pretrained_model.feature_extractor
         self.feature_projection = pretrained_model.feature_projection

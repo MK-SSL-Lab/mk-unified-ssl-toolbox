@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchaudio.transforms as T
 
-from torchvision.models.resnet import ResNeXt
 from torchvision.models import resnet50
 
 from transformers import BertModel, BertConfig
@@ -189,48 +188,7 @@ class TimeFrequencyFrontEnd(nn.Module):
         x = self.bn(x)
         return self.act(x)
 
-class ESResNeXt(nn.Module):
-    def __init__(self, base_width=4, cardinality=32, layers=(3, 4, 6, 3), num_classes=512):
-        super().__init__()
-        self.front_end = TimeFrequencyFrontEnd()
-        self.backbone = ResNeXt(
-            block=ResNeXt.Bottleneck,
-            layers=layers,
-            groups=cardinality,
-            width_per_group=base_width,
-            replace_stride_with_dilation=[False, False, False],
-            norm_layer=nn.BatchNorm2d
-        )
-        # Modify first conv to accept mono-channel spec
-        self.backbone.conv1 = nn.Conv2d(
-            in_channels=64,  # after front end
-            out_channels=64,
-            kernel_size=7,
-            stride=2,
-            padding=3,
-            bias=False
-        )
-        self.pool = nn.AdaptiveAvgPool2d((1,1))
-        self.fc = nn.Linear(2048, num_classes)  # project to CLIP embed dim
-
-    def forward(self, x):
-        x = self.front_end(x)          # → (B, 64, T, F)
-        x = self.backbone.conv1(x)
-        x = self.backbone.bn1(x)
-        x = self.backbone.relu(x)
-        x = self.backbone.maxpool(x)
-
-        x = self.backbone.layer1(x)
-        x = self.backbone.layer2(x)
-        x = self.backbone.layer3(x)
-        x = self.backbone.layer4(x)
-
-        x = self.pool(x).flatten(1)   # → (B, 2048)
-        x = self.fc(x)                # → (B, 512)
-        x = F.normalize(x, p=2, dim=1)
-        return x
-
-
+  
 
 class AttentionPool2d(nn.Module):
     def __init__(self, spacial_dim: int, embed_dim: int, num_heads: int):

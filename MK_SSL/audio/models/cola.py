@@ -7,7 +7,7 @@ from MK_SSL.audio.models.modules.backbones import EfficientNetAudioEncoder
 from MK_SSL.audio.models.modules.losses import InfoNCELoss
 from MK_SSL.audio.models.modules.transformations import COLAAudioTransform
 
-from MK_SSL.audio.models.utils import register_method
+from MK_SSL.audio.models.utils.registry import register_method
 
 
 class COLA(nn.Module):

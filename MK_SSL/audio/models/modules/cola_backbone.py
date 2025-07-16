@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Optional
-from MK_SSL.audio.models.cola import COLA
 
 
 class COLABackbone(nn.Module):
@@ -13,10 +12,10 @@ class COLABackbone(nn.Module):
     skipping the projection head used during contrastive pretraining.
 
     Args:
-        model (COLA): The pretrained COLA model (pretext phase).
+        pretrained_model (nn.Module): The pretrained COLA model (pretext phase).
     """
 
-    def __init__(self, pretrained_model: COLA):
+    def __init__(self, pretrained_model: nn.Module):
         super().__init__()
         self.backbone = pretrained_model.backbone  # EfficientNetAudioEncoder
 
