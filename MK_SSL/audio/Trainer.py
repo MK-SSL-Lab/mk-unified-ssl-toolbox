@@ -970,6 +970,7 @@ class Trainer:
         use_hpo: bool = False,
         n_trials: int = 20,
         tuning_max_epochs: int = 5, 
+        use_embedding_logger: bool = False,
         **kwargs,
     ) -> None:
         """
@@ -1082,6 +1083,7 @@ class Trainer:
                 max_epochs,
                 start_epoch,
                 val_loader,
+                use_embedding_logger=use_embedding_logger,
             )
 
         elif self.method == "hubert":
@@ -1139,6 +1141,7 @@ class Trainer:
                     "pseudo_label_sample_ratio",
                     getattr(self.model, "config", {}).get("pseudo_label_sample_ratio", 0.1),
                 ),
+                use_embedding_logger= use_embedding_logger,
             )
 
         elif self.method == "simclr": # Added simclr training
@@ -1168,6 +1171,7 @@ class Trainer:
                 max_epochs,
                 start_epoch,
                 val_loader,
+                use_embedding_logger=use_embedding_logger,
             )
 
         elif self.method == "cola": # Added cola training
@@ -1197,6 +1201,7 @@ class Trainer:
                 max_epochs,
                 start_epoch,
                 val_loader,
+                use_embedding_logger=use_embedding_logger
             )
 
         else:
