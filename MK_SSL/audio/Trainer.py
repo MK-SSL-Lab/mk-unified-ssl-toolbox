@@ -123,14 +123,20 @@ class Trainer:
         self.num_workers = os.cpu_count()
 
         self.logger.info(
-            "\n"
-            "---------------- MK_SSL: Audio ----------------\n"
-            f"Number of workers : {self.num_workers}\n"
-            f"Number of GPUs    : {torch.cuda.device_count()}\n"
-            f"Device            : {self.device}\n"
-            f"Method            : {self.method}\n"
-            "----------------------------------------------------"
-        )
+                    "\n"
+                    "---------------- MK_SSL: Audio ----------------\n"
+                    f"Number of workers : {self.num_workers}\n"
+                    f"Number of GPUs    : {torch.cuda.device_count()}\n"
+                    f"Device            : {self.device}\n"
+                    f"Method            : {self.method}\n"
+                    "-------------------- W&B ---------------------\n"
+                    f"W&B Active        : {self.wandb_logger.is_active}\n"
+                    f"W&B Project       : {self.wandb_logger.project_name}\n"
+                    f"W&B Entity        : {self.wandb_logger.entity}\n"
+                    f"W&B Mode          : {self.wandb_logger.mode}\n"
+                    f"W&B Run Name      : {self.wandb_logger.run_name or 'Auto-generated'}\n"
+                    "----------------------------------------------------"
+                )
 
         # --- Load Model Config ---
 
