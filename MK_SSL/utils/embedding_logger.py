@@ -1,13 +1,11 @@
 import os
 import torch
 import numpy as np
+import pandas as pd
 from typing import List, Optional
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
-import matplotlib.pyplot as plt
-import matplotlib
-
-matplotlib.use("Agg")  # for headless environments
+import plotly.express as px
 
 
 class EmbeddingLogger:
@@ -48,28 +46,37 @@ class EmbeddingLogger:
 
     def _reduce(self, features: np.ndarray) -> np.ndarray:
         if self.reduce_method == "pca":
-            reducer = PCA(n_components=3)
+            reducer = PCA(n_components=2)
         else:
-            reducer = TSNE(n_components=3, perplexity=30, init="random", random_state=42)
+            reducer = TSNE(n_components=2, perplexity=30, init="random", random_state=42)
         return reducer.fit_transform(features)
 
-    def plot_step(self, step: int):
-        embeddings = self.embeddings[self.steps.index(step)].numpy()
-        labels = self.labels[self.steps.index(step)].numpy()
-
-        reduced = self._reduce(embeddings)
-
-        fig = plt.figure(figsize=(7, 6))
-        ax = fig.add_subplot(111, projection="3d")
-        scatter = ax.scatter(reduced[:, 0], reduced[:, 1], reduced[:, 2], c=labels, cmap="tab10", s=15)
-        legend = ax.legend(*scatter.legend_elements(), title="Classes", loc="best")
-        ax.set_title(f"Step {step} Embedding Visualization (3D)")
-        plt.tight_layout()
-        path = os.path.join(self.log_dir, f"step_{step}_plot_3d.png")
-        plt.savefig(path)
-        plt.close()
-        return path
-
     def plot_all(self):
-        for step in self.steps:
-            self.plot_step(step)
+        records = []
+
+        for step, embeddings, labels in zip(self.steps, self.embeddings, self.labels):
+            embeddings_np = embeddings.numpy()
+            labels_np = labels.numpy()
+            reduced = self._reduce(embeddings_np)
+
+            df = pd.DataFrame(reduced, columns=["x", "y"])
+            df["label"] = labels_np.astype(str)
+            df["step"] = step
+            records.append(df)
+
+        full_df = pd.concat(records, ignore_index=True)
+
+        fig = px.scatter(
+            full_df,
+            x="x", y="y",
+            color="label",
+            animation_frame="step",
+            title="2D Embedding Animation",
+            opacity=0.6,
+            height=700,
+            width=900
+        )
+
+        save_path = os.path.join(self.log_dir, "embedding_animation.html")
+        fig.write_html(save_path)
+        return save_path

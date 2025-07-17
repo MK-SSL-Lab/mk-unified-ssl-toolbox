@@ -245,7 +245,7 @@ class Trainer:
         max_epochs: int,
         start_epoch: int = 0,
         val_loader: Optional[DataLoader] = None,
-        logger_loader: Optional[DataLoader] = None,  # NEW
+        logger_loader: Optional[DataLoader] = None,
         use_embedding_logger: bool = False,
     ):
         self.logger.info(f"Starting training for Wav2Vec2 for {max_epochs} epochs.")
@@ -258,8 +258,9 @@ class Trainer:
                 log_dir=embedding_log_dir,
                 method_name=self.method,
                 reduce_method="tsne",
-                log_interval=1,  # or expose as a parameter
+                log_interval=1,
             )
+            self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
 
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
@@ -299,13 +300,15 @@ class Trainer:
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({"train/epoch_loss": avg_loss}, step=epoch + 1)
 
-            # === Run embedding logger on the third dataloader ===
+            # === Run embedding logger ===
             if use_embedding_logger:
+                self.logger.info(f"[Wav2Vec2 - Epoch {epoch+1}] Logging embeddings...")
+
                 self.model.eval()
                 all_embeddings, all_labels = [], []
 
                 with torch.no_grad():
-                    for batch in logger_loader:
+                    for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch+1}"):
                         audio = batch["audio"].to(self.device)
                         labels = batch["label"].to(self.device)
                         context_features, *_ = self.model(audio)
@@ -314,20 +317,22 @@ class Trainer:
 
                 embeddings = torch.cat(all_embeddings, dim=0)
                 labels = torch.cat(all_labels, dim=0)
+
                 embedding_logger.log_step(step=epoch + 1, embeddings=embeddings, labels=labels)
+                self.logger.info(f"[Wav2Vec2 - Epoch {epoch+1}] Embeddings logged.")
                 self.model.train()
 
-            # === Validation as before ===
+            # === Validation ===
             if val_loader:
                 avg_val_loss = self._validate_wav2vec2(val_loader, epoch)
 
-            # === Optuna handling ===
+            # === Optuna ===
             if hasattr(self, "_optuna_trial"):
                 self._optuna_trial.report(avg_val_loss, epoch)
                 if self._optuna_trial.should_prune():
                     raise optuna.TrialPruned()
 
-            # === Checkpoint ===
+            # === Checkpointing ===
             if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
                 model_path = os.path.join(self.checkpoint_path, f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth")
                 torch.save(self.model.state_dict(), model_path)
@@ -354,18 +359,21 @@ class Trainer:
                 metadata={"epochs_trained": max_epochs, "final_loss": avg_loss}
             )
 
-        # === Final embedding plots ===
+        # === Final embedding animation ===
         if use_embedding_logger:
-            for step in embedding_logger.steps:
-                plot_path = embedding_logger.plot_step(step)
-                if self.wandb_logger.is_active:
-                    self.wandb_logger.log(
-                        {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
-                        step=step
-                    )
+            self.logger.info("Generating final embedding animation...")
+            animation_path = embedding_logger.plot_all()
+            self.logger.info(f"Embedding animation saved at: {animation_path}")
+
+            if self.wandb_logger.is_active:
+                import wandb
+                self.wandb_logger.log(
+                    {"embedding_animation": wandb.Html(animation_path)},
+                    step=max(embedding_logger.steps) if embedding_logger.steps else max_epochs
+                )
+                self.logger.info("Embedding animation logged to Weights & Biases.")
 
         self.logger.info("Wav2Vec2 training complete.")
-
 
 
     def _validate_wav2vec2(self, val_loader: DataLoader, epoch: int):
@@ -423,7 +431,7 @@ class Trainer:
         max_epochs: int,
         start_epoch: int = 0,
         val_loader: Optional[DataLoader] = None,
-        logger_loader: Optional[DataLoader] = None,  # NEW: third dataloader
+        logger_loader: Optional[DataLoader] = None,
         use_embedding_logger: bool = False,
     ) -> None:
         if self.transformation is None:
@@ -432,7 +440,6 @@ class Trainer:
 
         self.model.train()
 
-        # === Initialize EmbeddingLogger ===
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
             embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
@@ -442,8 +449,8 @@ class Trainer:
                 reduce_method="tsne",
                 log_interval=1,
             )
+            self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
 
-        # === Watch model with W&B ===
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
@@ -468,7 +475,6 @@ class Trainer:
                 pbar.set_postfix({"loss": loss.item()})
 
                 global_step = epoch * len(train_loader) + batch_idx
-
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log({"train/batch_loss": loss.item()}, step=global_step)
 
@@ -478,26 +484,28 @@ class Trainer:
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({"train/epoch_loss": avg_loss}, step=epoch + 1)
 
-            # === Embedding logger on third dataloader ===
+            # === Embedding logger ===
             if use_embedding_logger:
+                self.logger.info(f"[SimCLR - Epoch {epoch+1}] Logging embeddings...")
                 self.model.eval()
                 all_embeddings, all_labels = [], []
 
                 with torch.no_grad():
-                    for batch in logger_loader:
+                    for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch+1}"):
                         audio = batch["audio"].to(self.device)
                         labels = batch["label"].to(self.device)
                         view0, _ = self.transformation(audio)
-                        out, _ = self.model(view0, view0)  # both views are same for eval
+                        out, _ = self.model(view0, view0)  # same view for inference
                         all_embeddings.append(out)
                         all_labels.append(labels)
 
                 embeddings = torch.cat(all_embeddings, dim=0)
                 labels = torch.cat(all_labels, dim=0)
                 embedding_logger.log_step(step=epoch + 1, embeddings=embeddings, labels=labels)
+                self.logger.info(f"[SimCLR - Epoch {epoch+1}] Embeddings logged.")
                 self.model.train()
 
-            # === Validation as before ===
+            # === Validation ===
             if val_loader:
                 avg_val_loss = self._validate_simclr(val_loader, epoch)
 
@@ -506,7 +514,7 @@ class Trainer:
                 if self._optuna_trial.should_prune():
                     raise optuna.TrialPruned()
 
-            # === Save checkpoint ===
+            # === Checkpoint ===
             if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
                 model_path = os.path.join(
                     self.checkpoint_path,
@@ -536,15 +544,19 @@ class Trainer:
                 metadata={"epochs_trained": max_epochs, "final_loss": avg_loss}
             )
 
-        # === Final embedding plots ===
+        # === Final embedding animation ===
         if use_embedding_logger:
-            for step in embedding_logger.steps:
-                plot_path = embedding_logger.plot_step(step)
-                if self.wandb_logger.is_active:
-                    self.wandb_logger.log(
-                        {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
-                        step=step
-                    )
+            self.logger.info("Generating final embedding animation...")
+            animation_path = embedding_logger.plot_all()
+            self.logger.info(f"Embedding animation saved at: {animation_path}")
+
+            if self.wandb_logger.is_active:
+                import wandb
+                self.wandb_logger.log(
+                    {"embedding_animation": wandb.Html(animation_path)},
+                    step=max(embedding_logger.steps) if embedding_logger.steps else max_epochs
+                )
+                self.logger.info("Embedding animation logged to Weights & Biases.")
 
         self.logger.info("SimCLR training complete.")
 
@@ -583,7 +595,7 @@ class Trainer:
         max_epochs: int,
         start_epoch: int = 0,
         val_loader: Optional[DataLoader] = None,
-        logger_loader: Optional[DataLoader] = None,  # NEW: third dataloader
+        logger_loader: Optional[DataLoader] = None,
         use_embedding_logger: bool = False,
     ) -> None:
         if self.transformation is None:
@@ -592,7 +604,6 @@ class Trainer:
 
         self.model.train()
 
-        # === Initialize EmbeddingLogger ===
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
             embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
@@ -602,6 +613,7 @@ class Trainer:
                 reduce_method="tsne",
                 log_interval=1,
             )
+            self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
 
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
@@ -637,15 +649,15 @@ class Trainer:
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({"train/epoch_loss": avg_loss}, step=epoch + 1)
 
-            # === Embedding logger on third dataloader ===
+            # === Embedding logger ===
             if use_embedding_logger:
-                self.logger.info(f"Evaluating on logger_loader for embedding logger...")
+                self.logger.info(f"[COLA - Epoch {epoch+1}] Logging embeddings...")
 
                 self.model.eval()
                 all_embeddings, all_labels = [], []
 
                 with torch.no_grad():
-                    for batch in logger_loader:
+                    for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch+1}"):
                         audio = batch["audio"].to(self.device)
                         labels = batch["label"].to(self.device)
                         view0, _ = self.transformation(audio)
@@ -656,9 +668,10 @@ class Trainer:
                 embeddings = torch.cat(all_embeddings, dim=0)
                 labels = torch.cat(all_labels, dim=0)
                 embedding_logger.log_step(step=epoch + 1, embeddings=embeddings, labels=labels)
+                self.logger.info(f"[COLA - Epoch {epoch+1}] Embeddings logged.")
                 self.model.train()
 
-            # === Validation as before ===
+            # === Validation ===
             if val_loader:
                 avg_val_loss = self._validate_cola(val_loader, epoch)
 
@@ -667,7 +680,7 @@ class Trainer:
                 if self._optuna_trial.should_prune():
                     raise optuna.TrialPruned()
 
-            # === Save checkpoint ===
+            # === Checkpoint ===
             if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
                 model_path = os.path.join(
                     self.checkpoint_path,
@@ -700,19 +713,21 @@ class Trainer:
                 metadata={"epochs_trained": max_epochs, "final_loss": avg_loss}
             )
 
-        # === Final embedding plots ===
+        # === Final animated embedding plot ===
         if use_embedding_logger:
-            for step in embedding_logger.steps:
-                plot_path = embedding_logger.plot_step(step)
-                self.logger.info(f"Step {step} saved at {plot_path}")
-                if self.wandb_logger.is_active:
-                    self.wandb_logger.log(
-                        {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
-                        step=step
-                    )
+            self.logger.info("Generating final embedding animation...")
+            animation_path = embedding_logger.plot_all()
+            self.logger.info(f"Embedding animation saved at: {animation_path}")
+
+            if self.wandb_logger.is_active:
+                import wandb
+                self.wandb_logger.log(
+                    {"embedding_animation": wandb.Html(animation_path)},
+                    step=max(embedding_logger.steps) if embedding_logger.steps else max_epochs
+                )
+                self.logger.info("Embedding animation logged to Weights & Biases.")
 
         self.logger.info("COLA training complete.")
-
 
 
     def _validate_cola(self, val_loader: DataLoader, epoch: int):
@@ -753,7 +768,7 @@ class Trainer:
         val_loader: Optional[DataLoader] = None,
         num_hubert_iterations: int = 5,
         pseudo_label_sample_ratio: float = 0.1,
-        logger_loader: Optional[DataLoader] = None,  # NEW: third dataloader
+        logger_loader: Optional[DataLoader] = None,
         use_embedding_logger: bool = False,
         **kwargs,
     ):
@@ -772,6 +787,7 @@ class Trainer:
                 reduce_method="tsne",
                 log_interval=1,
             )
+            self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
 
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
@@ -844,7 +860,6 @@ class Trainer:
 
                     global_step = epoch * len(train_loader_for_training) + batch_idx
 
-                    # === W&B batch logging ===
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log(
                             {
@@ -866,13 +881,15 @@ class Trainer:
                         step=epoch + 1
                     )
 
-                # === EmbeddingLogger on third dataset ===
+                # === EmbeddingLogger ===
                 if use_embedding_logger:
+                    self.logger.info(f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Logging embeddings...")
+
                     self.model.eval()
                     all_embeddings, all_labels = [], []
 
                     with torch.no_grad():
-                        for batch in logger_loader:
+                        for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Iter {iteration+1} Epoch {epoch+1}"):
                             audio = batch["audio"].to(self.device)
                             labels = batch["label"].to(self.device)
                             _, _, features, _ = self.model(audio)
@@ -882,9 +899,9 @@ class Trainer:
                     embeddings = torch.cat(all_embeddings, dim=0)
                     labels = torch.cat(all_labels, dim=0)
                     embedding_logger.log_step(step=epoch + 1, embeddings=embeddings, labels=labels)
+                    self.logger.info(f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Embeddings logged.")
                     self.model.train()
 
-                # === Save checkpoint ===
                 if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
                     model_path = os.path.join(
                         self.checkpoint_path,
@@ -909,7 +926,6 @@ class Trainer:
                     if self._optuna_trial.should_prune():
                         raise optuna.TrialPruned()
 
-            # === Final checkpoint ===
             final_model_path = os.path.join(
                 self.checkpoint_path,
                 f"{self.method}_iter{iteration+1}_final_model_{self.timestamp}.pth",
@@ -925,16 +941,22 @@ class Trainer:
                     metadata={"iteration": iteration+1, "epochs_trained": max_epochs, "final_loss": avg_loss}
                 )
 
+            # === Final embedding animation ===
             if use_embedding_logger:
-                for step in embedding_logger.steps:
-                    plot_path = embedding_logger.plot_step(step)
-                    if self.wandb_logger.is_active:
-                        self.wandb_logger.log(
-                            {f"embedding_plot/iter{iteration+1}_step_{step}": wandb.Image(plot_path)},
-                            step=step
-                        )
+                self.logger.info(f"Generating embedding animation for HuBERT Iteration {iteration+1}...")
+                animation_path = embedding_logger.plot_all()
+                self.logger.info(f"Embedding animation saved at: {animation_path}")
+
+                if self.wandb_logger.is_active:
+                    import wandb
+                    self.wandb_logger.log(
+                        {f"embedding_animation/iter_{iteration+1}": wandb.Html(animation_path)},
+                        step=max(embedding_logger.steps) if embedding_logger.steps else max_epochs
+                    )
+                    self.logger.info("Embedding animation logged to Weights & Biases.")
 
         self.logger.info("HuBERT training complete across all specified iterations.")
+
 
 
 
