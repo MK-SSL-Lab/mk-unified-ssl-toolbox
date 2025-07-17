@@ -37,7 +37,7 @@ from MK_SSL.utils import EvaluateNet
 from MK_SSL.utils import EmbeddingLogger
 from MK_SSL.utils import optimize_hyperparameters
 from MK_SSL.utils import WandbLogger
-from MK_SSL.utils import configure_logging, get_logger_handler
+from MK_SSL.utils import get_logger_handler
 
 
 class Trainer:
@@ -48,7 +48,6 @@ class Trainer:
         image_encoder: Optional[nn.Module] = None,
         text_encoder: Optional[nn.Module] = None,
         audio_encoder: Optional[nn.Module] = None,
-        configure_logger: bool = True,
         log_level: int = logging.INFO,
         mixed_precision_training: bool = True,
         save_dir: str = ".",
@@ -98,8 +97,6 @@ class Trainer:
                       or used to customize the training process.
         """
 
-        if configure_logger:
-            configure_logging()
 
 
         self.logger = logging.getLogger(self.__class__.__name__)

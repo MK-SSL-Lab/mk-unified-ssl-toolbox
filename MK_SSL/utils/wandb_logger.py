@@ -2,7 +2,7 @@ import wandb
 import os
 import logging # Import logging for integration
 from typing import Optional, Dict, Any
-from MK_SSL.utils import configure_logging, get_logger_handler  # Assuming this exists
+from MK_SSL.utils import get_logger_handler  # Assuming this exists
 
 class WandbLogger:
     """
@@ -50,7 +50,6 @@ class WandbLogger:
         self._run = None # Store the active W&B run object
 
         # Get a logger for this utility class
-        configure_logging()
         
         self._logger = logging.getLogger(self.__class__.__name__)
 
