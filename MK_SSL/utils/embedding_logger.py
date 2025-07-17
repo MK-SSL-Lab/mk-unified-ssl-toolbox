@@ -30,18 +30,9 @@ class EmbeddingLogger:
         self.steps = []
 
     def log_step(self, step: int, embeddings: torch.Tensor, labels: torch.Tensor):
-        """
-        Log embedding step with labels.
-
-        Args:
-            step (int): Training step or epoch.
-            embeddings (Tensor): (B, D)
-            labels (Tensor): (B,)
-        """
-
         if step % self.log_interval != 0:
             return
-        
+
         embeddings = embeddings.detach().cpu()
         labels = labels.detach().cpu()
 
@@ -57,11 +48,9 @@ class EmbeddingLogger:
 
     def _reduce(self, features: np.ndarray) -> np.ndarray:
         if self.reduce_method == "pca":
-            reducer = PCA(n_components=2)
+            reducer = PCA(n_components=3)
         else:
-            reducer = TSNE(
-                n_components=2, perplexity=30, init="random", random_state=42
-            )
+            reducer = TSNE(n_components=3, perplexity=30, init="random", random_state=42)
         return reducer.fit_transform(features)
 
     def plot_step(self, step: int):
@@ -70,18 +59,16 @@ class EmbeddingLogger:
 
         reduced = self._reduce(embeddings)
 
-        plt.figure(figsize=(6, 5))
-        scatter = plt.scatter(
-            reduced[:, 0], reduced[:, 1], c=labels, cmap="tab10", s=10
-        )
-        plt.legend(*scatter.legend_elements(), title="Classes", loc="best")
-        plt.title(f"Step {step} Embedding Visualization")
+        fig = plt.figure(figsize=(7, 6))
+        ax = fig.add_subplot(111, projection="3d")
+        scatter = ax.scatter(reduced[:, 0], reduced[:, 1], reduced[:, 2], c=labels, cmap="tab10", s=15)
+        legend = ax.legend(*scatter.legend_elements(), title="Classes", loc="best")
+        ax.set_title(f"Step {step} Embedding Visualization (3D)")
         plt.tight_layout()
-        path = os.path.join(self.log_dir, f"step_{step}_plot.png")
+        path = os.path.join(self.log_dir, f"step_{step}_plot_3d.png")
         plt.savefig(path)
         plt.close()
         return path
-
 
     def plot_all(self):
         for step in self.steps:
