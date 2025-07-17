@@ -100,6 +100,7 @@ class Trainer:
 
 
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.propagate = False
 
         if not self.logger.hasHandlers():
             self.logger.addHandler(get_logger_handler())
