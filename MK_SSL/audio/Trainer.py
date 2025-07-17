@@ -33,7 +33,7 @@ from MK_SSL.audio.models.modules.simclr_backbone import SimCLRBackbone
 
 from MK_SSL.utils import EvaluateNet
 from MK_SSL.utils import EmbeddingLogger
-from MK_SSL.utils import configure_logging, get_logger_handler
+from MK_SSL.utils import get_logger_handler
 from MK_SSL.utils import WandbLogger
 from MK_SSL.utils import optimize_hyperparameters
 
@@ -48,7 +48,6 @@ class Trainer:
         save_dir: str = ".",
         checkpoint_interval: int = 10,
         reload_checkpoint: bool = False,
-        configure_logger: bool = True,
         verbose: bool = True,
         mixed_precision_training: bool = True,
         # W&B specific arguments
@@ -84,8 +83,7 @@ class Trainer:
             wandb_tags (list[str], optional): Tags for the W&B run.
             **kwargs: Additional keyword arguments passed to the model or loss.
         """
-        if configure_logger:
-            configure_logging()
+
 
         self.logger = logging.getLogger(self.__class__.__name__)
 

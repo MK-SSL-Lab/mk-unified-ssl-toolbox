@@ -21,7 +21,7 @@ from typing import Optional, Dict, Any
 from MK_SSL.vision.models import *
 from MK_SSL.vision.models.modules.losses import *
 from MK_SSL.vision.models.modules.transformations import *
-from MK_SSL.utils import configure_logging, get_logger_handler
+from MK_SSL.utils import get_logger_handler
 from MK_SSL.vision.models.utils import get_method
 from MK_SSL.utils import optimize_hyperparameters
 from MK_SSL.vision.models.modules import Patchify
@@ -39,7 +39,6 @@ class Trainer:
         backbone: nn.Module,
         feature_size: int,
         image_size: int,
-        configure_logger: bool = True,
         save_dir: str = ".",
         checkpoint_interval: int = 10,
         reload_checkpoint: bool = False,
@@ -100,9 +99,6 @@ class Trainer:
                       specific to the training method or the backbone architecture.
         """
 
-
-        if configure_logger:
-            configure_logging()
 
 
         self.logger = logging.getLogger(self.__class__.__name__)
