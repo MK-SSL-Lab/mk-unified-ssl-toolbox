@@ -189,12 +189,13 @@ class Trainer:
             "kmeans_clusters", getattr(self.model, "num_clusters", 100)
         )
         sample_rate = kwargs.get("sample_rate", 16000)
-        self.pseudo_label_generator = PseudoLabelGenerator(
-            kmeans_clusters=kmeans_clusters,
-            sample_rate=sample_rate,
-            save_dir=os.path.join(self.save_dir, "hubert_pseudo_labels"),
-            logger=self.logger,  # Pass logger to the generator
-        )
+        if self.method == 'hubert':
+            self.pseudo_label_generator = PseudoLabelGenerator(
+                kmeans_clusters=kmeans_clusters,
+                sample_rate=sample_rate,
+                save_dir=os.path.join(self.save_dir, "hubert_pseudo_labels"),
+                logger=self.logger,  # Pass logger to the generator
+            )
 
         # --- W&B Logger Initialization ---
         # Combine trainer_config with any specific wandb_config provided
