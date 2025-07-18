@@ -9,7 +9,7 @@ def optimize_hyperparameters(
     max_epochs=5,
     objective_metric="val_loss",
     search_space=None,
-    pruner: str = "median",  # 👈 pruner selected via string
+    pruner: str = "median",  
 ):
     """
     Runs Optuna hyperparameter search using the provided Trainer object.

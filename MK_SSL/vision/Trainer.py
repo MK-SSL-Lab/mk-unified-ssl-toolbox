@@ -522,6 +522,8 @@ class Trainer:
             self.logger.info(f"W&B run initialized. View run at: {self.wandb_logger.current_run.url}")
         else:
             self.logger.info("W&B logging is not active for this run.")
+            self.wandb_logger.mode = 'disabled'
+
         
 
         if use_hpo:
