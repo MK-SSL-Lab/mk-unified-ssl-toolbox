@@ -833,10 +833,10 @@ class Trainer:
         tuning_max_epochs: int = 5, 
         **kwargs,
     ):
-        # Initialize W&B run at the very beginning of the main train method
+
         if self.wandb_logger.is_active and not hasattr(self, "_optuna_trial"):
             self.wandb_logger.init_run()
-            # Update W&B config with dynamic training parameters
+
             self.wandb_logger.current_run.config.update({
                 "batch_size": batch_size,
                 "start_epoch": start_epoch,
