@@ -1359,12 +1359,14 @@ class Trainer:
                 metadata={"epochs_trained": epochs, "final_loss": loss_per_epoch / len(train_loader)} # Use final epoch's loss
             )
 
-        # Finish W&B run at the very end of the main train method
+
+
+        training_mode = "Main" if not hasattr(self, "_optuna_trial") else "HPO"
         if self.wandb_logger.is_active:
             self.wandb_logger.finish_run()
-            self.logger.info("Main training process completed and W&B run finalized.")
+            self.logger.info(f"{training_mode} training process completed and W&B run finalized.")
         else:
-            self.logger.info("Main training process completed.")
+            self.logger.info(f"{training_mode} training process completed.")
 
 
     def _evaluate_audioclip(

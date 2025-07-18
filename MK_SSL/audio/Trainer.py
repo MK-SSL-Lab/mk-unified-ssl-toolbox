@@ -1335,9 +1335,12 @@ class Trainer:
                 f"Training not implemented for method: {self.method}"
             )
 
-        # Finish W&B run at the very end of the main train method
-        self.wandb_logger.finish_run()
-        self.logger.info("Main training process completed and W&B run finalized.")
+        training_mode = "Main" if not hasattr(self, "_optuna_trial") else "HPO"
+        if self.wandb_logger.is_active:
+            self.wandb_logger.finish_run()
+            self.logger.info(f"{training_mode} training process completed and W&B run finalized.")
+        else:
+            self.logger.info(f"{training_mode} training process completed.")
 
 
     def load_checkpoint(self, checkpoint_path: str) -> None:
