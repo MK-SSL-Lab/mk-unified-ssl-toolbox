@@ -345,7 +345,8 @@ class Trainer:
                 avg_val_loss = self._validate_wav2vec2(val_loader, epoch)
 
             if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(avg_val_loss, epoch)
+                metric = avg_val_loss if val_loader else avg_loss
+                self._optuna_trial.report(metric, epoch)
                 if self._optuna_trial.should_prune():
                     raise optuna.TrialPruned()
 
@@ -543,7 +544,8 @@ class Trainer:
                 avg_val_loss = self._validate_simclr(val_loader, epoch)
 
             if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(avg_val_loss, epoch)
+                metric = avg_val_loss if val_loader else avg_loss
+                self._optuna_trial.report(metric, epoch)
                 if self._optuna_trial.should_prune():
                     raise optuna.TrialPruned()
 
@@ -727,7 +729,8 @@ class Trainer:
                 avg_val_loss = self._validate_cola(val_loader, epoch)
 
             if hasattr(self, "_optuna_trial"):
-                self._optuna_trial.report(avg_val_loss, epoch)
+                metric = avg_val_loss if val_loader else avg_loss
+                self._optuna_trial.report(metric, epoch)
                 if self._optuna_trial.should_prune():
                     raise optuna.TrialPruned()
 
@@ -991,7 +994,8 @@ class Trainer:
                     avg_val_loss = self._validate_hubert(val_loader, iteration, epoch)
 
                 if hasattr(self, "_optuna_trial"):
-                    self._optuna_trial.report(avg_val_loss, epoch)
+                    metric = avg_val_loss if val_loader else avg_loss
+                    self._optuna_trial.report(metric, epoch)
                     if self._optuna_trial.should_prune():
                         raise optuna.TrialPruned()
 
