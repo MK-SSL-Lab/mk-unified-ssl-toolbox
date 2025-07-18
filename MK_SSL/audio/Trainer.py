@@ -1144,6 +1144,15 @@ class Trainer:
             self.logger.info(f"🚀 Using hyperparameters: lr={lr}, batch_size={batch_size}, weight_decay={weight_decay}, optimizer={optimizer}, extras={{{', '.join(f'{k}={v}' for k,v in kwargs.items())}}}")
 
 
+            self.wandb_logger.log({
+                "hpo/best_lr": lr,
+                "hpo/best_batch_size": batch_size,
+                "hpo/best_weight_decay": weight_decay,
+                "hpo/best_optimizer": optimizer,
+                **{f"hpo/{k}": v for k, v in kwargs.items()}
+            })
+            self.logger.info("📡 Best hyperparameters logged to W&B.")
+
         match optimizer.lower():
             case "adam":
                 optimizer = torch.optim.Adam(
