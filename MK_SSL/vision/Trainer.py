@@ -542,6 +542,9 @@ class Trainer:
 
             kwargs.update({k: v for k, v in best_params.items() if k not in {"lr", "batch_size", "weight_decay", "optimizer"}})
 
+            self.logger.info(f"🚀 Using hyperparameters: lr={learning_rate}, batch_size={batch_size}, weight_decay={weight_decay}, optimizer={optimizer}, extras={{{', '.join(f'{k}={v}' for k,v in kwargs.items())}}}")
+
+
         match optimizer.lower():
             case "adam":
                 optimizer = torch.optim.Adam(
