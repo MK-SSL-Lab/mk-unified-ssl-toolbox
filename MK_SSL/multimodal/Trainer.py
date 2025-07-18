@@ -862,11 +862,14 @@ class Trainer:
             )
             self.logger.info(f"🌟 Best hyperparameters found: {best_params}")
             
+            learning_rate = best_params.get("lr", learning_rate)
             batch_size = best_params.get("batch_size", batch_size)
             weight_decay = best_params.get("weight_decay", weight_decay)
             optimizer = best_params.get("optimizer", optimizer)
 
             kwargs.update({k: v for k, v in best_params.items() if k not in {"lr", "batch_size", "weight_decay", "optimizer"}})
+            
+            self.logger.info(f"🚀 Using hyperparameters: lr={learning_rate}, batch_size={batch_size}, weight_decay={weight_decay}, optimizer={optimizer}, extras={{{', '.join(f'{k}={v}' for k,v in kwargs.items())}}}")
 
 
         match optimizer.lower():
