@@ -1105,7 +1105,7 @@ class Trainer:
         self.wandb_logger.init_run()
 
         # Log initial hyperparameters to W&B config if active
-        if self.wandb_logger.is_active:
+        if self.wandb_logger.is_active and not hasattr(self, "_optuna_trial"):
             # Update W&B config with dynamic training parameters
             self.wandb_logger.current_run.config.update({
                 "batch_size": batch_size,
@@ -1141,9 +1141,6 @@ class Trainer:
 
             kwargs.update({k: v for k, v in best_params.items() if k not in {"lr", "batch_size", "weight_decay", "optimizer"}})
             
-            self.logger.info(f"🚀 Using hyperparameters: lr={lr}, batch_size={batch_size}, weight_decay={weight_decay}, optimizer={optimizer}, extras={{{', '.join(f'{k}={v}' for k,v in kwargs.items())}}}")
-
-
             self.wandb_logger.log({
                 "hpo/best_lr": lr,
                 "hpo/best_batch_size": batch_size,
