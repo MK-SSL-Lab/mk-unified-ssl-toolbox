@@ -1102,9 +1102,12 @@ class Trainer:
         """
         # Initialize W&B run at the very beginning of the main train method
         # This ensures console output is captured from the start and the run is properly set up.
-        if self.wandb_logger.is_active:
-            
+        if not hasattr(self, "_optuna_trial"):
             self.wandb_logger.init_run()
+        else:
+            self.wandb_logger.mode = 'disabled'
+
+        if self.wandb_logger.is_active:
             self.wandb_logger.current_run.config.update({
                 "batch_size": batch_size,
                 "start_epoch": start_epoch,
@@ -1117,7 +1120,6 @@ class Trainer:
             self.logger.info(f"W&B run initialized. View run at: {self.wandb_logger.current_run.url}")
         else:
             self.logger.info("W&B logging is not active for this run.")
-            self.wandb_logger.mode = 'disabled'
 
 
 
