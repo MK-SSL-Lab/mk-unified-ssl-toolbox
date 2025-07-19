@@ -71,7 +71,7 @@ class TransformerEncoder(nn.Module):
         layer_norm_first: bool,
         layer_drop: float,
         pos_conv_groups: int,
-        pos_conv_kernel: int = 7,
+        pos_conv_kernel: int,
     ):
         super().__init__()
 
