@@ -101,6 +101,9 @@ class HuBERT(nn.Module):
 
         # Prediction Head (maps Transformer output to number of clusters)
         self.prediction_head = nn.Linear(config["encoder_embed_dim"], num_clusters)
+        self.mask_embedding = nn.Parameter(
+            torch.FloatTensor(config["encoder_embed_dim"]).uniform_(-0.1, 0.1)
+        )
 
 
     def _get_config(self, variant: str):
@@ -245,8 +248,7 @@ class HuBERT(nn.Module):
 
             mask_indices[i, masked_spans] = True
             masked_lengths[i] = len(masked_spans)
-            self.mask_embedding = nn.Parameter(torch.FloatTensor(self.config["encoder_embed_dim"]).uniform_())
-            features[i, mask_indices[i]] = self.mask_embedding
+            features[i, mask_indices[i]] = self.mask_embedding.to(features.device)
 
         # 4. Transformer Encoder
         # The padding_mask for the Transformer needs to be True for padded/masked tokens
