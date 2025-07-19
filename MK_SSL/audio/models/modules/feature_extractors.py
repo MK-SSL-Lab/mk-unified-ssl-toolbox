@@ -7,6 +7,16 @@ import torchaudio.transforms as T
 
 from typing import List, Tuple, Optional
 
+class Transpose(nn.Module):
+    def __init__(self, dim1, dim2):
+        super().__init__()
+        self.dim1 = dim1
+        self.dim2 = dim2
+
+    def forward(self, x):
+        return x.transpose(self.dim1, self.dim2)
+
+
 
 class ConvFeatureExtractor(nn.Module):
     """
@@ -48,7 +58,7 @@ class ConvFeatureExtractor(nn.Module):
                 layers.extend([
                     conv,
                     nn.Sequential(
-                        nn.Transpose(1, 2), norm, nn.Transpose(1, 2)
+                        Transpose(1, 2), norm, Transpose(1, 2)
                     ),
                     nn.GELU()
                 ])
