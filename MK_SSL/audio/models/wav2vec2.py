@@ -201,7 +201,6 @@ class Wav2Vec2(nn.Module):
     def time_masking(self, hidden_states: torch.Tensor, lengths: torch.Tensor) -> tuple[torch.Tensor, torch.BoolTensor]:
         batch_size, num_steps, hidden_size = hidden_states.size()
 
-        # Learned mask embedding (shared across all masked steps)
         if not hasattr(self, "mask_embedding"):
             self.mask_embedding = nn.Parameter(torch.FloatTensor(hidden_size).uniform_())
             self.register_parameter("mask_embedding", self.mask_embedding)
@@ -213,16 +212,14 @@ class Wav2Vec2(nn.Module):
             all_starts = list(range(valid_length))
             num_masks = max(1, int(self.mask_time_prob * valid_length))
 
-            # Sample starting indices (without replacement)
             starts = random.sample(all_starts, min(num_masks, valid_length))
             for s in starts:
                 end = min(valid_length, s + self.num_mask_time_steps)
                 time_mask_indices[b, s:end] = 1
 
-        # Apply learned mask embedding
-        hidden_states[time_mask_indices] = self.mask_embedding
-
+        hidden_states[time_mask_indices] = self.mask_embedding.to(hidden_states.device)
         return hidden_states, time_mask_indices
+
 
 
 
