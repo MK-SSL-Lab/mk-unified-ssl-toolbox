@@ -103,7 +103,7 @@ class SimCLRAudioTransform:
         if random.random() < 0.5:
             waveform = self.noise_adder(waveform)
         if random.random() < 0.5:
-            waveform = self.pitch_shift(waveform)
+            waveform = self._pitch_shift(waveform)
         if random.random() < 0.5:
             waveform = self._speed_perturb(waveform)
         return waveform
