@@ -1249,7 +1249,7 @@ class Trainer:
                 collate_fn=self._data_loader_safe_collate,
             )
             
-            first_train_batch = next(iter(train_loader))
+            first_train_batch = next(iter(train_loader_for_pseudo_label_gen))
             if "audio" not in first_train_batch or "length" not in first_train_batch:
                 self.logger.warning(
                     "[Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
