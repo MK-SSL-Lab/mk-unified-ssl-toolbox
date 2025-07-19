@@ -908,6 +908,7 @@ class Trainer:
                 
                 raise ValueError(f"Optimizer {optimizer} not supported")
 
+
         if self.reload_checkpoint:
             start_epoch = self._reload_latest_checkpoint() + 1 # +1 because _reload returns 0-indexed epoch
 
@@ -917,6 +918,14 @@ class Trainer:
             shuffle=True,
             num_workers=self.num_workers,
         )
+        first_train_batch = next(iter(train_loader))
+        if "audio" not in first_train_batch or "length" not in first_train_batch:
+            self.logger.warning(
+                "[Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
+                "Currently missing: "
+                + ", ".join(k for k in ["audio", "length"] if k not in first_train_batch)
+            )
+
         total_batches_per_epoch = len(train_loader) # Used for global step calculation
 
         self.model.train()

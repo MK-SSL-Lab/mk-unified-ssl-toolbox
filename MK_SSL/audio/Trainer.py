@@ -270,8 +270,9 @@ class Trainer:
             with torch.no_grad():
                 for batch in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
                     audio = batch["audio"].to(self.device)
+                    lengths = batch['length'].to(self.device)
                     labels = batch["label"].to(self.device)
-                    context_features, *_ = self.model(audio)
+                    context_features, *_ = self.model(audio, lengths)
                     all_embeddings.append(context_features)
                     all_labels.append(labels)
 
@@ -290,10 +291,10 @@ class Trainer:
 
             for batch_idx, batch in enumerate(pbar):
                 audio = batch['audio'].to(self.device)
-
+                lengths = batch['length'].to(self.device)
                 optimizer.zero_grad()
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
-                    context_features, quantized_targets, perplexity, time_mask_indices = self.model(audio)
+                    context_features, quantized_targets, perplexity, time_mask_indices = self.model(audio, lengths)
 
                     loss = self.loss(
                         context=context_features,
@@ -329,8 +330,9 @@ class Trainer:
                 with torch.no_grad():
                     for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch+1}"):
                         audio = batch["audio"].to(self.device)
+                        lengths = batch['length'].to(self.device)
                         labels = batch["label"].to(self.device)
-                        context_features, *_ = self.model(audio)
+                        context_features, *_ = self.model(audio, lengths)
                         all_embeddings.append(context_features)
                         all_labels.append(labels)
 
@@ -1189,6 +1191,15 @@ class Trainer:
                 collate_fn=self._data_loader_safe_collate,
             )
 
+            first_train_batch = next(iter(train_loader))
+            if "audio" not in first_train_batch or "length" not in first_train_batch:
+                self.logger.warning(
+                    "[Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
+                    "Currently missing: "
+                    + ", ".join(k for k in ["audio", "length"] if k not in first_train_batch)
+                )
+
+
             val_loader = None
             if val_dataset:
                 val_loader = DataLoader(
@@ -1198,8 +1209,10 @@ class Trainer:
                     num_workers=self.num_workers,
                     pin_memory=True,
                     collate_fn=self._data_loader_safe_collate,
-                    
                 )
+                first_val_batch = next(iter(val_loader))
+                if "audio" not in first_val_batch or "length" not in first_val_batch:
+                    self.logger.warning("[Dataset Check] val_loader should return both 'audio' and 'length'.")
 
             self._train_wav2vec2(
                 train_loader,
@@ -1223,8 +1236,15 @@ class Trainer:
                 num_workers=self.num_workers,
                 pin_memory=True,
                 collate_fn=self._data_loader_safe_collate,
-
             )
+            
+            first_train_batch = next(iter(train_loader))
+            if "audio" not in first_train_batch or "length" not in first_train_batch:
+                self.logger.warning(
+                    "[Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
+                    "Currently missing: "
+                    + ", ".join(k for k in ["audio", "length"] if k not in first_train_batch)
+                )
 
             train_loader_for_training = DataLoader(
                 wrapped_train_dataset,
@@ -1245,8 +1265,11 @@ class Trainer:
                     num_workers=self.num_workers,
                     pin_memory=True,
                     collate_fn=self._data_loader_safe_collate,
-
                 )
+
+                first_val_batch = next(iter(val_loader))
+                if "audio" not in first_val_batch or "length" not in first_val_batch:
+                    self.logger.warning("[Dataset Check] val_loader should return both 'audio' and 'length'.")
 
             self._train_hubert(
                 train_loader_for_training=train_loader_for_training,
