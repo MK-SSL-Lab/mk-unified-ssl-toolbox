@@ -41,7 +41,7 @@ class GumbelVectorQuantizer(nn.Module):
             torch.FloatTensor(1, num_groups, self.num_entries_per_codebook, self.dim // num_groups)
         )
 
-        nn.init.uniform_(self.code_book, -1.0 / self.dim, 1.0 / self.dim)
+        nn.init.uniform_(self.codebook, -1.0 / self.dim, 1.0 / self.dim)
 
         self.codevector_proj = nn.Linear(self.dim, self.code_vector_size)
 
@@ -91,7 +91,7 @@ class GumbelVectorQuantizer(nn.Module):
 
         # Compute quantized code vectors from one-hot indices
         gumbel_out = gumbel_out.unsqueeze(-1)  # (B, L, G, V, 1)
-        codebook = self.code_book  # (1, G, V, D/G)
+        codebook = self.codebook  # (1, G, V, D/G)
         code_vectors = torch.sum(gumbel_out * codebook, dim=-2)  # (B, L, G, D/G)
 
         # Reshape to (B, L, D) where D = dim

@@ -43,7 +43,7 @@ class Trainer:
     def __init__(
         self,
         method: str,
-        backbone: nn.Module,
+        backbone: nn.Module = None,
         variant: str = None,
         save_dir: str = ".",
         checkpoint_interval: int = 10,
