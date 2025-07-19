@@ -1045,8 +1045,6 @@ class Trainer:
         self.logger.info("HuBERT training complete across all specified iterations.")
 
 
-
-
     def _validate_hubert(
         self, val_loader: DataLoader, iteration: int, epoch: int
     ) -> None:
@@ -1081,6 +1079,7 @@ class Trainer:
                 )
         self.model.train()
         return avg_val_loss
+
 
     def train(
         self,

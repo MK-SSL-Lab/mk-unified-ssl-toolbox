@@ -68,9 +68,10 @@ class HuBERT(nn.Module):
 
         # Convolutional Feature Extractor
         self.feature_extractor = ConvFeatureExtractor(
+            variant="layer_norm",
             conv_layers=config["conv_layers"],
-            conv_dropout=config["conv_dropout"],
         )
+
         feature_extractor_output_dim = config["feature_extractor_output_dim"]
 
         # Feature projection for Transformer input
@@ -108,7 +109,6 @@ class HuBERT(nn.Module):
                     (512, 10, 5), (512, 3, 2), (512, 3, 2),
                     (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)
                 ],
-                conv_dropout=0.0,
                 feature_extractor_output_dim=512, # Output of the last conv layer
                 encoder_embed_dim=768,
                 encoder_ff_interm_features=3072,
@@ -130,7 +130,6 @@ class HuBERT(nn.Module):
                     (512, 10, 5), (512, 3, 2), (512, 3, 2),
                     (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)
                 ],
-                conv_dropout=0.0,
                 feature_extractor_output_dim=512,
                 encoder_embed_dim=1024,
                 encoder_ff_interm_features=4096,
@@ -152,7 +151,6 @@ class HuBERT(nn.Module):
                     (512, 10, 5), (512, 3, 2), (512, 3, 2),
                     (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)
                 ],
-                conv_dropout=0.0,
                 feature_extractor_output_dim=512,
                 encoder_embed_dim=1280,
                 encoder_ff_interm_features=5120,
@@ -246,7 +244,8 @@ class HuBERT(nn.Module):
 
             mask_indices[i, masked_spans] = True
             masked_lengths[i] = len(masked_spans)
-            features[i, mask_indices[i]] = 0.0 # Set masked positions to zero or learned mask embedding
+            self.mask_embedding = nn.Parameter(torch.FloatTensor(self.config["encoder_embed_dim"]).uniform_())
+            features[i, mask_indices[i]] = self.mask_embedding
 
         # 4. Transformer Encoder
         # The padding_mask for the Transformer needs to be True for padded/masked tokens
