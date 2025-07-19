@@ -99,28 +99,23 @@ class SimCLRAudioTransform:
             return torchaudio.functional.pitch_shift(waveform, self.sample_rate, shift)
         except Exception:
             return waveform
-
     def _room_reverb(self, waveform):
-        # Ensure waveform has shape (C, T)
         if waveform.dim() == 1:
-            waveform = waveform.unsqueeze(0)  # (1, T)
+            waveform = waveform.unsqueeze(0)
         elif waveform.dim() == 2 and waveform.size(0) != 16:
-            # If not 16 channels, duplicate or pad to 16 channels
             waveform = waveform.repeat(16 // waveform.size(0), 1)
     
+        impulse_response = self._get_random_ir()  # Example: load or generate IR
         ir_len = impulse_response.size(-1)
         impulse_response = impulse_response / impulse_response.abs().max()
-    
-        # Expand IR to (16, 1, ir_len)
         impulse_response = impulse_response.unsqueeze(0).expand(16, -1)
     
-        waveform = F.pad(waveform, (0, ir_len - 1))  # (16, T+ir_len-1)
+        waveform = F.pad(waveform, (0, ir_len - 1))
         return F.conv1d(
-            waveform.unsqueeze(0),          # (1, 16, T)
-            impulse_response.unsqueeze(1),  # (16, 1, ir_len)
+            waveform.unsqueeze(0),
+            impulse_response.unsqueeze(1),
             groups=16
-        ).squeeze(0)                        # (16, new_T)
-    
+        ).squeeze(0)
 
     def _augment_waveform(self, waveform: torch.Tensor) -> torch.Tensor:
         if random.random() < 0.5:
