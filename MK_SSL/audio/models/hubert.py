@@ -85,15 +85,19 @@ class HuBERT(nn.Module):
         # Transformer Encoder
         self.encoder = TransformerEncoder(
             embed_dim=config["encoder_embed_dim"],
-            ff_interm_features=config["encoder_ff_interm_features"],
             num_layers=config["encoder_num_layers"],
             num_heads=config["encoder_num_heads"],
-            dropout=config["encoder_dropout"],
+            ff_interm_features=config["encoder_ff_interm_features"],
+            dropout_input=config["encoder_dropout_input"],
             attention_dropout=config["encoder_attention_dropout"],
-            activation_dropout=config["encoder_activation_dropout"],
-            encoder_layer_norm_first=config["encoder_layer_norm_first"],
-            encoder_layer_drop=config["encoder_layer_drop"],
+            ff_dropout=config["encoder_activation_dropout"],  # This matches fairseq's activation_dropout
+            final_dropout=config["encoder_dropout"],
+            layer_norm_first=config["encoder_layer_norm_first"],
+            layer_drop=config["encoder_layer_drop"],
+            pos_conv_kernel=128,    # default in paper/fairseq
+            pos_conv_groups=16,     # default in paper/fairseq
         )
+        
 
         # Prediction Head (maps Transformer output to number of clusters)
         self.prediction_head = nn.Linear(config["encoder_embed_dim"], num_clusters)
