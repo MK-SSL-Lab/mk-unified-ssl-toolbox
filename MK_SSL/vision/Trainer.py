@@ -585,6 +585,13 @@ class Trainer:
             self.train_dataset, batch_size=batch_size, shuffle=True, drop_last=True,
             num_workers=self.num_workers # Add num_workers for consistency
         )
+        first_train_batch = next(iter(train_loader))
+        if "audio" not in first_train_batch or "length" not in first_train_batch:
+            self.logger.warning(
+                "[Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
+                "Currently missing: "
+                + ", ".join(k for k in ["audio", "length"] if k not in first_train_batch)
+            )
 
 
         if self.method == "mae":
