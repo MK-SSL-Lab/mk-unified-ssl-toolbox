@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 from MK_SSL.audio.models.modules.heads import InputSpeechSimCLRProjectionHead, SpeechSimCLRProjectionHead
 from MK_SSL.audio.models.modules.feature_extractors import FBANKFeatureExtractor
 from MK_SSL.audio.models.modules.backbones import TransformerEncoder
-from MK_SSL.audio.models.modules.losses import NTXent_loss
+from MK_SSL.audio.models.modules.losses.NTXent_loss import NTXentLoss
 from MK_SSL.audio.models.modules.transformations import SimCLRAudioTransform
 
 
@@ -112,7 +112,7 @@ class SimCLRSpeech(nn.Module):
 register_method(
     name= "simclr",
     model_cls= SimCLRSpeech,
-    loss= NTXent_loss,
+    loss= NTXentLoss,
     transformation= SimCLRAudioTransform,
     default_params={},
     logs=lambda model, loss: (
