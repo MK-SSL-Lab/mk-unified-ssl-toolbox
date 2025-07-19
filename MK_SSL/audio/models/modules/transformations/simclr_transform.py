@@ -1,12 +1,13 @@
-import torchaudio.transforms as AT
 import torchaudio
+import torchaudio.transforms as AT
 import torch
 import random
-import zipfile
 import os
 import urllib.request
+import tarfile
 from pathlib import Path
 from torchaudio.functional import resample
+import torch.nn.functional as F
 
 
 class MUSANNoiseAdder:
@@ -15,7 +16,7 @@ class MUSANNoiseAdder:
         self.snr_range_db = snr_range_db
         self.noise_paths = list(Path(musan_root).rglob("*.wav"))
         if not self.noise_paths:
-            raise RuntimeError(f"No .wav files found under {musan_root}")
+            raise FileNotFoundError(f"No .wav files found under {musan_root}")
 
     def _load_random_noise(self, target_len: int) -> torch.Tensor:
         path = random.choice(self.noise_paths)
@@ -52,8 +53,6 @@ class SimCLRAudioTransform:
         self.time_mask_param = time_mask_param
         self.freq_mask_param = freq_mask_param
 
-        self.mel_transform = AT.MelSpectrogram(sample_rate=sample_rate, n_mels=n_mels)
-
         if use_musan:
             self._download_and_extract_musan(musan_root)
             self.noise_adder = MUSANNoiseAdder(musan_root, sample_rate=sample_rate)
@@ -66,16 +65,19 @@ class SimCLRAudioTransform:
         extract_path = Path(root).parent
 
         if not Path(root).exists():
-            print("[INFO] MUSAN not found. Downloading...")
-            urllib.request.urlretrieve(url, archive_path)
+            try:
+                urllib.request.urlretrieve(url, archive_path)
+            except Exception as e:
+                raise RuntimeError(f"Failed to download MUSAN dataset: {e}")
 
-            print("[INFO] Extracting MUSAN...")
-            import tarfile
-            with tarfile.open(archive_path, "r:gz") as tar:
-                tar.extractall(path=extract_path)
-
-            os.remove(archive_path)
-            print("[INFO] MUSAN downloaded and extracted.")
+            try:
+                with tarfile.open(archive_path, "r:gz") as tar:
+                    tar.extractall(path=extract_path)
+            except Exception as e:
+                raise RuntimeError(f"Failed to extract MUSAN dataset: {e}")
+            finally:
+                if Path(archive_path).exists():
+                    os.remove(archive_path)
 
     def _add_gaussian_noise(self, waveform: torch.Tensor) -> torch.Tensor:
         noise = torch.randn_like(waveform)
@@ -85,19 +87,26 @@ class SimCLRAudioTransform:
         return waveform + rms_noise * noise
 
     def _speed_perturb(self, waveform: torch.Tensor) -> torch.Tensor:
+        # Simulate speed change via resampling
         speed = random.uniform(0.8, 1.2)
-        effects = [["speed", str(speed)], ["rate", str(self.sample_rate)]]
-        waveform, _ = torchaudio.sox_effects.apply_effects_tensor(waveform, self.sample_rate, effects)
-        return waveform
+        new_sr = int(self.sample_rate * speed)
+        waveform = resample(waveform, self.sample_rate, new_sr)
+        return resample(waveform, new_sr, self.sample_rate)
 
     def _pitch_shift(self, waveform: torch.Tensor) -> torch.Tensor:
-        shift = random.randint(-300, 300)
-        return torchaudio.functional.pitch_shift(waveform, self.sample_rate, shift)
+        shift = random.randint(-300, 300)  # in cents
+        try:
+            return torchaudio.functional.pitch_shift(waveform, self.sample_rate, shift)
+        except Exception:
+            return waveform
 
-    def _spec_augment(self, spec: torch.Tensor) -> torch.Tensor:
-        spec = AT.TimeMasking(self.time_mask_param)(spec)
-        spec = AT.FrequencyMasking(self.freq_mask_param)(spec)
-        return spec
+    def _room_reverb(self, waveform: torch.Tensor) -> torch.Tensor:
+        # Simulate reverb using convolution with a random impulse response
+        ir_len = random.randint(256, 512)
+        impulse_response = torch.randn(1, ir_len) * 0.05
+        impulse_response = impulse_response / impulse_response.abs().max()
+        waveform = F.pad(waveform, (0, ir_len - 1))
+        return F.conv1d(waveform.unsqueeze(0), impulse_response.unsqueeze(0)).squeeze(0)
 
     def _augment_waveform(self, waveform: torch.Tensor) -> torch.Tensor:
         if random.random() < 0.5:
@@ -106,9 +115,11 @@ class SimCLRAudioTransform:
             waveform = self._pitch_shift(waveform)
         if random.random() < 0.5:
             waveform = self._speed_perturb(waveform)
+        if random.random() < 0.5:
+            waveform = self._room_reverb(waveform)
         return waveform
 
     def __call__(self, waveform: torch.Tensor):
-        x1 = self._spec_augment(self.mel_transform(self._augment_waveform(waveform.clone())))
-        x2 = self._spec_augment(self.mel_transform(self._augment_waveform(waveform.clone())))
+        x1 = self._augment_waveform(waveform.clone())
+        x2 = self._augment_waveform(waveform.clone())
         return x1, x2
