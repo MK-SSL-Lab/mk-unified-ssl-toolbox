@@ -248,20 +248,12 @@ class Trainer:
         logger_loader: Optional[DataLoader] = None,
         use_embedding_logger: bool = False,
     ):
-        """Training loop for wav2vec 2.0.
+        """Train the Wav2Vec2 model with embedding logging via Wav2Vec2Backbone."""
 
-        Args:
-            train_loader (DataLoader): Training data loader.
-            optimizer: Optimizer instance.
-            max_epochs (int): Number of training epochs.
-            start_epoch (int): Starting epoch number (for resuming training).
-            val_loader (Optional[DataLoader]): Validation data loader.
-            logger_loader (Optional[DataLoader]): Loader for logging embeddings.
-            use_embedding_logger (bool): Whether to log embeddings using EmbeddingLogger.
-        """
         self.logger.info(f"Starting training for Wav2Vec2 for {max_epochs} epochs.")
         self.model.train()
 
+        # Initialize embedding logger
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
             embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
@@ -273,17 +265,20 @@ class Trainer:
             )
             self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
 
+            # === Step 0: log initial embeddings before training ===
             self.logger.info("[Wav2Vec2 - Step 0] Logging pre-training embeddings...")
-            self.model.eval()
-            all_embeddings, all_labels = [], []
+            backbone = Wav2Vec2Backbone(self.model).to(self.device)
+            backbone.eval()
 
+            all_embeddings, all_labels = [], []
             with torch.no_grad():
                 for batch in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
                     audio = batch["audio"].to(self.device)
                     lengths = batch['length'].to(self.device)
                     labels = batch["label"].to(self.device)
-                    context_features, *_ = self.model(audio, lengths)
-                    all_embeddings.append(context_features)
+
+                    embeddings = backbone(audio, lengths)
+                    all_embeddings.append(embeddings)
                     all_labels.append(labels)
 
             embeddings = torch.cat(all_embeddings, dim=0)
@@ -295,6 +290,7 @@ class Trainer:
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
+        # === Training Loop ===
         for epoch in range(start_epoch, max_epochs):
             running_loss = 0.0
             pbar = tqdm(train_loader, desc=f"Wav2Vec2 Epoch {epoch+1}/{max_epochs}")
@@ -330,15 +326,41 @@ class Trainer:
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({"train/epoch_loss": avg_loss}, step=epoch + 1)
 
+            # === Log embeddings during training ===
+            if use_embedding_logger:
+                self.logger.info(f"[Wav2Vec2 - Epoch {epoch+1}] Logging embeddings...")
+                backbone = Wav2Vec2Backbone(self.model).to(self.device)
+                backbone.eval()
+
+                all_embeddings, all_labels = [], []
+                with torch.no_grad():
+                    for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch+1}"):
+                        audio = batch["audio"].to(self.device)
+                        lengths = batch['length'].to(self.device)
+                        labels = batch["label"].to(self.device)
+
+                        embeddings = backbone(audio, lengths)
+                        all_embeddings.append(embeddings)
+                        all_labels.append(labels)
+
+                embeddings = torch.cat(all_embeddings, dim=0)
+                labels = torch.cat(all_labels, dim=0)
+
+                embedding_logger.log_step(step=epoch + 1, embeddings=embeddings, labels=labels)
+                self.logger.info(f"[Wav2Vec2 - Epoch {epoch+1}] Embeddings logged.")
+                self.model.train()
+
             if val_loader:
                 avg_val_loss = self._validate_wav2vec2(val_loader, epoch)
 
-            # Save checkpoints
-            if (epoch + 1) % self.checkpoint_interval == 0:
-                model_path = os.path.join(
-                    self.checkpoint_path,
-                    f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth"
-                )
+            if hasattr(self, "_optuna_trial"):
+                metric = avg_val_loss if val_loader else avg_loss
+                self._optuna_trial.report(metric, epoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()
+
+            if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
+                model_path = os.path.join(self.checkpoint_path, f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth")
                 torch.save(self.model.state_dict(), model_path)
                 self.logger.info(f"Model checkpoint saved: {model_path}")
 
@@ -350,6 +372,7 @@ class Trainer:
                         metadata={"epoch": epoch+1, "loss": avg_loss}
                     )
 
+        # === Save final model ===
         final_path = os.path.join(self.checkpoint_path, f"{self.method}_model_{self.timestamp}_final.pth")
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
@@ -420,7 +443,6 @@ class Trainer:
         return avg_val_loss
 
 
-
     def _train_simclr(
         self,
         train_loader,
@@ -431,12 +453,14 @@ class Trainer:
         logger_loader: Optional[DataLoader] = None,
         use_embedding_logger: bool = False,
     ) -> None:
+        """Train the SimCLR model with embedding logging via SimCLRBackbone."""
         if self.transformation is None:
             self.logger.error("Transformation not given!")
             raise ValueError("Transformation not given!")
 
         self.model.train()
 
+        # === Step 0: log initial embeddings ===
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
             embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
@@ -448,18 +472,18 @@ class Trainer:
             )
             self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
 
-            # === Step 0: log initial embeddings ===
             self.logger.info("[SimCLR - Step 0] Logging pre-training embeddings...")
-            self.model.eval()
-            all_embeddings, all_labels = [], []
+            backbone = SimCLRBackbone(self.model).to(self.device)
+            backbone.eval()
 
+            all_embeddings, all_labels = [], []
             with torch.no_grad():
                 for batch in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
                     audio = batch["audio"].to(self.device)
                     labels = batch["label"].to(self.device)
                     view0, _ = self.transformation(audio)
-                    out, _ = self.model(view0, view0)
-                    all_embeddings.append(out)
+                    embeddings = backbone(view0)  # Use SimCLRBackbone for embeddings
+                    all_embeddings.append(embeddings)
                     all_labels.append(labels)
 
             embeddings = torch.cat(all_embeddings, dim=0)
@@ -471,6 +495,7 @@ class Trainer:
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
+        # === Training Loop ===
         for epoch in range(start_epoch, max_epochs):
             running_loss = 0.0
             pbar = tqdm(train_loader, desc=f"SimCLR Epoch {epoch+1}/{max_epochs}")
@@ -501,18 +526,20 @@ class Trainer:
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({"train/epoch_loss": avg_loss}, step=epoch + 1)
 
+            # === Embedding logger ===
             if use_embedding_logger:
                 self.logger.info(f"[SimCLR - Epoch {epoch+1}] Logging embeddings...")
-                self.model.eval()
-                all_embeddings, all_labels = [], []
+                backbone = SimCLRBackbone(self.model).to(self.device)
+                backbone.eval()
 
+                all_embeddings, all_labels = [], []
                 with torch.no_grad():
                     for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch+1}"):
                         audio = batch["audio"].to(self.device)
                         labels = batch["label"].to(self.device)
                         view0, _ = self.transformation(audio)
-                        out, _ = self.model(view0, view0)
-                        all_embeddings.append(out)
+                        embeddings = backbone(view0)  # Use SimCLRBackbone for embeddings
+                        all_embeddings.append(embeddings)
                         all_labels.append(labels)
 
                 embeddings = torch.cat(all_embeddings, dim=0)
@@ -574,7 +601,6 @@ class Trainer:
         self.logger.info("SimCLR training complete.")
 
 
-
     def _validate_simclr(self, val_loader: DataLoader, epoch: int):
 
         self.model.eval()
@@ -612,12 +638,14 @@ class Trainer:
         logger_loader: Optional[DataLoader] = None,
         use_embedding_logger: bool = False,
     ) -> None:
+        """Train the COLA model with embedding logging via COLABackbone."""
         if self.transformation is None:
             self.logger.error("Transformation not given!")
             raise ValueError("Transformation not given!")
 
         self.model.train()
 
+        # === Step 0: Log pre-training embeddings ===
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
             embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
@@ -629,18 +657,18 @@ class Trainer:
             )
             self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
 
-            # === Step 0: Log pre-training embeddings ===
             self.logger.info("[COLA - Step 0] Logging pre-training embeddings...")
-            self.model.eval()
-            all_embeddings, all_labels = [], []
+            backbone = COLABackbone(self.model).to(self.device)
+            backbone.eval()
 
+            all_embeddings, all_labels = [], []
             with torch.no_grad():
                 for batch in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
                     audio = batch["audio"].to(self.device)
                     labels = batch["label"].to(self.device)
                     view0, _ = self.transformation(audio)
-                    out, _ = self.model(view0, view0)
-                    all_embeddings.append(out)
+                    embeddings = backbone(view0)  # Get embeddings via COLABackbone
+                    all_embeddings.append(embeddings)
                     all_labels.append(labels)
 
             embeddings = torch.cat(all_embeddings, dim=0)
@@ -652,6 +680,7 @@ class Trainer:
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
+        # === Training Loop ===
         for epoch in range(start_epoch, max_epochs):
             running_loss = 0.0
             pbar = tqdm(train_loader, desc=f"COLA Epoch {epoch+1}/{max_epochs}")
@@ -673,7 +702,6 @@ class Trainer:
                 pbar.set_postfix({"loss": loss.item()})
 
                 global_step = epoch * len(train_loader) + batch_idx
-
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log({"train/batch_loss": loss.item()}, step=global_step)
 
@@ -686,17 +714,17 @@ class Trainer:
             # === Embedding logger ===
             if use_embedding_logger:
                 self.logger.info(f"[COLA - Epoch {epoch+1}] Logging embeddings...")
+                backbone = COLABackbone(self.model).to(self.device)
+                backbone.eval()
 
-                self.model.eval()
                 all_embeddings, all_labels = [], []
-
                 with torch.no_grad():
                     for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch+1}"):
                         audio = batch["audio"].to(self.device)
                         labels = batch["label"].to(self.device)
                         view0, _ = self.transformation(audio)
-                        out, _ = self.model(view0, view0)
-                        all_embeddings.append(out)
+                        embeddings = backbone(view0)  # Get embeddings via COLABackbone
+                        all_embeddings.append(embeddings)
                         all_labels.append(labels)
 
                 embeddings = torch.cat(all_embeddings, dim=0)
@@ -763,7 +791,6 @@ class Trainer:
         self.logger.info("COLA training complete.")
 
 
-
     def _validate_cola(self, val_loader: DataLoader, epoch: int):
 
         self.model.eval()
@@ -806,12 +833,14 @@ class Trainer:
         use_embedding_logger: bool = False,
         **kwargs,
     ):
+        """Train the HuBERT model with embedding logging via HuBERTBackbone."""
         transformer_layer = kwargs.get(
             "transformer_layer", getattr(self.model, "extractor_layer", None)
         )
         if transformer_layer is None:
             self.logger.warning("No 'transformer_layer' specified for HuBERT.")
 
+        # === Initialize embedding logger and log initial embeddings ===
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
             embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
@@ -823,9 +852,29 @@ class Trainer:
             )
             self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
 
+            # Log initial embeddings before any HuBERT iterations
+            self.logger.info("[HuBERT - Step 0] Logging pre-training embeddings...")
+            backbone = HuBERTBackbone(self.model).to(self.device)
+            backbone.eval()
+
+            all_embeddings, all_labels = [], []
+            with torch.no_grad():
+                for batch in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
+                    audio = batch["audio"].to(self.device)
+                    labels = batch["label"].to(self.device)
+                    embeddings = backbone(audio)
+                    all_embeddings.append(embeddings)
+                    all_labels.append(labels)
+
+            embeddings = torch.cat(all_embeddings, dim=0)
+            labels = torch.cat(all_labels, dim=0)
+            embedding_logger.log_step(step=0, embeddings=embeddings, labels=labels)
+            self.logger.info("[HuBERT - Step 0] Pre-training embeddings logged.")
+
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
+        # === Iteration Loop ===
         for iteration in range(start_iteration, num_hubert_iterations):
             self.logger.info(f"--- Starting HuBERT Iteration {iteration + 1}/{num_hubert_iterations} ---")
             if self.wandb_logger.is_active:
@@ -835,6 +884,7 @@ class Trainer:
                 self.pseudo_label_generator.save_dir, f"pseudo_labels_iter_{iteration}.npy"
             )
 
+            # === Pseudo-label generation ===
             if os.path.exists(iteration_pseudo_labels_path):
                 self.logger.info(f"Loading existing pseudo-labels from {iteration_pseudo_labels_path}")
                 pseudo_labels_dict = np.load(iteration_pseudo_labels_path, allow_pickle=True).item()
@@ -868,31 +918,11 @@ class Trainer:
             train_loader_for_training.dataset.set_pseudo_labels(pseudo_labels_dict)
             self.logger.info("Updated training dataset with pseudo-labels.")
 
-            # === Log step 0 embeddings before training ===
-            if use_embedding_logger:
-                self.logger.info(f"[HuBERT Iter {iteration+1} - Step 0] Logging pre-training embeddings...")
-                self.model.eval()
-                all_embeddings, all_labels = [], []
-
-                with torch.no_grad():
-                    for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Iter {iteration+1} Step 0"):
-                        audio = batch["audio"].to(self.device)
-                        labels = batch["label"].to(self.device)
-                        _, _, features, _ = self.model(audio)
-                        all_embeddings.append(features)
-                        all_labels.append(labels)
-
-                embeddings = torch.cat(all_embeddings, dim=0)
-                labels = torch.cat(all_labels, dim=0)
-                embedding_logger.log_step(step=0, embeddings=embeddings, labels=labels)
-                self.logger.info(f"[HuBERT Iter {iteration+1} - Step 0] Embeddings logged.")
-                self.model.train()
-
             self.logger.info(f"Starting model training for HuBERT Iteration {iteration + 1} for {max_epochs} epochs.")
             self.model.train()
-
             current_iter_start_epoch = start_epoch if iteration == start_iteration else 0
 
+            # === Epoch Loop ===
             for epoch in range(current_iter_start_epoch, max_epochs):
                 running_loss = 0.0
                 pbar = tqdm(train_loader_for_training, desc=f"HuBERT Iter {iteration+1}, Epoch {epoch+1}/{max_epochs}")
@@ -914,7 +944,6 @@ class Trainer:
                     pbar.set_postfix({"loss": loss.item()})
 
                     global_step = epoch * len(train_loader_for_training) + batch_idx
-
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log(
                             {
@@ -936,17 +965,19 @@ class Trainer:
                         step=epoch + 1
                     )
 
+                # === Embedding logger per epoch ===
                 if use_embedding_logger:
                     self.logger.info(f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Logging embeddings...")
-                    self.model.eval()
-                    all_embeddings, all_labels = [], []
+                    backbone = HuBERTBackbone(self.model).to(self.device)
+                    backbone.eval()
 
+                    all_embeddings, all_labels = [], []
                     with torch.no_grad():
                         for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Iter {iteration+1} Epoch {epoch+1}"):
                             audio = batch["audio"].to(self.device)
                             labels = batch["label"].to(self.device)
-                            _, _, features, _ = self.model(audio)
-                            all_embeddings.append(features)
+                            embeddings = backbone(audio)
+                            all_embeddings.append(embeddings)
                             all_labels.append(labels)
 
                     embeddings = torch.cat(all_embeddings, dim=0)
@@ -955,6 +986,7 @@ class Trainer:
                     self.logger.info(f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Embeddings logged.")
                     self.model.train()
 
+                # === Validation and Checkpoint ===
                 if (epoch + 1) % self.checkpoint_interval == 0 and not hasattr(self, "_optuna_trial"):
                     model_path = os.path.join(
                         self.checkpoint_path,
@@ -980,6 +1012,7 @@ class Trainer:
                     if self._optuna_trial.should_prune():
                         raise optuna.TrialPruned()
 
+            # === Final model saving for iteration ===
             final_model_path = os.path.join(
                 self.checkpoint_path,
                 f"{self.method}_iter{iteration+1}_final_model_{self.timestamp}.pth",
@@ -995,6 +1028,7 @@ class Trainer:
                     metadata={"iteration": iteration+1, "epochs_trained": max_epochs, "final_loss": avg_loss}
                 )
 
+            # === Final animation logging per iteration ===
             if use_embedding_logger:
                 self.logger.info(f"Generating embedding animation for HuBERT Iteration {iteration+1}...")
                 animation_path = embedding_logger.plot_all()
@@ -1009,7 +1043,6 @@ class Trainer:
                     self.logger.info("Embedding animation logged to Weights & Biases.")
 
         self.logger.info("HuBERT training complete across all specified iterations.")
-
 
 
 
