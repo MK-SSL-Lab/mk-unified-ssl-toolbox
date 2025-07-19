@@ -1199,6 +1199,7 @@ class Trainer:
                     + ", ".join(k for k in ["audio", "length"] if k not in first_train_batch)
                 )
 
+
             val_loader = None
             if val_dataset:
                 val_loader = DataLoader(

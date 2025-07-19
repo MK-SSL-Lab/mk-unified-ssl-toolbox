@@ -908,6 +908,7 @@ class Trainer:
                 
                 raise ValueError(f"Optimizer {optimizer} not supported")
 
+
         if self.reload_checkpoint:
             start_epoch = self._reload_latest_checkpoint() + 1 # +1 because _reload returns 0-indexed epoch
 
