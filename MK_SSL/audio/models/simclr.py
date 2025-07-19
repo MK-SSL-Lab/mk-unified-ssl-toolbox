@@ -69,8 +69,8 @@ class SimCLRSpeech(nn.Module):
                 final_dropout=0.1,
                 layer_norm_first=True,   # the paper switched all BatchNorm to LayerNorm; Pre-LN is fine
                 layer_drop=0.0,
-                pos_conv_kernel=7,    # not used in the paper; standard sinusoidal positional enc. suffices
-                pos_conv_groups=None,
+                pos_conv_kernel=128,    # not used in the paper; standard sinusoidal positional enc. suffices
+                pos_conv_groups=16,
             )
 
         self.projection_head = SpeechSimCLRProjectionHead(
