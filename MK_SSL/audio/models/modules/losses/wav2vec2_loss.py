@@ -1,14 +1,21 @@
-import random
-
 import torch
 import torch.nn as nn
 from torch import Tensor
-
 from typing import List
-
-
+import random
 
 class Wav2Vec2Loss(nn.Module):
+    """Contrastive + Diversity loss for wav2vec 2.0 pretraining.
+
+    Implements the contrastive prediction task (Lm) and the codebook
+    diversity loss (Ld) from Baevski et al. (2020).
+
+    Args:
+        temperature (float): Temperature scaling for contrastive loss.
+        num_distractors (int): Number of negative distractor samples per positive sample.
+        alpha (float): Weight for the diversity loss term.
+    """
+
     def __init__(
         self,
         temperature: float = 0.1,
@@ -19,22 +26,22 @@ class Wav2Vec2Loss(nn.Module):
         self.temperature = temperature
         self.num_distractors = num_distractors
         self.alpha = alpha
-
         self.similarity = nn.CosineSimilarity(dim=-1)
 
     def forward(
         self,
         context: Tensor,
         quantized: Tensor,
-        perplexity: Tensor,
+        codevector_probs: Tensor,
         time_mask_indices: Tensor,
     ) -> Tensor:
-        """
+        """Compute total loss.
+
         Args:
-            context (Tensor): Encoder output. Shape: (B, T, D)
-            quantized (Tensor): Quantized targets. Shape: (B, T, D)
-            perplexity (Tensor): Code usage distribution. Shape: (G, V)
-            time_mask_indices (Tensor): Mask positions. Shape: (B, T)
+            context (Tensor): Contextualized encoder output of shape (B, T, D).
+            quantized (Tensor): Quantized targets of shape (B, T, D).
+            codevector_probs (Tensor): Codebook probabilities of shape (G, V).
+            time_mask_indices (Tensor): Boolean mask for time positions of shape (B, T).
 
         Returns:
             Tensor: Combined loss scalar.
@@ -48,52 +55,29 @@ class Wav2Vec2Loss(nn.Module):
         negatives = torch.cat([target_quantized.unsqueeze(1), negatives], dim=1)
 
         contrastive_loss = self._contrastive_loss(target_context, target_quantized, negatives)
-        diversity_loss = self._diversity_loss(perplexity)
+        diversity_loss = self._diversity_loss(codevector_probs)
 
         return contrastive_loss + self.alpha * diversity_loss
 
-
-    def _contrastive_loss(
-        self,
-        targets: Tensor,
-        positives: Tensor,
-        negatives: Tensor,
-    ) -> Tensor:
-        """
-        Computes contrastive loss.
-
-        Args:
-            targets (Tensor): Anchor representations. Shape: (N, D)
-            positives (Tensor): Positive samples. Shape: (N, D)
-            negatives (Tensor): Negative samples. Shape: (N, K, D)
-
-        Returns:
-            Tensor: Scalar loss.
-        """
+    def _contrastive_loss(self, targets: Tensor, positives: Tensor, negatives: Tensor) -> Tensor:
+        """Compute contrastive loss."""
         pos_sim = torch.exp(self.similarity(targets, positives) / self.temperature)
         neg_sim = torch.exp(self.similarity(targets.unsqueeze(1), negatives) / self.temperature).sum(dim=1)
         return -torch.log(pos_sim / neg_sim).mean()
 
     def _diversity_loss(self, probs: Tensor) -> Tensor:
-        """
-        Computes diversity loss encouraging codebook usage.
-
-        Args:
-            probs (Tensor): Codebook probabilities. Shape: (G, V)
-
-        Returns:
-            Tensor: Scalar loss.
-        """
+        """Compute diversity loss encouraging equal codebook usage."""
         entropy = torch.sum(probs * torch.log(probs + 1e-7), dim=-1)
-        return torch.sum(entropy) / (self.num_groups * self.num_codevectors)
+        G, V = probs.shape
+        return torch.sum(entropy) / (G * V)
 
     def _sample_negatives(self, positives: Tensor, targets_per_batch: List[int]) -> Tensor:
+        """Sample negative examples for contrastive loss."""
         negatives = []
         start = 0
 
         for count in targets_per_batch:
             if count <= 1:
-                # No negatives possible for a single target
                 negatives.append(positives.new_zeros((count, self.num_distractors, positives.size(-1))))
                 start += count
                 continue

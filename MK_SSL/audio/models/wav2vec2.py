@@ -1,28 +1,30 @@
 import random
-
 import torch
 import torch.nn as nn
 from torch import Tensor
-from typing import Optional, Tuple
+from typing import Tuple, Optional
 
 from MK_SSL.audio.models.modules.feature_extractors import ConvFeatureExtractor
 from MK_SSL.audio.models.modules.backbones import TransformerEncoder
 from MK_SSL.audio.models.modules.quantizer import GumbelVectorQuantizer
 from MK_SSL.audio.models.modules.heads import Wav2Vec2FeatureProjectionHead
 from MK_SSL.audio.models.modules.losses import Wav2Vec2Loss
-
 from MK_SSL.audio.models.utils import register_method
 
 
 class Wav2Vec2(nn.Module):
-    """
-    wav2vec 2.0 pretraining model (feature extractor + transformer + quantizer).
+    """wav2vec 2.0 pretraining model.
+
+    This class combines a convolutional feature extractor, a transformer encoder,
+    and a Gumbel vector quantizer to learn contextualized speech representations.
 
     Args:
         variant (str): Model variant to use. One of {"base", "large", "large_lv60k"}.
-        quantizer_groups (int): Number of groups in the codebook quantizer.
-        quantizer_vars (int): Number of total codebook entries.
-        quantizer_temp (float): Initial temperature for the Gumbel softmax quantizer.
+        quantizer_num_groups (int): Number of groups in the codebook quantizer.
+        quantizer_num_entries_per_codebook (int): Number of codebook entries per group.
+        quantizer_temp (float): Initial temperature for Gumbel-softmax in the quantizer.
+        num_mask_time_steps (int): Number of consecutive time steps to mask during pretraining.
+        mask_time_prob (float): Probability of starting a mask at any given time step.
     """
 
     def __init__(
@@ -33,18 +35,14 @@ class Wav2Vec2(nn.Module):
         quantizer_temp: float = 2.0,
         num_mask_time_steps: int = 10,
         mask_time_prob: float = 0.065,
-        **kwargs  
-
+        **kwargs
     ):
         super().__init__()
         self.variant = variant
-
-        model_config = self._get_config(self.variant)
-        self.model_config = model_config
+        self.model_config = self._get_config(variant)
 
         self.__quantizer_num_groups = quantizer_num_groups
         self.__quantizer_num_entries_per_codebook = quantizer_num_entries_per_codebook
-        
         self.num_mask_time_steps = num_mask_time_steps
         self.mask_time_prob = mask_time_prob
 
@@ -90,40 +88,71 @@ class Wav2Vec2(nn.Module):
         waveforms: Tensor,
         lengths: Tensor,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        """
-        Forward pass through Wav2Vec2.
+        """Forward pass through Wav2Vec2.
 
         Args:
-            waveforms (Tensor): Raw audio input, shape (B, T).
-            lengths (Tensor): Lengths of each audio sample (before padding), shape (B,).
+            waveforms (Tensor): Raw audio input of shape (B, T).
+            lengths (Tensor): Lengths of each audio sample before padding, shape (B,).
 
         Returns:
-            context (Tensor): Contextualized representations from encoder (B, T', C).
-            quantized (Tensor): Quantized features from vector quantizer (B, T', C).
-            mask_indices (BoolTensor): Boolean mask showing which positions were masked (B, T').
-            code_perplexity (Tensor): Codebook perplexity, scalar tensor.
-            prob_perplexity (Tensor): Probability perplexity, scalar tensor.
-            codevector_probs (Tensor): Soft assignment probabilities from quantizer (B, T', G, V).
+            Tuple[Tensor, Tensor, Tensor, Tensor]:
+                - Contextualized encoder outputs (B, T', D).
+                - Quantized latent vectors (B, T', D).
+                - Codebook probabilities (G, V).
+                - Boolean mask indices indicating masked positions (B, T').
         """
-        # 1. Feature extraction
         hidden_states, lengths = self.feature_extractor(waveforms, lengths)
-        
-        # 2. Quantization (detach to prevent gradient flow)
-        quantized_features, perplexity = self.quantizer(hidden_states, lengths)
 
-        # 3.Project the quantized features to the encoder's embedding dimension
+        quantized_features, codevector_probs, _ = self.quantizer(hidden_states, lengths)
         hidden_states = self.feature_proj(hidden_states)
 
-        # 4. Compute and apply masking
         masked_hidden_states, time_mask_indices = self.time_masking(hidden_states.clone(), lengths)
-        
-        # 5. Contextualization
         context = self.encoder(masked_hidden_states, lengths)
 
+        return context, quantized_features, codevector_probs, time_mask_indices
 
-        return context, quantized_features, perplexity, time_mask_indices
-    
-    
+    def time_masking(self, hidden_states: Tensor, lengths: Tensor) -> Tuple[Tensor, Tensor]:
+        """Apply time masking to hidden states.
+
+        Args:
+            hidden_states (Tensor): Input features of shape (B, T, D).
+            lengths (Tensor): Valid lengths of shape (B,).
+
+        Returns:
+            Tuple[Tensor, Tensor]:
+                - Masked hidden states (B, T, D).
+                - Boolean mask of shape (B, T).
+        """
+        B, T, D = hidden_states.size()
+
+        if not hasattr(self, "mask_embedding"):
+            self.mask_embedding = nn.Parameter(torch.FloatTensor(D).uniform_())
+            self.register_parameter("mask_embedding", self.mask_embedding)
+
+        time_mask_indices = torch.zeros(B, T, device=hidden_states.device, dtype=torch.bool)
+
+        for b in range(B):
+            valid_length = int(lengths[b])
+            if valid_length <= 1:
+                continue
+
+            max_start = max(1, valid_length - self.num_mask_time_steps)
+            starts = random.sample(range(max_start), max(1, int(self.mask_time_prob * valid_length)))
+            for s in starts:
+                end = min(valid_length, s + self.num_mask_time_steps)
+                time_mask_indices[b, s:end] = 1
+
+        hidden_states[time_mask_indices] = self.mask_embedding.to(hidden_states.device)
+        return hidden_states, time_mask_indices
+
+    @property
+    def quantizer_num_groups(self) -> int:
+        return self.__quantizer_num_groups
+
+    @property
+    def quantizer_num_entries_per_codebook(self) -> int:
+        return self.__quantizer_num_entries_per_codebook
+
     def _get_config(self, variant: str) -> dict:
         base_conv = [
             (512, 10, 5),
@@ -198,66 +227,26 @@ class Wav2Vec2(nn.Module):
             raise ValueError(f"Invalid variant: {variant}")
         return presets[variant]
 
-    def time_masking(self, hidden_states: torch.Tensor, lengths: torch.Tensor) -> tuple[torch.Tensor, torch.BoolTensor]:
-        batch_size, num_steps, hidden_size = hidden_states.size()
-
-        if not hasattr(self, "mask_embedding"):
-            self.mask_embedding = nn.Parameter(torch.FloatTensor(hidden_size).uniform_())
-            self.register_parameter("mask_embedding", self.mask_embedding)
-
-        time_mask_indices = torch.zeros(batch_size, num_steps, device=hidden_states.device, dtype=torch.bool)
-
-        for b in range(batch_size):
-            valid_length = int(lengths[b])
-            all_starts = list(range(valid_length))
-            num_masks = max(1, int(self.mask_time_prob * valid_length))
-
-            starts = random.sample(all_starts, min(num_masks, valid_length))
-            for s in starts:
-                end = min(valid_length, s + self.num_mask_time_steps)
-                time_mask_indices[b, s:end] = 1
-
-        hidden_states[time_mask_indices] = self.mask_embedding.to(hidden_states.device)
-        return hidden_states, time_mask_indices
-
-
-
-
-
-
-    
-    @property
-    def quantizer_num_groups(self) -> int:
-        return self.__quantizer_num_groups
-    
-    @property
-    def quantizer_num_entries_per_codebook(self) -> int:
-        return self.__quantizer_num_entries_per_codebook
-    
-
 
 register_method(
-    name= "wav2vec2",
-    model_cls= Wav2Vec2,
-    loss= Wav2Vec2Loss,
-    transformation= None,
+    name="wav2vec2",
+    model_cls=Wav2Vec2,
+    loss=Wav2Vec2Loss,
+    transformation=None,
     default_params={},
     logs=lambda model, loss: (
         "\n"
         "---------------- Wav2Vec2 Configuration ----------------\n"
-        f"Model Variant                     : {model.variant}\n"
-        f"Encoder Embedding Dimension       : {model.encoder.embed_dim}\n"
-        f"Encoder Layers                    : {model.encoder.num_layers}\n"
-        f"Encoder Attention Heads           : {model.encoder.num_heads}\n"
-        f"Feedforward Hidden Dimension      : {model.encoder.ff_interm_features}\n"
-        f"Feature Projection Dropout        : {model.encoder.dropout_input}\n"
-        f"Quantizer Groups                  : {model.quantizer_num_groups}\n"
-        f"Entries per Codebook              : {model.quantizer_num_entries_per_codebook}\n"
+        f"Model Variant                : {model.variant}\n"
+        f"Encoder Embedding Dimension  : {model.encoder.embed_dim}\n"
+        f"Encoder Layers               : {model.encoder.num_layers}\n"
+        f"Encoder Attention Heads      : {model.encoder.num_heads}\n"
+        f"Feedforward Hidden Dimension : {model.encoder.ff_interm_features}\n"
+        f"Feature Projection Dropout   : {model.encoder.dropout_input}\n"
+        f"Quantizer Groups             : {model.quantizer_num_groups}\n"
+        f"Entries per Codebook         : {model.quantizer_num_entries_per_codebook}\n"
         f"Code Vector Size             : {model.quantizer.code_vector_size}\n"
-        f"Feature Projection Dropout        : {model.feature_proj.dropout}\n"
-        "Masking                           : Applied internally on latent features\n"
-        "Loss                              : Contrastive + Diversity Loss (Wav2Vec2Loss)"
-        f"Loss Temperature                : {loss.temperature}\n"
-        f"Loss Alpha                     : {loss.alpha}\n"
+        f"Loss Temperature             : {loss.temperature}\n"
+        f"Loss Alpha                   : {loss.alpha}\n"
     )
 )
