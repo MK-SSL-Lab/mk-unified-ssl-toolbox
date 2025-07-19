@@ -1249,13 +1249,6 @@ class Trainer:
                 collate_fn=self._data_loader_safe_collate,
             )
             
-            first_train_batch = next(iter(train_loader_for_pseudo_label_gen))
-            if "audio" not in first_train_batch or "length" not in first_train_batch:
-                self.logger.warning(
-                    "[Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
-                    "Currently missing: "
-                    + ", ".join(k for k in ["audio", "length"] if k not in first_train_batch)
-                )
 
             train_loader_for_training = DataLoader(
                 wrapped_train_dataset,
@@ -1278,9 +1271,6 @@ class Trainer:
                     collate_fn=self._data_loader_safe_collate,
                 )
 
-                first_val_batch = next(iter(val_loader))
-                if "audio" not in first_val_batch or "length" not in first_val_batch:
-                    self.logger.warning("[Dataset Check] val_loader should return both 'audio' and 'length'.")
 
             self._train_hubert(
                 train_loader_for_training=train_loader_for_training,
