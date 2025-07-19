@@ -100,13 +100,27 @@ class SimCLRAudioTransform:
         except Exception:
             return waveform
 
-    def _room_reverb(self, waveform: torch.Tensor) -> torch.Tensor:
-        # Simulate reverb using convolution with a random impulse response
-        ir_len = random.randint(256, 512)
-        impulse_response = torch.randn(1, ir_len) * 0.05
+    def _room_reverb(self, waveform):
+        # Ensure waveform has shape (C, T)
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)  # (1, T)
+        elif waveform.dim() == 2 and waveform.size(0) != 16:
+            # If not 16 channels, duplicate or pad to 16 channels
+            waveform = waveform.repeat(16 // waveform.size(0), 1)
+    
+        ir_len = impulse_response.size(-1)
         impulse_response = impulse_response / impulse_response.abs().max()
-        waveform = F.pad(waveform, (0, ir_len - 1))
-        return F.conv1d(waveform.unsqueeze(0), impulse_response.unsqueeze(0)).squeeze(0)
+    
+        # Expand IR to (16, 1, ir_len)
+        impulse_response = impulse_response.unsqueeze(0).expand(16, -1)
+    
+        waveform = F.pad(waveform, (0, ir_len - 1))  # (16, T+ir_len-1)
+        return F.conv1d(
+            waveform.unsqueeze(0),          # (1, 16, T)
+            impulse_response.unsqueeze(1),  # (16, 1, ir_len)
+            groups=16
+        ).squeeze(0)                        # (16, new_T)
+    
 
     def _augment_waveform(self, waveform: torch.Tensor) -> torch.Tensor:
         if random.random() < 0.5:
