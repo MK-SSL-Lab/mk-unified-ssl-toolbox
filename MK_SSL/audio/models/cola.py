@@ -36,7 +36,7 @@ class COLA(nn.Module):
 
     def __init__(
         self,
-        feature_size: int,
+        feature_size: int = 1280,
         backbone: nn.Module = None,
         projection_dim: int = 512,
         projection_num_layers: int = 1,
