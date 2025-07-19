@@ -1190,7 +1190,8 @@ class Trainer:
                 pin_memory=True,
                 collate_fn=self._data_loader_safe_collate,
             )
-
+            self.logger.info(f"Training dataset loaded with {len(train_dataset)} samples.")
+            
             first_train_batch = next(iter(train_loader))
             if "audio" not in first_train_batch or "length" not in first_train_batch:
                 self.logger.warning(
@@ -1198,7 +1199,6 @@ class Trainer:
                     "Currently missing: "
                     + ", ".join(k for k in ["audio", "length"] if k not in first_train_batch)
                 )
-
 
             val_loader = None
             if val_dataset:
