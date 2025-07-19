@@ -199,9 +199,8 @@ class HuBERT(nn.Module):
                 - masked_lengths (Tensor): Number of masked tokens per batch item (B,)
         """
         # 1. Feature Extraction
-        features = self.feature_extractor(source) # (B, T', C)
-        # If a padding mask is provided for the raw audio, we need to adjust it
-        # for the downsampled features.
+        features, _ = self.feature_extractor(source) # (B, T', C)
+
         feature_lengths = torch.sum(~padding_mask, dim=1) if padding_mask is not None else None
         if feature_lengths is not None:
             # Adjust padding mask length based on feature extractor's total stride
