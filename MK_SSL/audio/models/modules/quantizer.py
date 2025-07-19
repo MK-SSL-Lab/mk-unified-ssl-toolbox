@@ -9,14 +9,13 @@ class GumbelVectorQuantizer(nn.Module):
     """
     Gumbel Vector Quantizer used in wav2vec 2.0 pretraining.
 
-    This quantizer learns discrete latent codes using Gumbel-softmax sampling.
-
     Args:
         dim (int): Input dimension to quantizer (should match feature dim from CNN).
-        num_entries_per_codebook (int): Total number of codebook entries (e.g., 320).
+        num_entries_per_codebook (int): Number of codebook entries per group (e.g., 320).
+        code_vector_size (int): Dimension of the output code vectors.
         temp (float): Initial temperature for Gumbel-softmax.
-        groups (int): Number of groups to split channels into.
-        combine_groups (bool): If True, output is reshaped to (B, T, dim). If False, returned as-is.
+        num_groups (int): Number of groups to split channels into.
+        combine_groups (bool): If True, output is reshaped to (B, T, dim).
     """
 
     def __init__(
@@ -34,20 +33,18 @@ class GumbelVectorQuantizer(nn.Module):
         self.groups = num_groups
         self.combine_groups = combine_groups
         self.code_vector_size = code_vector_size
-
-        self.gumbel_logits_proj = nn.Linear(self.dim, num_groups * self.num_entries_per_codebook)
-
-        self.codebook = nn.Parameter(
-            torch.FloatTensor(1, num_groups, self.num_entries_per_codebook, self.dim // num_groups)
-        )
-
-        nn.init.uniform_(self.codebook, -1.0 / self.dim, 1.0 / self.dim)
-
-        self.codevector_proj = nn.Linear(self.dim, self.code_vector_size)
-
-
         self.gumbel_temp = temp
 
+        # Project input features to G * V logits
+        self.gumbel_logits_proj = nn.Linear(dim, num_groups * num_entries_per_codebook)
+
+        # Codebook of shape (1, G, V, D/G)
+        self.codebook = nn.Parameter(
+            torch.FloatTensor(1, num_groups, num_entries_per_codebook, dim // num_groups)
+        )
+        nn.init.uniform_(self.codebook, -1.0 / dim, 1.0 / dim)
+
+        self.codevector_proj = nn.Linear(dim, code_vector_size)
 
     @staticmethod
     def _compute_perplexity(probs: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
@@ -55,52 +52,39 @@ class GumbelVectorQuantizer(nn.Module):
         Args:
             probs (torch.Tensor): shape (B, L, G, V)
             lengths (torch.Tensor): shape (B)
-
         Returns:
             torch.Tensor: shape (G, V)
         """
-        where_calculate_probs = torch.arange(probs.size(1), device=probs.device).unsqueeze(0) < lengths.unsqueeze(-1)
-        probs = probs[where_calculate_probs == 1]
+        mask = torch.arange(probs.size(1), device=probs.device).unsqueeze(0) < lengths.unsqueeze(-1)
+        probs = probs[mask]  # Keep only valid timesteps
         num_values = probs.size(0)
         perplexity = probs.sum(0) / num_values
         return perplexity
 
-    def forward(self, hidden_states: Tensor, lengths: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    def forward(self, hidden_states: Tensor, lengths: Tensor) -> Tuple[Tensor, Tensor]:
         """
         Args:
-            hidden_states (torch.Tensor): shape (B, L, D1)
+            hidden_states (torch.Tensor): shape (B, L, D)
             lengths (torch.Tensor): shape (B)
-
         Returns:
             tuple:
-                code_vectors (torch.Tensor): shape (B, L, code_vector_size)
+                projected_vectors (torch.Tensor): shape (B, L, code_vector_size)
                 perplexity (torch.Tensor): shape (G, V)
         """
         batch_size, length, _ = hidden_states.shape
 
-        logits = self.gumbel_logits_proj(batch_size) # (B, L, G*V)
-        logits = logits.view(batch_size, length, self.num_groups, self.num_vectors)  # (B, L, G, V)
+        logits = self.gumbel_logits_proj(hidden_states)  # (B, L, G*V)
+        logits = logits.view(batch_size, length, self.groups, self.num_entries_per_codebook)  # (B, L, G, V)
 
-        # Sample from Gumbel-softmax
-        gumbel_out = nn.functional.gumbel_softmax(
-            logits.float(), tau=self.temperature, hard=True
-        ).type_as(logits)  # (B, L, G, V)
+        gumbel_out = F.gumbel_softmax(logits.float(), tau=self.gumbel_temp, hard=True).type_as(logits)  # (B, L, G, V)
 
-        soft_probs = torch.softmax(logits.float(), dim=-1)  # for perplexity
+        soft_probs = torch.softmax(logits.float(), dim=-1)  # (B, L, G, V)
         perplexity = self._compute_perplexity(soft_probs, lengths)
 
-        # Compute quantized code vectors from one-hot indices
         gumbel_out = gumbel_out.unsqueeze(-1)  # (B, L, G, V, 1)
-        codebook = self.codebook  # (1, G, V, D/G)
-        code_vectors = torch.sum(gumbel_out * codebook, dim=-2)  # (B, L, G, D/G)
+        code_vectors = torch.sum(gumbel_out * self.codebook, dim=-2)  # (B, L, G, D/G)
+        code_vectors = code_vectors.contiguous().view(batch_size, length, self.dim)  # (B, L, D)
 
-        # Reshape to (B, L, D) where D = dim
-        code_vectors = code_vectors.contiguous().view(batch_size, length, self.dim)
-
-        # Final projection to (B, L, code_vector_size)
-        projected_vectors = self.codevector_proj(code_vectors)
+        projected_vectors = self.codevector_proj(code_vectors)  # (B, L, code_vector_size)
 
         return projected_vectors, perplexity
-
-
-
