@@ -19,12 +19,11 @@ class PositionalConvEmbedding(nn.Module):
 
     def __init__(self, embed_dim: int, kernel_size: int, groups: int):
         super().__init__()
-        padding = (kernel_size - 1) // 2
         self.conv = nn.Conv1d(
             embed_dim,
             embed_dim,
             kernel_size=kernel_size,
-            padding=padding,
+            padding='same',
             groups=groups,
         )
         nn.init.kaiming_normal_(self.conv.weight, nonlinearity="relu")
