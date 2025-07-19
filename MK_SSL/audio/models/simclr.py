@@ -110,7 +110,7 @@ class SimCLRSpeech(nn.Module):
 
 
 register_method(
-    name= "simCLRSpeech",
+    name= "simclr",
     model_cls= SimCLRSpeech,
     loss= NTXent_loss,
     transformation= SimCLRAudioTransform,

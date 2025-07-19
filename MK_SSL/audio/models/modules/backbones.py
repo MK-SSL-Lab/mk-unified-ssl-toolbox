@@ -70,8 +70,8 @@ class TransformerEncoder(nn.Module):
         final_dropout: float,
         layer_norm_first: bool,
         layer_drop: float,
-        pos_conv_kernel: int,
         pos_conv_groups: int,
+        pos_conv_kernel: int = 7,
     ):
         super().__init__()
 
