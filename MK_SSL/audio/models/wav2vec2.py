@@ -201,33 +201,30 @@ class Wav2Vec2(nn.Module):
     def time_masking(self, hidden_states: torch.Tensor, lengths: torch.Tensor) -> tuple[torch.Tensor, torch.BoolTensor]:
         batch_size, num_steps, hidden_size = hidden_states.size()
 
-        time_mask_indices = torch.zeros(
-            batch_size, num_steps + self.num_mask_time_steps,
-            device=hidden_states.device, dtype=torch.bool
-        )
+        # Learned mask embedding (shared across all masked steps)
+        if not hasattr(self, "mask_embedding"):
+            self.mask_embedding = nn.Parameter(torch.FloatTensor(hidden_size).uniform_())
+            self.register_parameter("mask_embedding", self.mask_embedding)
 
-        for batch in range(batch_size):
-            time_mask_idx_candidates = list(range(int(lengths[batch])))
-            k = min(int(self.mask_time_prob * lengths[batch]), len(time_mask_idx_candidates))
-            if k == 0:
-                continue  # No masking if k=0
+        time_mask_indices = torch.zeros(batch_size, num_steps, device=hidden_states.device, dtype=torch.bool)
 
-            start_time_idx_array = torch.tensor(
-                random.sample(time_mask_idx_candidates, k=k), device=hidden_states.device
-            )
+        for b in range(batch_size):
+            valid_length = int(lengths[b])
+            all_starts = list(range(valid_length))
+            num_masks = max(1, int(self.mask_time_prob * valid_length))
 
-            for i in range(self.num_mask_time_steps):
-                end_idx = start_time_idx_array + i
-                valid = end_idx < lengths[batch]
-                time_mask_indices[batch, end_idx[valid]] = 1
+            # Sample starting indices (without replacement)
+            starts = random.sample(all_starts, min(num_masks, valid_length))
+            for s in starts:
+                end = min(valid_length, s + self.num_mask_time_steps)
+                time_mask_indices[b, s:end] = 1
 
-        time_mask_indices = time_mask_indices[:, :-self.num_mask_time_steps]
-        num_masks = time_mask_indices.sum()
-
-        mask_values = torch.zeros(num_masks, hidden_size, device=hidden_states.device)
-        hidden_states[time_mask_indices] = mask_values
+        # Apply learned mask embedding
+        hidden_states[time_mask_indices] = self.mask_embedding
 
         return hidden_states, time_mask_indices
+
+
 
     
     @property
