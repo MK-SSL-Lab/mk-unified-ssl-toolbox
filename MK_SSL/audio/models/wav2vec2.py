@@ -209,16 +209,23 @@ class Wav2Vec2(nn.Module):
 
         for b in range(batch_size):
             valid_length = int(lengths[b])
-            all_starts = list(range(valid_length))
-            num_masks = max(1, int(self.mask_time_prob * valid_length))
+            if valid_length <= 0:
+                continue
 
-            starts = random.sample(all_starts, min(num_masks, valid_length))
+            # Calculate k and clamp it
+            k = max(1, int(self.mask_time_prob * valid_length))
+            k = min(k, valid_length)
+
+            all_starts = list(range(valid_length))
+            starts = random.sample(all_starts, k)
+
             for s in starts:
                 end = min(valid_length, s + self.num_mask_time_steps)
                 time_mask_indices[b, s:end] = 1
 
         hidden_states[time_mask_indices] = self.mask_embedding.to(hidden_states.device)
         return hidden_states, time_mask_indices
+
 
 
 
