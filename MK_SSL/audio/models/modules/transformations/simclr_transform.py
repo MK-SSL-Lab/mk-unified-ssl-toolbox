@@ -7,7 +7,7 @@ import urllib.request
 import tarfile
 from pathlib import Path
 from torchaudio.functional import resample
-import torch.nn.functional as F
+from torchaudio.sox_effects import apply_effects_tensor
 
 
 class MUSANNoiseAdder:
@@ -87,7 +87,6 @@ class SimCLRAudioTransform:
         return waveform + rms_noise * noise
 
     def _speed_perturb(self, waveform: torch.Tensor) -> torch.Tensor:
-        # Simulate speed change via resampling
         speed = random.uniform(0.8, 1.2)
         new_sr = int(self.sample_rate * speed)
         waveform = resample(waveform, self.sample_rate, new_sr)
@@ -99,23 +98,18 @@ class SimCLRAudioTransform:
             return torchaudio.functional.pitch_shift(waveform, self.sample_rate, shift)
         except Exception:
             return waveform
-    def _room_reverb(self, waveform):
+
+    def _room_reverb(self, waveform: torch.Tensor) -> torch.Tensor:
         if waveform.dim() == 1:
             waveform = waveform.unsqueeze(0)
-        elif waveform.dim() == 2 and waveform.size(0) != 16:
-            waveform = waveform.repeat(16 // waveform.size(0), 1)
-    
-        impulse_response = self._get_random_ir()  # Example: load or generate IR
-        ir_len = impulse_response.size(-1)
-        impulse_response = impulse_response / impulse_response.abs().max()
-        impulse_response = impulse_response.unsqueeze(0).expand(16, -1)
-    
-        waveform = F.pad(waveform, (0, ir_len - 1))
-        return F.conv1d(
-            waveform.unsqueeze(0),
-            impulse_response.unsqueeze(1),
-            groups=16
-        ).squeeze(0)
+
+        room_scale = random.randint(0, 100)
+        effects = [["reverb", "50", "50", str(room_scale)]]
+        try:
+            augmented_waveform, _ = apply_effects_tensor(waveform, self.sample_rate, effects)
+            return augmented_waveform
+        except Exception:
+            return waveform
 
     def _augment_waveform(self, waveform: torch.Tensor) -> torch.Tensor:
         if random.random() < 0.5:
