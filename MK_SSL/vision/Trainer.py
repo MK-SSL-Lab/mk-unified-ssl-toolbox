@@ -508,9 +508,13 @@ class Trainer:
         # Initialize W&B run at the very beginning of the main train method
         self.train_dataset = train_dataset
 
-        if self.wandb_logger.is_active and not hasattr(self, "_optuna_trial"):
+        if not hasattr(self, "_optuna_trial"):
             self.wandb_logger.init_run()
-            # Update W&B config with dynamic training parameters
+        else:
+            self.wandb_logger.mode = 'disabled'
+
+        if self.wandb_logger.is_active:
+
             self.wandb_logger.current_run.config.update({
                 "batch_size": batch_size,
                 "start_epoch": start_epoch,
@@ -518,11 +522,11 @@ class Trainer:
                 "learning_rate": learning_rate,
                 "weight_decay": weight_decay,
                 "optimizer": optimizer,
+                **kwargs,
             })
             self.logger.info(f"W&B run initialized. View run at: {self.wandb_logger.current_run.url}")
         else:
             self.logger.info("W&B logging is not active for this run.")
-            self.wandb_logger.mode = 'disabled'
 
         
 

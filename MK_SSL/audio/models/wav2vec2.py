@@ -187,6 +187,8 @@ class Wav2Vec2(nn.Module):
             ),
         }
 
+        if not variant:
+            raise ValueError("Variant must be specified. Choose from: 'base', 'large', 'large_lv60k'.")
         if variant not in presets:
             raise ValueError(f"Invalid variant: {variant}")
         return presets[variant]

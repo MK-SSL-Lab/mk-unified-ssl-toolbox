@@ -834,8 +834,13 @@ class Trainer:
         **kwargs,
     ):
 
-        if self.wandb_logger.is_active and not hasattr(self, "_optuna_trial"):
+
+        if not hasattr(self, "_optuna_trial"):
             self.wandb_logger.init_run()
+        else:
+            self.wandb_logger.mode = 'disabled'
+
+        if self.wandb_logger.is_active:
 
             self.wandb_logger.current_run.config.update({
                 "batch_size": batch_size,
@@ -844,6 +849,7 @@ class Trainer:
                 "learning_rate": learning_rate,
                 "weight_decay": weight_decay,
                 "optimizer": optimizer,
+                **kwargs,
             })
             self.logger.info(f"W&B run initialized. View run at: {self.wandb_logger.current_run.url}")
         else:

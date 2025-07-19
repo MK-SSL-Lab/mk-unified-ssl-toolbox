@@ -44,7 +44,7 @@ class Trainer:
         self,
         method: str,
         backbone: nn.Module,
-        variant: str,
+        variant: str = None,
         save_dir: str = ".",
         checkpoint_interval: int = 10,
         reload_checkpoint: bool = False,
@@ -1115,7 +1115,7 @@ class Trainer:
                 "learning_rate": lr,
                 "weight_decay": weight_decay,
                 "optimizer": optimizer,
-                **kwargs # Include any other kwargs passed to train method
+                **kwargs
             })
             self.logger.info(f"W&B run initialized. View run at: {self.wandb_logger.current_run.url}")
         else:
