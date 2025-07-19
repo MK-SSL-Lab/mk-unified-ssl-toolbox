@@ -31,6 +31,8 @@ class Wav2Vec2(nn.Module):
         quantizer_num_groups: int = 2,
         quantizer_num_entries_per_codebook: int = 320,
         quantizer_temp: float = 2.0,
+        num_mask_time_steps: int = 10,
+        mask_time_prob: float = 0.065,
         **kwargs  
 
     ):
@@ -42,6 +44,9 @@ class Wav2Vec2(nn.Module):
 
         self.__quantizer_num_groups = quantizer_num_groups
         self.__quantizer_num_entries_per_codebook = quantizer_num_entries_per_codebook
+        
+        self.num_mask_time_steps = num_mask_time_steps
+        self.mask_time_prob = mask_time_prob
 
         self.feature_extractor = ConvFeatureExtractor(
             variant=self.model_config["extractor_norm"],
