@@ -88,30 +88,30 @@ class Wav2Vec2Loss(nn.Module):
         return torch.sum(entropy) / (self.num_groups * self.num_codevectors)
 
     def _sample_negatives(self, positives: Tensor, targets_per_batch: List[int]) -> Tensor:
-        """
-        Samples K negative examples for each positive.
-
-        Args:
-            positives (Tensor): Flattened positive samples. Shape: (N, D)
-            targets_per_sample (List[int]): Number of targets per sample.
-
-        Returns:
-            Tensor: Negative samples. Shape: (N, K, D)
-        """
         negatives = []
         start = 0
 
         for count in targets_per_batch:
+            if count <= 1:
+                # No negatives possible for a single target
+                negatives.append(positives.new_zeros((count, self.num_distractors, positives.size(-1))))
+                start += count
+                continue
+
             idx_range = torch.arange(count, device=positives.device)
             mask = torch.eye(count, device=positives.device).bool()
             candidate_indices = idx_range.repeat(count).view(count, -1)[~mask].view(count, -1)
             candidate_indices += start
 
             rand_rows = torch.arange(count).repeat_interleave(self.num_distractors)
-            rand_cols = torch.tensor(
-                [random.sample(range(count - 1), self.num_distractors) for _ in range(count)],
-                device=positives.device
-            ).view(-1)
+            rand_cols = []
+            for _ in range(count):
+                if count - 1 >= self.num_distractors:
+                    cols = random.sample(range(count - 1), self.num_distractors)
+                else:
+                    cols = random.choices(range(count - 1), k=self.num_distractors)
+                rand_cols.extend(cols)
+            rand_cols = torch.tensor(rand_cols, device=positives.device)
 
             sampled = candidate_indices[rand_rows, rand_cols]
             negatives.append(positives[sampled])
