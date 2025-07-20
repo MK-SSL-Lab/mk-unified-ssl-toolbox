@@ -116,7 +116,7 @@ class AudioCLIP(nn.Module):
             sim_audio_image,
         )
 
-    def criterien(
+    def criterion(
         self,
         sim_text_audio: torch.Tensor,
         sim_text_image: torch.Tensor,
