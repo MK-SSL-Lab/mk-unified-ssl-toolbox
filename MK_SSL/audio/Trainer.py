@@ -907,11 +907,6 @@ class Trainer:
             extra = all_pseudo_indices - all_dataset_indices
             missing = all_dataset_indices - all_pseudo_indices
             
-            self.logger.error(f"[DEBUG] Dataset indices: {sorted(list(all_dataset_indices))}")
-            self.logger.error(f"[DEBUG] Pseudo-label indices: {sorted(list(all_pseudo_indices))}")
-            self.logger.error(f"[DEBUG] Extra keys: {sorted(list(extra))}")
-            self.logger.error(f"[DEBUG] Missing keys: {sorted(list(missing))}")
-
             if extra:
                 self.logger.warning(f"Removing {len(extra)} extra pseudo-labels: {sorted(list(extra))[:10]}...")
                 for idx in extra:
