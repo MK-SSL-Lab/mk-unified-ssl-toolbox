@@ -226,7 +226,11 @@ class AttentionPool2d(nn.Module):
             out_proj_weight=self.c_proj.weight,
             out_proj_bias=self.c_proj.bias,
             training=self.training,
-            need_weights=False
+            need_weights=False,
+            use_separate_proj_weight=True,
+            q_proj_weight=self.q_proj.weight,
+            k_proj_weight=self.k_proj.weight,
+            v_proj_weight=self.v_proj.weight
         )
         return attn[0][:, 0]  # return [CLS] token output
 
