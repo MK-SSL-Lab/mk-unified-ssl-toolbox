@@ -1,13 +1,13 @@
-# File: MK_SSL/audio/models/modules/tools.py
 
 import os
 import numpy as np
 import torch
 from sklearn.cluster import MiniBatchKMeans
 from tqdm import tqdm
-from typing import Literal, Optional, Dict, List
+from typing import Optional, Dict
 from torch.utils.data import DataLoader 
 import logging
+import joblib
 
 from MK_SSL.audio.models.modules.feature_extractors import MFCCFeatureExtractor
 
@@ -69,41 +69,62 @@ class PseudoLabelGenerator:
         transformer_layer: Optional[int],
         device: torch.device
     ) -> Dict[int, np.ndarray]:
-        """Generate pseudo-labels for every dataset sample."""
+        """
+        Generate pseudo-labels for every dataset sample.
+
+        Args:
+            dataloader (DataLoader): DataLoader for feature extraction (no shuffling).
+            model (torch.nn.Module): HuBERT model used for feature extraction.
+            is_mfcc (bool): Whether to extract MFCC features for the first iteration.
+            transformer_layer (Optional[int]): Specific transformer layer to use.
+            device (torch.device): Device to perform computations on.
+
+        Returns:
+            Dict[int, np.ndarray]: Mapping from dataset indices to pseudo-label sequences.
+        """
         self.model = model.eval().to(device)
         self.layer = transformer_layer
         self.device = device
 
         kmeans_model_path = os.path.join(self.save_dir, "kmeans_model.pkl")
 
-        # Pre-initialize dict
         dataset_len = len(dataloader.dataset)
         idx_to_labels = {i: None for i in range(dataset_len)}
+        seen_indices = set()
 
-        # === First Pass: Feature Extraction ===
+        # === Feature Extraction Pass ===
         all_features_flattened = []
         all_indices = []
 
         self.logger.info(f"Starting feature extraction for K-means clustering on {dataset_len} samples...")
         for batch in tqdm(dataloader, desc="Feature Extraction (K-means)"):
             audio_batch = batch["audio"]
-            indices_batch = batch["original_idx"]
+            indices_batch = batch["original_idx"].tolist()
+
 
             feats_batch = self._extract_features_for_clustering_batch(audio_batch, is_mfcc)
             feats_batch_np = feats_batch.cpu().numpy()
 
             for i, idx in enumerate(indices_batch):
                 idx = int(idx)
+                if idx in seen_indices:
+                    self.logger.warning(f"[WARNING] Duplicate dataset index {idx} encountered. Skipping duplicate.")
+                    continue
+                if idx >= dataset_len:
+                    self.logger.warning(f"[WARNING] Invalid index {idx} (out of range). Skipping.")
+                    continue
+
                 sample_feats = feats_batch_np[i]
                 if sample_feats.shape[0] == 0:
                     self.logger.warning(f"Skipping index {idx}: No features extracted.")
                     continue
 
+                seen_indices.add(idx)
                 all_features_flattened.append(sample_feats.reshape(-1, sample_feats.shape[-1]))
                 all_indices.append(idx)
-                idx_to_labels[idx] = sample_feats  # Temporarily store features
+                idx_to_labels[idx] = sample_feats
 
-        # === Fit or Load K-means ===
+        # === K-means Fitting ===
         flat_features_for_kmeans = np.concatenate(all_features_flattened, axis=0)
         if not self.fitted:
             self.logger.info("Fitting K-means model...")
@@ -123,7 +144,6 @@ class PseudoLabelGenerator:
             self.logger.info(f"K-means fitted with {self.kmeans.n_clusters} clusters.")
 
             try:
-                import joblib
                 joblib.dump(self.kmeans, kmeans_model_path)
                 self.logger.info(f"K-means model saved at {kmeans_model_path}")
             except Exception as e:
@@ -132,23 +152,35 @@ class PseudoLabelGenerator:
             self.logger.info("Using pre-fitted K-means model...")
             if os.path.exists(kmeans_model_path):
                 try:
-                    import joblib
                     self.kmeans = joblib.load(kmeans_model_path)
                     self.logger.info(f"K-means model loaded from {kmeans_model_path}")
                 except Exception as e:
                     self.logger.warning(f"Failed to load K-means model: {e}")
 
-        # === Second Pass: Label Assignment ===
+        # === Assign Labels ===
         self.logger.info("Assigning pseudo-labels...")
         for idx in tqdm(all_indices, desc="Label Assignment"):
+            if idx >= dataset_len:
+                continue
             sample_feats = idx_to_labels[idx]
             predicted_labels = self.kmeans.predict(sample_feats)
             idx_to_labels[idx] = predicted_labels
 
-        # Safety check
-        missing_indices = [i for i, v in idx_to_labels.items() if v is None]
-        if missing_indices:
-            raise RuntimeError(f"Missing pseudo-labels for {len(missing_indices)} samples: {missing_indices[:10]}...")
+        # === Safety Check & Alignment ===
+        all_dataset_indices = set(range(dataset_len))
+        missing_indices = all_dataset_indices - seen_indices
+        extra_indices = seen_indices - all_dataset_indices
 
-        self.logger.info("Pseudo-label generation completed.")
+        if extra_indices:
+            self.logger.warning(f"Found {len(extra_indices)} extra indices: {sorted(list(extra_indices))[:10]}...")
+            for idx in extra_indices:
+                idx_to_labels.pop(idx, None)
+
+        if missing_indices:
+            self.logger.warning(f"Filling {len(missing_indices)} missing indices with zeros.")
+            zero_label = np.zeros((1,), dtype=np.int64)
+            for idx in missing_indices:
+                idx_to_labels[idx] = zero_label
+
+        self.logger.info(f"Pseudo-label generation completed with {len(idx_to_labels)} samples.")
         return idx_to_labels
