@@ -1,42 +1,17 @@
 import torch
+from torch import Tensor
 import torch.nn as nn
-import torch.nn.functional as F
 from typing import Tuple, Optional
 
 from MK_SSL.audio.models.modules.feature_extractors import ConvFeatureExtractor
 from MK_SSL.audio.models.modules.backbones import TransformerEncoder
 from MK_SSL.audio.models.modules.losses import HuBERTLoss
-
 from MK_SSL.audio.models.utils import register_method
+from MK_SSL.audio.models.modules.heads import HuBERTProjectionHead
 
 
 class HuBERT(nn.Module):
-    """
-    HuBERT model for self-supervised speech representation learning.
-
-    This implementation supports time-based and channel-based masking,
-    and can optionally initialize from MFCC features. It outputs discrete 
-    cluster predictions for contrastive or predictive objectives.
-
-    Args:
-        variant (str, optional): Model variant architecture to use. 
-            One of {"base", "large", "x-large"}. Defaults to "base".
-        mask_prob (float, optional): Probability of masking a given time step 
-            during training. Defaults to 0.065.
-        mask_length (int, optional): Length of each temporal mask span. 
-            Defaults to 10.
-        mask_channel_prob (float, optional): Probability of masking a feature 
-            channel. Defaults to 0.0.
-        mask_channel_length (int, optional): Length of each channel mask span. 
-            Defaults to 10.
-        num_clusters (int, optional): Number of clusters for the output 
-            quantizer/prediction head. Defaults to 100.
-        init_from_mfcc (bool, optional): Whether to initialize features from 
-            MFCC instead of raw waveform. Defaults to True.
-        sample_rate (int, optional): Sampling rate of input waveform, used 
-            for MFCC extraction or frontend processing. Defaults to 16000.
-    """
-
+    """HuBERT model for self-supervised speech representation learning."""
 
     def __init__(
         self,
@@ -48,7 +23,7 @@ class HuBERT(nn.Module):
         num_clusters: int = 100,
         init_from_mfcc: bool = True,
         sample_rate: int = 16000,
-        **kwargs  
+        **kwargs
     ):
         super().__init__()
         self.variant = variant
@@ -60,27 +35,22 @@ class HuBERT(nn.Module):
         self.init_from_mfcc = init_from_mfcc
         self.sample_rate = sample_rate
 
-        # Get configuration based on the variant
         config = self._get_config(variant)
-
-        # Store variant-specific config for easy access in logs/elsewhere
         self.config = config
 
-        # Convolutional Feature Extractor
+        # Feature extractor
         self.feature_extractor = ConvFeatureExtractor(
             variant="layer_norm",
             conv_layers=config["conv_layers"],
         )
-
         feature_extractor_output_dim = config["feature_extractor_output_dim"]
 
-        # Feature projection for Transformer input
+        # Feature projection to encoder dimension
         self.feature_projection = nn.Linear(
             feature_extractor_output_dim, config["encoder_embed_dim"]
         )
         self.post_extract_proj_norm = nn.LayerNorm(config["encoder_embed_dim"])
         self.post_extract_proj_dropout = nn.Dropout(config["encoder_dropout_input"])
-
 
         # Transformer Encoder
         self.encoder = TransformerEncoder(
@@ -90,47 +60,49 @@ class HuBERT(nn.Module):
             ff_interm_features=config["encoder_ff_interm_features"],
             dropout_input=config["encoder_dropout_input"],
             attention_dropout=config["encoder_attention_dropout"],
-            ff_dropout=config["encoder_activation_dropout"],  # This matches fairseq's activation_dropout
+            ff_dropout=config["encoder_activation_dropout"],
             final_dropout=config["encoder_dropout"],
             layer_norm_first=config["encoder_layer_norm_first"],
             layer_drop=config["encoder_layer_drop"],
-            pos_conv_kernel=128,    # default in paper/fairseq
-            pos_conv_groups=16,     # default in paper/fairseq
+            pos_conv_kernel=128,
+            pos_conv_groups=16,
         )
-        
 
-        # Prediction Head (maps Transformer output to number of clusters)
-        self.prediction_head = nn.Linear(config["encoder_embed_dim"], num_clusters)
+        # Projection and prediction heads
+        self.projection_head = HuBERTProjectionHead(
+            input_dim=config["encoder_embed_dim"],
+            output_dim=config.get("projection_dim", 256),
+            dropout=config["encoder_dropout"]
+        )
+        self.prediction_head = nn.Linear(config.get("projection_dim", 256), num_clusters)
+
+        # Mask embedding
         self.mask_embedding = nn.Parameter(
             torch.FloatTensor(config["encoder_embed_dim"]).uniform_(-0.1, 0.1)
         )
 
-
     def _get_config(self, variant: str):
-        """
-        Returns model configuration parameters based on the specified variant.
-        """
         configs = {
             "base": dict(
                 conv_layers=[
                     (512, 10, 5), (512, 3, 2), (512, 3, 2),
                     (512, 3, 2), (512, 3, 2), (512, 2, 2), (512, 2, 2)
                 ],
-                feature_extractor_output_dim=512, # Output of the last conv layer
+                feature_extractor_output_dim=512,
                 encoder_embed_dim=768,
                 encoder_ff_interm_features=3072,
                 encoder_num_layers=12,
-                encoder_num_heads=8, # Corrected based on your image!
+                encoder_num_heads=8,
                 encoder_dropout_input=0.1,
                 encoder_attention_dropout=0.1,
                 encoder_activation_dropout=0.0,
                 encoder_dropout=0.1,
                 encoder_layer_norm_first=False,
                 encoder_layer_drop=0.1,
-                max_iterations= 2, 
+                projection_dim=256,
+                max_iterations=2,
                 extractor_layer=6,
-                pseudo_label_sample_ratio= 0.1,  
-
+                pseudo_label_sample_ratio=0.1,
             ),
             "large": dict(
                 conv_layers=[
@@ -148,10 +120,10 @@ class HuBERT(nn.Module):
                 encoder_dropout=0.1,
                 encoder_layer_norm_first=False,
                 encoder_layer_drop=0.1,
-                max_iterations= 2, 
-                extractor_layer=9, 
-                pseudo_label_sample_ratio= 0.1,  
-
+                projection_dim=256,
+                max_iterations=2,
+                extractor_layer=9,
+                pseudo_label_sample_ratio=0.1,
             ),
             "x-large": dict(
                 conv_layers=[
@@ -169,122 +141,87 @@ class HuBERT(nn.Module):
                 encoder_dropout=0.1,
                 encoder_layer_norm_first=False,
                 encoder_layer_drop=0.1,
-                max_iterations= 2, 
+                projection_dim=256,
+                max_iterations=2,
                 extractor_layer=9,
-                pseudo_label_sample_ratio= 0.1,  
+                pseudo_label_sample_ratio=0.1,
             ),
         }
-
         if variant not in configs:
             raise ValueError(f"Unknown HuBERT variant: {variant}")
-
         return configs[variant]
 
-    def forward(
+    def _apply_masking(
         self,
-        source: torch.Tensor,
-        padding_mask: Optional[torch.Tensor] = None,
-        return_features_only: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        features: Tensor,
+    ) -> Tuple[Tensor, Tensor, Tensor]:
         """
+        Applies time-based masking on features.
+
         Args:
-            source (torch.Tensor): Input audio tensor of shape (B, T_audio_samples).
-            padding_mask (torch.Tensor, optional): Boolean mask for padding, shape (B, T_audio_samples).
-                                                True indicates a padded position.
-            return_features_only (bool): If True, only returns the raw features
-                                         from the feature extractor. Useful for K-means.
+            features (Tensor): Feature tensor of shape (B, T, D).
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-                - logits (Tensor): Predictions for masked tokens (B, T_masked, num_clusters)
-                - mask_indices (Tensor): Boolean mask of shape (B, T_features)
-                - feature_lengths (Tensor): Actual lengths of features after convolution (B,)
-                - masked_lengths (Tensor): Number of masked tokens per batch item (B,)
+            Tuple[Tensor, Tensor, Tensor]: (masked features, mask indices, masked lengths)
         """
-        # 1. Feature Extraction
-        features, _ = self.feature_extractor(source) # (B, T', C)
-
-        feature_lengths = torch.sum(~padding_mask, dim=1) if padding_mask is not None else None
-        if feature_lengths is not None:
-            # Adjust padding mask length based on feature extractor's total stride
-            feature_lengths = self.feature_extractor.get_output_lengths(source.shape[1], source.device)
-            # Create a new padding mask for the features
-            feature_padding_mask = torch.arange(features.size(1), device=source.device).unsqueeze(0) >= feature_lengths.unsqueeze(1)
-        else:
-            feature_padding_mask = None
-
-
-        if return_features_only:
-            return features, feature_padding_mask # Return features before projection/masking
-
-        # 2. Feature Projection and Normalization/Dropout
-        features = self.feature_projection(features)
-        features = self.post_extract_proj_norm(features)
-        features = self.post_extract_proj_dropout(features)
-
-        # 3. Masking
-        # Get masking indices and apply masking
         batch_size, seq_len, _ = features.shape
         mask_indices = torch.zeros((batch_size, seq_len), dtype=torch.bool, device=features.device)
         masked_lengths = torch.zeros(batch_size, dtype=torch.long, device=features.device)
 
         for i in range(batch_size):
-            # Apply time masking
             num_masked_spans = int(seq_len * self.mask_prob / self.mask_length)
             masked_spans = []
             for _ in range(num_masked_spans):
-                start = torch.randint(0, seq_len - self.mask_length + 1, (1,)).item()
-                end = start + self.mask_length
+                start = torch.randint(0, max(1, seq_len - self.mask_length + 1), (1,)).item()
+                end = min(seq_len, start + self.mask_length)
                 masked_spans.extend(range(start, end))
-
-            # Ensure masked_spans don't exceed seq_len or padding mask
-            if feature_padding_mask is not None:
-                valid_mask_indices = torch.where(~feature_padding_mask[i])[0]
-                if len(valid_mask_indices) > 0:
-                    max_valid_idx = valid_mask_indices[-1].item()
-                    masked_spans = [idx for idx in masked_spans if idx <= max_valid_idx]
-                else:
-                    masked_spans = [] # No valid positions to mask
 
             mask_indices[i, masked_spans] = True
             masked_lengths[i] = len(masked_spans)
             features[i, mask_indices[i]] = self.mask_embedding.to(features.device)
 
-        # 4. Transformer Encoder
-        # The padding_mask for the Transformer needs to be True for padded/masked tokens
-        # Combine feature_padding_mask (if exists) and mask_indices
-        transformer_padding_mask = mask_indices
-        if feature_padding_mask is not None:
-            transformer_padding_mask = transformer_padding_mask | feature_padding_mask
+        return features, mask_indices, masked_lengths
 
-        encoder_outputs = self.encoder(features, padding_mask=transformer_padding_mask)
-        # encoder_outputs is typically (B, T', D)
+    def forward(
+        self,
+        waveforms: Tensor,
+        lengths: Tensor,
+        return_features_only: bool = False,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        features, lengths = self.feature_extractor(waveforms, lengths)
 
-        # 5. Prediction Head
-        masked_encoder_outputs = encoder_outputs[mask_indices] # (N_masked, D)
+        if return_features_only:
+            return features, lengths
 
-        logits = self.prediction_head(masked_encoder_outputs) # (N_masked, num_clusters)
+        # Projection to encoder
+        features = self.feature_projection(features)
+        features = self.post_extract_proj_norm(features)
+        features = self.post_extract_proj_dropout(features)
 
-        # Reshape logits to (B, T_features, num_clusters) to align with targets for loss calculation
-        full_logits = torch.zeros(
-            (batch_size, seq_len, self.num_clusters),
-            dtype=logits.dtype,
-            device=logits.device
-        )
-        full_logits[mask_indices] = logits
+        # Apply masking
+        features, mask_indices, masked_lengths = self._apply_masking(features)
 
+        # Transformer encoder
+        encoder_outputs = self.encoder(features, lengths)
 
-        return full_logits, mask_indices, feature_lengths, masked_lengths
+        # Projection head
+        projected_outputs = self.projection_head(encoder_outputs)
+
+        # Only masked logits
+        masked_encoder_outputs = projected_outputs[mask_indices]
+        logits = self.prediction_head(masked_encoder_outputs)
+
+        return logits, mask_indices, lengths, masked_lengths
 
 
 register_method(
-    name= "hubert",
-    model_cls= HuBERT,
-    loss= HuBERTLoss,
-    transformation= None,
+    name="hubert",
+    model_cls=HuBERT,
+    loss=HuBERTLoss,
+    transformation=None,
     default_params={
-        "init_from_mfcc": True,  
-        "sample_rate": 16000,  
+        "init_from_mfcc": True,
+        "sample_rate": 16000,
     },
     logs=lambda model, loss: (
         "\n"
@@ -300,7 +237,7 @@ register_method(
         f"Channel Mask Probability          : {model.mask_channel_prob}\n"
         f"Channel Mask Length               : {model.mask_channel_length}\n"
         f"Number of Clusters (Prediction Head Output): {model.num_clusters}\n"
-        f"Extractor Layer for Subsequent Iterations: {model.config['extractor_layer']}\n" # Added
+        f"Extractor Layer for Subsequent Iterations: {model.config['extractor_layer']}\n"
         "Loss                              : HuBERT Loss (Cross Entropy over predicted codes)\n"
         f"Loss Reduction                    : {loss.reduction}\n"
         "Augmentation                      : Internal latent-space masking only"

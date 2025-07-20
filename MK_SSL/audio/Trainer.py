@@ -929,12 +929,15 @@ class Trainer:
 
                 for batch_idx, batch in enumerate(pbar):
                     audio = batch["audio"].to(self.device)
+                    lengths = batch['length'].to(self.device)
                     pseudo_labels = batch["pseudo_labels"].to(self.device)
 
                     optimizer.zero_grad()
                     with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
-                        logits, mask_indices, features, _ = self.model(audio)
-                        loss = self.loss(logits, pseudo_labels, mask_indices)
+                        logits, mask_indices, lengths, _ = self.model(audio, lengths)
+                        masked_targets = pseudo_labels[mask_indices]  
+                        loss = self.loss(logits, masked_targets)
+
 
                     self.scaler.scale(loss).backward()
                     self.scaler.step(optimizer)

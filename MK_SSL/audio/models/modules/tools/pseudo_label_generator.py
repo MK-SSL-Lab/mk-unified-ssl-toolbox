@@ -60,13 +60,12 @@ class PseudoLabelGenerator:
         else: # Use model's ConvFeatureExtractor and Transformer encoder
             with torch.no_grad():
                 # self.model.feature_extractor is ConvFeatureExtractor here
-                conv_feats = self.model.feature_extractor(audio_tensor)  # (1, C, T')
-                conv_feats = conv_feats.transpose(1, 2)  # (1, T', C)
+                conv_feats, _ = self.model.feature_extractor(audio_tensor)  # (1, C, T')
 
                 if self.layer is not None:
                     encoder_output = self.model.encoder.extract_layer(conv_feats, self.layer)  # (1, T', D)
                 else: # Default to last layer if no specific layer provided
-                    encoder_output = self.model.encoder.forward_features(conv_feats) # Assuming encoder has a forward_features or similar
+                    encoder_output = self.model.encoder(conv_feats)
                     if not isinstance(encoder_output, torch.Tensor):
                          # Handle cases where encoder might return tuple (output, attn_weights)
                          encoder_output = encoder_output[0] if isinstance(encoder_output, tuple) else encoder_output

@@ -205,3 +205,23 @@ class Wav2Vec2FeatureProjectionHead(ProjectionHead):
     def forward(self, x: torch.Tensor) -> torch.Tensor:     # (B, T, C_in) → (B, T, C_out)
         x = super().forward(x)
         return self.post_dropout(x)
+
+
+class HuBERTProjectionHead(ProjectionHead):
+    """
+    Projection head for HuBERT.
+    Maps encoder output to a smaller dimension (e.g., 256) before prediction head.
+    """
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int = 256,
+        use_layer_norm: bool = True,
+        dropout: float = 0.0,
+    ):
+        norm = nn.LayerNorm(output_dim) if use_layer_norm else None
+        super().__init__([(input_dim, output_dim, norm, None)])
+        self.post_dropout = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.post_dropout(super().forward(x))
