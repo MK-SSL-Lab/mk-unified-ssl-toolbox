@@ -255,7 +255,7 @@ class AudioResNeXtStem(nn.Module):
 
 
 class TransformerLayer(nn.Module):
-    def __init__(self, embed_dim, num_heads, mlp_dim, dropout=0.0):
+    def __init__(self, embed_dim: int = 1024, num_heads: int =16, mlp_dim: int = 4096, dropout=0.0):
         super().__init__()
         self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout)
         self.ln1 = nn.LayerNorm(embed_dim)
