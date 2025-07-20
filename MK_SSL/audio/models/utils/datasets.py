@@ -94,6 +94,6 @@ class HuBERTWrapperDataset(Dataset):
 
             pseudo_label = self._align_pseudo_labels(pseudo_label, audio_len=length)
             pseudo_label_tensor = torch.from_numpy(pseudo_label).long()
-            return {"audio": audio_tensor, "length": length, "pseudo_labels": pseudo_label_tensor}
+            return {"audio": audio_tensor, "length": length, "pseudo_labels": pseudo_label_tensor,  "original_idx": idx}
         else:
             return {"audio": audio_tensor, "length": length, "original_idx": idx}
