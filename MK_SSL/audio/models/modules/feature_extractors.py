@@ -40,8 +40,9 @@ class ConvFeatureExtractor(nn.Module):
 
         layers = []
         in_channels = 1  # raw waveform has 1 channel
+        self.conv_layers = conv_layers
 
-        for out_channels, kernel_size, stride in conv_layers:
+        for out_channels, kernel_size, stride in self.conv_layers:
             conv = nn.Conv1d(
                 in_channels,
                 out_channels,
