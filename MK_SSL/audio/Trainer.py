@@ -828,7 +828,7 @@ class Trainer:
         start_iteration: int = 0,
         val_loader: Optional[DataLoader] = None,
         num_hubert_iterations: int = 5,
-        pseudo_label_sample_ratio: float = 0.1,
+        pseudo_label_sample_ratio: float = 0.1,  # Kept in signature but no longer used
         logger_loader: Optional[DataLoader] = None,
         use_embedding_logger: bool = False,
         **kwargs,
@@ -888,20 +888,8 @@ class Trainer:
                 self.logger.info(f"Loading existing pseudo-labels from {iteration_pseudo_labels_path}")
                 pseudo_labels_dict = np.load(iteration_pseudo_labels_path, allow_pickle=True).item()
             else:
-                self.logger.info("Generating pseudo-labels...")
-                if iteration == 0:
-                    dataloader_for_clustering = train_loader_full_dataset
-                else:
-                    dataset = train_loader_full_dataset.dataset
-                    num_samples = max(1, int(len(dataset) * pseudo_label_sample_ratio))
-                    sampler = RandomSampler(dataset, num_samples=num_samples, replacement=False)
-                    dataloader_for_clustering = DataLoader(
-                        dataset,
-                        batch_size=train_loader_full_dataset.batch_size,
-                        sampler=sampler,
-                        num_workers=train_loader_full_dataset.num_workers,
-                        pin_memory=train_loader_full_dataset.pin_memory,
-                    )
+                self.logger.info("Generating pseudo-labels for ALL samples (HuBERT).")
+                dataloader_for_clustering = train_loader_full_dataset
 
                 pseudo_labels_dict = self.pseudo_label_generator.generate_pseudo_labels(
                     dataloader=dataloader_for_clustering,
@@ -912,6 +900,14 @@ class Trainer:
                 )
                 np.save(iteration_pseudo_labels_path, pseudo_labels_dict)
                 self.logger.info(f"Saved pseudo-labels for iteration {iteration + 1}.")
+
+            # Safety check
+            if len(pseudo_labels_dict) != len(train_loader_for_training.dataset):
+                missing_count = len(train_loader_for_training.dataset) - len(pseudo_labels_dict)
+                raise RuntimeError(
+                    f"Pseudo-label generation mismatch: got {len(pseudo_labels_dict)}, "
+                    f"expected {len(train_loader_for_training.dataset)} (missing {missing_count})."
+                )
 
             train_loader_for_training.dataset.set_pseudo_labels(pseudo_labels_dict)
             self.logger.info("Updated training dataset with pseudo-labels.")
