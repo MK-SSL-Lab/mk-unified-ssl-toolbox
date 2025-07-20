@@ -44,6 +44,8 @@ def optimize_hyperparameters(
             val_dataset=val_dataset,
             max_epochs=max_epochs,
             use_optuna=False,
+            use_embedding_logger=False,
+
             **hparams,
         )
 
