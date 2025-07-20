@@ -1,4 +1,3 @@
-
 import torch
 import numpy as np
 from torch.utils.data import Dataset
@@ -54,63 +53,55 @@ class HuBERTWrapperDataset(Dataset):
         target_len = int((audio_len / self.sample_rate) * self.target_frame_rate)
 
         if len(pseudo_label) < target_len:
-            # Pad with last label
             pad_len = target_len - len(pseudo_label)
             pseudo_label = np.pad(pseudo_label, (0, pad_len), mode='edge')
         elif len(pseudo_label) > target_len:
-            # Truncate
             pseudo_label = pseudo_label[:target_len]
 
         return pseudo_label
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         original_item = self.original_dataset[idx]
-        audio_tensor = None
 
-        # Extract audio tensor
-        if torch.is_tensor(original_item):
-            audio_tensor = original_item
-        elif isinstance(original_item, dict):
-            for key in ['audio', 'wav', 'input', 'waveform']:
-                if key in original_item and torch.is_tensor(original_item[key]):
-                    audio_tensor = original_item[key]
-                    break
-                elif key.capitalize() in original_item and torch.is_tensor(original_item[key.capitalize()]):
-                    audio_tensor = original_item[key.capitalize()]
-                    break
-            if audio_tensor is None:
-                tensor_values = [v for v in original_item.values() if torch.is_tensor(v)]
-                if len(tensor_values) == 1:
-                    audio_tensor = tensor_values[0]
-                else:
-                    raise TypeError(f"Could not identify a clear audio tensor in dictionary item for index {idx}.")
-        elif isinstance(original_item, (tuple, list)):
-            for element in original_item:
-                if torch.is_tensor(element):
-                    audio_tensor = element
-                    break
-            if audio_tensor is None:
-                raise TypeError(f"Could not identify an audio tensor in tuple/list item for index {idx}.")
+        if original_item is None:
+            raise RuntimeError(f"Dataset returned None for index {idx}.")
+
+        # Extract audio and length from original dataset
+        if isinstance(original_item, dict):
+            if "audio" not in original_item or "length" not in original_item:
+                raise KeyError(f"Original dataset must return keys ['audio', 'length']. Got: {list(original_item.keys())}")
+            audio_tensor = original_item["audio"]
+            length = original_item["length"]
         else:
-            raise TypeError(f"Unsupported __getitem__ return type for index {idx}: {type(original_item)}.")
+            raise TypeError("Original dataset must return a dictionary with keys ['audio', 'length'].")
 
-        # Ensure 1D audio tensor
+        if not torch.is_tensor(audio_tensor):
+            raise TypeError(f"Expected 'audio' to be a torch.Tensor but got {type(audio_tensor)}.")
+
         if audio_tensor.ndim > 1:
             self.logger.warning(f"Audio tensor for index {idx} has {audio_tensor.ndim} dimensions. Squeezing.")
             audio_tensor = audio_tensor.squeeze()
+
         if audio_tensor.ndim != 1:
             raise ValueError(f"Audio tensor for index {idx} is not 1D after squeezing: {audio_tensor.shape}.")
 
-        # Return audio and pseudo_labels (aligned), or audio and original_idx
+        # Return audio, length, and pseudo_labels (if available)
         if self.pseudo_labels_dict:
             pseudo_label = self.pseudo_labels_dict.get(idx)
             if pseudo_label is None:
                 self.logger.error(f"Pseudo-labels for index {idx} not found.")
                 raise KeyError(f"Pseudo-labels for index {idx} not found.")
 
-            # Align pseudo-label length with feature length
-            pseudo_label = self._align_pseudo_labels(pseudo_label, audio_len=audio_tensor.shape[0])
+            pseudo_label = self._align_pseudo_labels(pseudo_label, audio_len=length)
             pseudo_label_tensor = torch.from_numpy(pseudo_label).long()
-            return {"audio": audio_tensor, "pseudo_labels": pseudo_label_tensor}
+            return {
+                "audio": audio_tensor,
+                "length": length,
+                "pseudo_labels": pseudo_label_tensor
+            }
         else:
-            return {"audio": audio_tensor, "original_idx": idx}
+            return {
+                "audio": audio_tensor,
+                "length": length,
+                "original_idx": idx
+            }
