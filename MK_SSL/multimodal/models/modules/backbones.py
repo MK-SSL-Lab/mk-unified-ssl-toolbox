@@ -191,7 +191,7 @@ class TimeFrequencyFrontEnd(nn.Module):
   
 
 class AttentionPool2d(nn.Module):
-    def __init__(self, spacial_dim: int, embed_dim: int, num_heads: int):
+    def __init__(self, spacial_dim: int = 7, embed_dim: int = 1024, num_heads: int = 8):
         super().__init__()
         self.positional_embedding = nn.Parameter(torch.randn(spacial_dim**2 + 1, embed_dim) / embed_dim**0.5)
         self.q_proj = nn.Linear(embed_dim, embed_dim)
