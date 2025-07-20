@@ -919,11 +919,11 @@ class Trainer:
             num_workers=self.num_workers,
         )
         first_train_batch = next(iter(train_loader))
-        if "audio" not in first_train_batch or "length" not in first_train_batch:
+        if "audio" not in first_train_batch or "image" not in first_train_batch or "text" not in first_train_batch:
             self.logger.warning(
-                "[Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
+                "[Dataset Check] Your dataset should return all 'audio', 'image' and 'text'  keys. "
                 "Currently missing: "
-                + ", ".join(k for k in ["audio", "length"] if k not in first_train_batch)
+                + ", ".join(k for k in ["audio", "image", "text"] if k not in first_train_batch)
             )
 
         total_batches_per_epoch = len(train_loader) # Used for global step calculation
