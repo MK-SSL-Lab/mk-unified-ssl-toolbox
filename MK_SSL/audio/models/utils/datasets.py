@@ -21,58 +21,32 @@ class HuBERTWrapperDataset(Dataset):
     """
 
     def __init__(self, original_dataset: Dataset, feature_extractor, sample_rate: int = 16000, logger=None):
-        """Initializes HuBERTWrapperDataset.
-
-        Args:
-            original_dataset (Dataset): The original dataset to wrap.
-            feature_extractor (nn.Module): HuBERT ConvFeatureExtractor instance.
-            sample_rate (int, optional): Audio sample rate. Defaults to 16000.
-            logger (logging.Logger, optional): Logger instance. Defaults to None.
-        """
         self.original_dataset = original_dataset
         self.feature_extractor = feature_extractor
         self.sample_rate = sample_rate
         self.pseudo_labels_dict: Dict[int, np.ndarray] = {}
         self.logger = logger if logger is not None else self._get_default_logger()
 
-    def _get_default_logger(self):
-        """Creates a default logger if none is provided.
+        # Track number of samples for safety
+        self.dataset_length = len(self.original_dataset)
+        self.logger.info(f"HuBERTWrapperDataset initialized with {self.dataset_length} samples.")
 
-        Returns:
-            logging.Logger: A configured logger instance.
-        """
+    def _get_default_logger(self):
         logger = logging.getLogger(__name__)
         if not logger.handlers:
             logging.basicConfig(level=logging.INFO)
         return logger
 
     def __len__(self) -> int:
-        """Returns the length of the wrapped dataset.
-
-        Returns:
-            int: The total number of samples in the dataset.
-        """
-        return len(self.original_dataset)
+        return self.dataset_length
 
     def set_pseudo_labels(self, pseudo_labels_dict: Dict[int, np.ndarray]):
-        """Updates the internal pseudo-label dictionary.
-
-        Args:
-            pseudo_labels_dict (Dict[int, np.ndarray]): A dictionary mapping dataset indices to pseudo-label arrays.
-        """
+        """Updates the internal pseudo-label dictionary."""
         self.pseudo_labels_dict = pseudo_labels_dict
-        self.logger.info("HuBERTWrapperDataset: Pseudo-labels updated successfully.")
+        self.logger.info(f"Pseudo-labels updated successfully for {len(pseudo_labels_dict)} samples.")
 
     def _align_pseudo_labels(self, pseudo_label: np.ndarray, audio_len: int) -> np.ndarray:
-        """Aligns pseudo-labels to match feature extractor output length T'.
-
-        Args:
-            pseudo_label (np.ndarray): Original pseudo-label sequence.
-            audio_len (int): Original audio length in samples.
-
-        Returns:
-            np.ndarray: Adjusted pseudo-label sequence of length T'.
-        """
+        """Aligns pseudo-labels to match feature extractor output length T'."""
         target_len = self.feature_extractor.get_output_lengths(
             torch.tensor([audio_len])
         ).item()
@@ -86,35 +60,19 @@ class HuBERTWrapperDataset(Dataset):
         return pseudo_label
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Retrieves a sample from the dataset with optional pseudo-labels.
+        """Retrieve a sample with a guaranteed unique original index."""
+        if idx < 0 or idx >= self.dataset_length:
+            raise IndexError(f"Index {idx} is out of bounds for dataset length {self.dataset_length}.")
 
-        Args:
-            idx (int): Index of the sample to retrieve.
-
-        Returns:
-            Dict[str, torch.Tensor]: A dictionary containing:
-                - "audio" (torch.Tensor): The audio waveform.
-                - "length" (int): The audio length in samples.
-                - "pseudo_labels" (torch.Tensor, optional): Pseudo-label sequence if available.
-                - "original_idx" (int): The index of the sample in the original dataset.
-
-        Raises:
-            RuntimeError: If the dataset returns None for the given index.
-            KeyError: If required keys ('audio', 'length') are missing or pseudo-labels are unavailable.
-            TypeError: If audio is not a torch.Tensor or dataset item format is incorrect.
-            ValueError: If audio tensor is not 1D after squeezing.
-        """
         original_item = self.original_dataset[idx]
         if original_item is None:
             raise RuntimeError(f"Dataset returned None for index {idx}.")
 
-        if isinstance(original_item, dict):
-            if "audio" not in original_item or "length" not in original_item:
-                raise KeyError(f"Dataset must return ['audio', 'length'], got {list(original_item.keys())}")
-            audio_tensor = original_item["audio"]
-            length = original_item["length"]
-        else:
-            raise TypeError("Original dataset must return a dictionary with keys ['audio', 'length'].")
+        if not isinstance(original_item, dict) or "audio" not in original_item or "length" not in original_item:
+            raise KeyError(f"Dataset must return a dict with ['audio', 'length'], got {type(original_item)}.")
+
+        audio_tensor = original_item["audio"]
+        length = original_item["length"]
 
         if not torch.is_tensor(audio_tensor):
             raise TypeError(f"Expected 'audio' to be a torch.Tensor but got {type(audio_tensor)}.")
@@ -126,6 +84,8 @@ class HuBERTWrapperDataset(Dataset):
         if audio_tensor.ndim != 1:
             raise ValueError(f"Audio tensor for index {idx} is not 1D after squeezing: {audio_tensor.shape}.")
 
+        sample_dict = {"audio": audio_tensor, "length": length, "original_idx": idx}
+
         if self.pseudo_labels_dict:
             pseudo_label = self.pseudo_labels_dict.get(idx)
             if pseudo_label is None:
@@ -133,7 +93,6 @@ class HuBERTWrapperDataset(Dataset):
                 raise KeyError(f"Pseudo-labels for index {idx} not found.")
 
             pseudo_label = self._align_pseudo_labels(pseudo_label, audio_len=length)
-            pseudo_label_tensor = torch.from_numpy(pseudo_label).long()
-            return {"audio": audio_tensor, "length": length, "pseudo_labels": pseudo_label_tensor, "original_idx": idx}
-        else:
-            return {"audio": audio_tensor, "length": length, "original_idx": idx}
+            sample_dict["pseudo_labels"] = torch.from_numpy(pseudo_label).long()
+
+        return sample_dict
