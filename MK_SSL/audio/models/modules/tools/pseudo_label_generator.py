@@ -1,13 +1,13 @@
-# File: MK_SSL/audio/models/modules/tools.py
 
 import os
 import numpy as np
 import torch
 from sklearn.cluster import MiniBatchKMeans
 from tqdm import tqdm
-from typing import Literal, Optional, Dict, List
+from typing import Optional, Dict
 from torch.utils.data import DataLoader 
 import logging
+import joblib
 
 from MK_SSL.audio.models.modules.feature_extractors import MFCCFeatureExtractor
 
@@ -18,63 +18,48 @@ class PseudoLabelGenerator:
         kmeans_clusters: int = 100,
         sample_rate: int = 16000,
         save_dir: str = "generated_labels",
-        logger=None # Add logger parameter
+        logger=None
     ):
         self.kmeans_clusters = kmeans_clusters
         self.sample_rate = sample_rate
         self.save_dir = save_dir
-        self.logger = logger if logger is not None else logging._get_default_logger()
+        self.logger = logger if logger is not None else logging.getLogger(__name__)
 
         os.makedirs(self.save_dir, exist_ok=True)
-        self.kmeans = MiniBatchKMeans(n_clusters=kmeans_clusters, batch_size=1024, random_state=0, n_init='auto') # n_init='auto' is more robust
+        self.kmeans = MiniBatchKMeans(
+            n_clusters=kmeans_clusters,
+            batch_size=1024,
+            random_state=0,
+            n_init='auto'
+        )
         self.fitted = False
-        self.model = None # Model will be set during generate_pseudo_labels call
-        self.layer = None # Layer will be set during generate_pseudo_labels call
-        self.device = None # Device will be set during generate_pseudo_labels call
+        self.model = None
+        self.layer = None
+        self.device = None
 
-    def _extract_features_for_clustering(self, audio_tensor: torch.Tensor, is_mfcc: bool) -> torch.Tensor:
-        """
-        Extracts features (MFCC or Transformer's feature extractor output) from a single audio tensor.
-        audio_tensor is assumed to be (T,) and will be unsqueezed to (1, T) for feature extractor.
-        Returns (T_feat, D_feat) after squeezing the batch dimension.
-        """
-        # Add batch dimension as feature extractors expect (B, T) or (B, T, C)
-        audio_tensor = audio_tensor.unsqueeze(0).to(self.device) # (1, T)
-
-        if is_mfcc:
-            # If the model itself has an MFCC feature extractor configured (for iter 0)
-            if hasattr(self.model, 'feature_extractor') and isinstance(self.model.feature_extractor, MFCCFeatureExtractor):
-                feat = self.model.feature_extractor(audio_tensor) # (1, T_mfcc, D_mfcc)
+    def _extract_features_for_clustering_batch(self, audio_batch: torch.Tensor, is_mfcc: bool) -> torch.Tensor:
+        """Extract features for the entire batch (B, T) -> (B, T', D)."""
+        audio_batch = audio_batch.to(self.device)
+        with torch.no_grad():
+            if is_mfcc:
+                if hasattr(self.model, 'feature_extractor') and isinstance(self.model.feature_extractor, MFCCFeatureExtractor):
+                    feats = self.model.feature_extractor(audio_batch)
+                else:
+                    self.logger.warning(
+                        "Model's feature_extractor is not MFCC-based. Using temporary MFCCFeatureExtractor."
+                    )
+                    temp_mfcc_extractor = MFCCFeatureExtractor(sample_rate=self.sample_rate, n_mfcc=39).to(self.device)
+                    feats = temp_mfcc_extractor(audio_batch)
             else:
-                # Fallback: Create a temporary MFCC extractor if the model's isn't MFCC based.
-                # This assumes standard MFCC parameters (e.g., from HuBERT paper).
-                self.logger.warning("Model's feature_extractor is not MFCC-based for MFCC feature extraction. "
-                                    "Using a temporary MFCCFeatureExtractor (n_mfcc=39, default sample_rate).")
-                temp_mfcc_extractor = MFCCFeatureExtractor(
-                    sample_rate=self.sample_rate,
-                    n_mfcc=39 # Common default for HuBERT
-                ).to(self.device)
-                feat = temp_mfcc_extractor(audio_tensor) # (1, T_mfcc, D_mfcc)
-            return feat.squeeze(0) # Returns (T_mfcc, D_mfcc)
+                feats, _ = self.model.feature_extractor(audio_batch)
+                feats = self.model.feature_projection(feats)
+                feats = self.model.post_extract_proj_norm(feats)
+                feats = self.model.post_extract_proj_dropout(feats)
+                feats = self.model.encoder(feats)
 
-        else: # Use model's ConvFeatureExtractor and Transformer encoder
-            with torch.no_grad():
-
-                conv_feats, _ = self.model.feature_extractor(audio_tensor)
-                conv_feats = self.model.feature_projection(conv_feats)  # Project 512 -> 768
-                conv_feats = self.model.post_extract_proj_norm(conv_feats)
-                conv_feats = self.model.post_extract_proj_dropout(conv_feats)
-                
-                if self.layer is not None:
-                    encoder_output = self.model.encoder.extract_layer(conv_feats, self.layer)  
-                else: # Default to last layer if no specific layer provided
-                    encoder_output = self.model.encoder(conv_feats)
-                    if not isinstance(encoder_output, torch.Tensor):
-                         # Handle cases where encoder might return tuple (output, attn_weights)
-                         encoder_output = encoder_output[0] if isinstance(encoder_output, tuple) else encoder_output
-                    self.logger.debug(f"Encoder output shape without specific layer: {encoder_output.shape}")
-
-            return encoder_output.squeeze(0) # Returns (T', D)
+            if isinstance(feats, tuple):  # If encoder returns (output, attn)
+                feats = feats[0]
+        return feats  # Shape: (B, T', D)
 
     def generate_pseudo_labels(
         self,
@@ -84,43 +69,69 @@ class PseudoLabelGenerator:
         transformer_layer: Optional[int],
         device: torch.device
     ) -> Dict[int, np.ndarray]:
+        """
+        Generate pseudo-labels for every dataset sample.
+
+        Args:
+            dataloader (DataLoader): DataLoader for feature extraction (no shuffling).
+            model (torch.nn.Module): HuBERT model used for feature extraction.
+            is_mfcc (bool): Whether to extract MFCC features for the first iteration.
+            transformer_layer (Optional[int]): Specific transformer layer to use.
+            device (torch.device): Device to perform computations on.
+
+        Returns:
+            Dict[int, np.ndarray]: Mapping from dataset indices to pseudo-label sequences.
+        """
         self.model = model.eval().to(device)
         self.layer = transformer_layer
         self.device = device
 
-        # Cache paths
         kmeans_model_path = os.path.join(self.save_dir, "kmeans_model.pkl")
 
-        # First pass: collect all features
+        dataset_len = len(dataloader.dataset)
+        idx_to_labels = {i: None for i in range(dataset_len)}
+        seen_indices = set()
+
+        # === Feature Extraction Pass ===
         all_features_flattened = []
-        sample_features_list = []
-        original_indices_collected = []
+        all_indices = []
 
-        self.logger.info("Starting feature extraction for K-means clustering (first pass over data)...")
+        self.logger.info(f"Starting feature extraction for K-means clustering on {dataset_len} samples...")
         for batch in tqdm(dataloader, desc="Feature Extraction (K-means)"):
-            audio_batch = batch["audio"]  # (B, T)
-            indices_batch = batch["original_idx"]  # (B,)
-            
-            self.logger.info(f"Indices batch: {indices_batch}")
+            audio_batch = batch["audio"]
+            indices_batch = batch["original_idx"].tolist()
 
-            batch_features_list = []
-            for i in range(audio_batch.shape[0]):
-                single_audio = audio_batch[i]
-                feat = self._extract_features_for_clustering(single_audio, is_mfcc)
-                batch_features_list.append(feat.cpu().numpy())
-                all_features_flattened.append(feat.cpu().numpy().reshape(-1, feat.shape[-1]))
 
-            sample_features_list.extend(batch_features_list)
-            original_indices_collected.extend(indices_batch.cpu().tolist())
+            feats_batch = self._extract_features_for_clustering_batch(audio_batch, is_mfcc)
+            feats_batch_np = feats_batch.cpu().numpy()
 
-        # Fit or load K-means
+            for i, idx in enumerate(indices_batch):
+                idx = int(idx)
+                if idx in seen_indices:
+                    self.logger.warning(f"[WARNING] Duplicate dataset index {idx} encountered. Skipping duplicate.")
+                    continue
+                if idx >= dataset_len:
+                    self.logger.warning(f"[WARNING] Invalid index {idx} (out of range). Skipping.")
+                    continue
+
+                sample_feats = feats_batch_np[i]
+                if sample_feats.shape[0] == 0:
+                    self.logger.warning(f"Skipping index {idx}: No features extracted.")
+                    continue
+
+                seen_indices.add(idx)
+                all_features_flattened.append(sample_feats.reshape(-1, sample_feats.shape[-1]))
+                all_indices.append(idx)
+                idx_to_labels[idx] = sample_feats
+
+        # === K-means Fitting ===
+        flat_features_for_kmeans = np.concatenate(all_features_flattened, axis=0)
         if not self.fitted:
             self.logger.info("Fitting K-means model...")
-            flat_features_for_kmeans = np.concatenate(all_features_flattened, axis=0)
             if flat_features_for_kmeans.shape[0] < self.kmeans_clusters:
                 self.logger.warning(
-                    f"Number of samples ({flat_features_for_kmeans.shape[0]}) < n_clusters ({self.kmeans_clusters}). "
-                    f"Reducing n_clusters to {flat_features_for_kmeans.shape[0]}."
+                    f"Samples ({flat_features_for_kmeans.shape[0]}) < clusters ({self.kmeans_clusters}). "
+                    f"Reducing clusters to {flat_features_for_kmeans.shape[0]}."
                 )
                 self.kmeans = MiniBatchKMeans(
                     n_clusters=flat_features_for_kmeans.shape[0],
@@ -130,32 +141,46 @@ class PseudoLabelGenerator:
                 )
             self.kmeans.fit(flat_features_for_kmeans)
             self.fitted = True
-            self.logger.info(f"K-means clustering completed with {self.kmeans.n_clusters} clusters.")
+            self.logger.info(f"K-means fitted with {self.kmeans.n_clusters} clusters.")
 
-            # Save model
             try:
-                import joblib
                 joblib.dump(self.kmeans, kmeans_model_path)
                 self.logger.info(f"K-means model saved at {kmeans_model_path}")
             except Exception as e:
                 self.logger.warning(f"Failed to save K-means model: {e}")
         else:
-            self.logger.info("Using pre-fitted K-means model for pseudo-label generation.")
+            self.logger.info("Using pre-fitted K-means model...")
             if os.path.exists(kmeans_model_path):
                 try:
-                    import joblib
                     self.kmeans = joblib.load(kmeans_model_path)
                     self.logger.info(f"K-means model loaded from {kmeans_model_path}")
                 except Exception as e:
                     self.logger.warning(f"Failed to load K-means model: {e}")
 
-        # Second pass: generate labels
-        self.logger.info("Generating pseudo-labels from fitted K-means model (second pass over features)...")
-        idx_to_labels = {}
-        for i, original_idx in enumerate(original_indices_collected):
-            sample_feats = sample_features_list[i]
+        # === Assign Labels ===
+        self.logger.info("Assigning pseudo-labels...")
+        for idx in tqdm(all_indices, desc="Label Assignment"):
+            if idx >= dataset_len:
+                continue
+            sample_feats = idx_to_labels[idx]
             predicted_labels = self.kmeans.predict(sample_feats)
-            idx_to_labels[original_idx] = predicted_labels
+            idx_to_labels[idx] = predicted_labels
 
-        self.logger.info("Pseudo-label generation completed.")
+        # === Safety Check & Alignment ===
+        all_dataset_indices = set(range(dataset_len))
+        missing_indices = all_dataset_indices - seen_indices
+        extra_indices = seen_indices - all_dataset_indices
+
+        if extra_indices:
+            self.logger.warning(f"Found {len(extra_indices)} extra indices: {sorted(list(extra_indices))[:10]}...")
+            for idx in extra_indices:
+                idx_to_labels.pop(idx, None)
+
+        if missing_indices:
+            self.logger.warning(f"Filling {len(missing_indices)} missing indices with zeros.")
+            zero_label = np.zeros((1,), dtype=np.int64)
+            for idx in missing_indices:
+                idx_to_labels[idx] = zero_label
+
+        self.logger.info(f"Pseudo-label generation completed with {len(idx_to_labels)} samples.")
         return idx_to_labels

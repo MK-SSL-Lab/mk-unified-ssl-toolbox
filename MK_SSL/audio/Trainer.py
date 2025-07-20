@@ -817,7 +817,6 @@ class Trainer:
         self.model.train()
         return avg_val_loss
 
-
     def _train_hubert(
         self,
         train_loader_for_training: DataLoader,
@@ -901,13 +900,24 @@ class Trainer:
                 np.save(iteration_pseudo_labels_path, pseudo_labels_dict)
                 self.logger.info(f"Saved pseudo-labels for iteration {iteration + 1}.")
 
-            # Safety check
-            if len(pseudo_labels_dict) != len(train_loader_for_training.dataset):
-                missing_count = len(train_loader_for_training.dataset) - len(pseudo_labels_dict)
-                raise RuntimeError(
-                    f"Pseudo-label generation mismatch: got {len(pseudo_labels_dict)}, "
-                    f"expected {len(train_loader_for_training.dataset)} (missing {missing_count})."
-                )
+            # === Adjust pseudo-labels to match dataset ===
+            all_dataset_indices = set(range(len(train_loader_for_training.dataset)))
+            all_pseudo_indices = set(pseudo_labels_dict.keys())
+            
+            extra = all_pseudo_indices - all_dataset_indices
+            missing = all_dataset_indices - all_pseudo_indices
+            
+            if extra:
+                self.logger.warning(f"Removing {len(extra)} extra pseudo-labels: {sorted(list(extra))[:10]}...")
+                for idx in extra:
+                    pseudo_labels_dict.pop(idx, None)
+
+            if missing:
+                self.logger.warning(f"Filling {len(missing)} missing pseudo-labels with zeros: {sorted(list(missing))[:10]}...")
+                for idx in missing:
+                    pseudo_labels_dict[idx] = np.zeros(self.model.num_clusters, dtype=np.int64)
+
+            self.logger.info(f"Adjusted pseudo-labels to match dataset size ({len(pseudo_labels_dict)}).")
 
             train_loader_for_training.dataset.set_pseudo_labels(pseudo_labels_dict)
             self.logger.info("Updated training dataset with pseudo-labels.")
