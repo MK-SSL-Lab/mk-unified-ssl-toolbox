@@ -151,46 +151,49 @@ class HuBERT(nn.Module):
             raise ValueError(f"Unknown HuBERT variant: {variant}")
         return configs[variant]
 
-    def _apply_masking(self, features: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+    def _apply_masking(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Apply time-based masking to the feature sequence, replacing selected time steps
-        with a learnable mask embedding. This operation is **non-inplace** to ensure
-        correct gradient computation during backpropagation.
+        Apply non-overlapping time-based masking to the feature sequence.
+        Follows the logic of FAIRSEQ's `_compute_mask_indices`.
 
         Args:
-            features (Tensor): Feature tensor of shape (B, T, C), where
-                B = batch size,
-                T = time steps,
-                D = feature dimension.
+            features (Tensor): Feature tensor of shape (B, T, C).
 
         Returns:
             Tuple[Tensor, Tensor, Tensor]:
-                - masked_features (Tensor): Features with masked positions replaced by
-                `self.mask_embedding`, shape (B, T, C).
-                - mask_indices (Tensor): Boolean mask indicating which positions were masked,
-                shape (B, T).
-                - masked_lengths (Tensor): Number of masked positions per sample, shape (B,).
+                - masked_features: Features with masked positions replaced by self.mask_embedding.
+                - mask_indices: Boolean tensor of shape (B, T) where True indicates a masked time step.
+                - masked_lengths: 1D tensor of shape (B,) with the count of masked frames per sample.
         """
         B, T, C = features.shape
         mask_indices = torch.zeros((B, T), dtype=torch.bool, device=features.device)
         masked_lengths = torch.zeros(B, dtype=torch.long, device=features.device)
 
+        # Number of masks per sequence
+        num_masks = max(1, int(self.mask_prob * T / self.mask_length))
+
         for i in range(B):
-            num_masked_spans = int(T * self.mask_prob / self.mask_length)
-            masked_spans = []
-            for _ in range(num_masked_spans):
+            spans = []
+            attempts = 0
+            while len(spans) < num_masks and attempts < num_masks * 5:
                 start = torch.randint(0, max(1, T - self.mask_length + 1), (1,)).item()
                 end = min(T, start + self.mask_length)
-                masked_spans.extend(range(start, end))
-            mask_indices[i, masked_spans] = True
-            masked_lengths[i] = len(masked_spans)
 
+                # Avoid overlapping spans
+                if all(end <= s or start >= e for s, e in spans):
+                    spans.append((start, end))
+                attempts += 1
+
+            # Set mask indices
+            for s, e in spans:
+                mask_indices[i, s:e] = True
+            masked_lengths[i] = sum(e - s for s, e in spans)
+
+        # Apply mask embedding
         mask_embed = self.mask_embedding.to(features.device)
-        masked_features = torch.where(
-            mask_indices.unsqueeze(-1),
-            mask_embed.expand_as(features),
-            features
-        )
+        masked_features = features.clone()
+        masked_features[mask_indices] = mask_embed
+
         return masked_features, mask_indices, masked_lengths
 
 
