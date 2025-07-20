@@ -852,7 +852,6 @@ class Trainer:
             )
             self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
 
-            # Log initial embeddings before any HuBERT iterations
             self.logger.info("[HuBERT - Step 0] Logging pre-training embeddings...")
             backbone = HuBERTBackbone(self.model).to(self.device)
             backbone.eval()
@@ -890,7 +889,6 @@ class Trainer:
                 pseudo_labels_dict = np.load(iteration_pseudo_labels_path, allow_pickle=True).item()
             else:
                 self.logger.info("Generating pseudo-labels...")
-
                 if iteration == 0:
                     dataloader_for_clustering = train_loader_full_dataset
                 else:
@@ -929,15 +927,27 @@ class Trainer:
 
                 for batch_idx, batch in enumerate(pbar):
                     audio = batch["audio"].to(self.device)
-                    lengths = batch['length'].to(self.device)
+                    lengths = batch["length"].to(self.device)
                     pseudo_labels = batch["pseudo_labels"].to(self.device)
 
                     optimizer.zero_grad()
                     with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                         logits, mask_indices, lengths, _ = self.model(audio, lengths)
-                        masked_targets = pseudo_labels[mask_indices]  
-                        loss = self.loss(logits, masked_targets)
 
+                        # === NaN loss guard ===
+                        if mask_indices.sum() == 0:
+                            self.logger.warning(
+                                f"[Iteration {iteration+1}, Epoch {epoch+1}, Batch {batch_idx}] No masked positions. Skipping."
+                            )
+                            continue
+
+                        masked_targets = pseudo_labels[mask_indices]
+
+                        # Target validity check
+                        if (masked_targets < 0).any() or (masked_targets >= self.model.num_clusters).any():
+                            raise ValueError(f"Invalid pseudo-label values found in batch {batch_idx}.")
+
+                        loss = self.loss(logits, masked_targets)
 
                     self.scaler.scale(loss).backward()
                     self.scaler.step(optimizer)
@@ -956,7 +966,7 @@ class Trainer:
                             step=global_step
                         )
 
-                avg_loss = running_loss / len(train_loader_for_training)
+                avg_loss = running_loss / max(1, len(train_loader_for_training))
                 self.logger.info(f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
 
                 if self.wandb_logger.is_active:
