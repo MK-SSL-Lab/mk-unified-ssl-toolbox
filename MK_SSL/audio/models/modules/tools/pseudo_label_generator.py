@@ -100,6 +100,8 @@ class PseudoLabelGenerator:
         for batch in tqdm(dataloader, desc="Feature Extraction (K-means)"):
             audio_batch = batch["audio"]  # (B, T)
             indices_batch = batch["original_idx"]  # (B,)
+            
+            self.logger.info(f"Indices batch: {indices_batch}")
 
             batch_features_list = []
             for i in range(audio_batch.shape[0]):
