@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchaudio.transforms as T
-
 from torchvision.models import resnet50
-
 from transformers import BertModel, BertConfig
+from MK_SSL.multimodal.models.modules.backbones import AttentionPool2d
+
 
 
 from typing import Optional
@@ -231,10 +231,53 @@ class AttentionPool2d(nn.Module):
         return attn[0][:, 0]  # return [CLS] token output
 
 
-class AudioResNeXtStem(nn.Module):
-    def __init__(self, embed_dim=512, num_heads=8):
+
+class FBSPFrontEnd(nn.Module):
+    """
+    Trainable front-end inspired by ESResNeXt's FBSP (Frequency B-Spline) transform.
+    Converts raw waveforms [B, L] into 2D time-frequency features [B, 1, F, T].
+    """
+
+    def __init__(self, n_filters: int = 64, kernel_size: int = 400, stride: int = 160):
         super().__init__()
+        self.conv1 = nn.Conv1d(
+            in_channels=1,
+            out_channels=n_filters,
+            kernel_size=kernel_size,
+            stride=stride,
+            bias=False
+        )
+        self.bn1 = nn.BatchNorm1d(n_filters)
+        self.relu = nn.ReLU(inplace=True)
+
+        # Additional layers to refine frequency representation
+        self.conv2 = nn.Conv1d(n_filters, n_filters, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm1d(n_filters)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, L]
+        x = x.unsqueeze(1)  # [B, 1, L]
+        x = self.relu(self.bn1(self.conv1(x)))  # [B, n_filters, T]
+        x = self.relu(self.bn2(self.conv2(x)))  # [B, n_filters, T]
+        return x.unsqueeze(1)  # [B, 1, n_filters, T]
+
+
+class AudioResNeXtStem(nn.Module):
+    """
+    Audio encoder following ESResNeXt + FBSP design from the AudioCLIP paper.
+    Accepts raw audio [B, L] and outputs normalized embeddings.
+    """
+
+    def __init__(self, embed_dim: int = 512, num_heads: int = 8, n_filters: int = 64):
+        super().__init__()
+        self.frontend = FBSPFrontEnd(n_filters=n_filters)
+
         base = resnet50(pretrained=False)
+        # Adjust first conv layer to accept 1-channel (frequency) input
+        base.conv1 = nn.Conv2d(
+            1, 64, kernel_size=7, stride=2, padding=3, bias=False
+        )
+
         self.stem = nn.Sequential(base.conv1, base.bn1, base.relu, base.maxpool)
         self.layer1 = base.layer1
         self.layer2 = base.layer2
@@ -243,7 +286,14 @@ class AudioResNeXtStem(nn.Module):
         self.attnpool = AttentionPool2d(spacial_dim=7, embed_dim=2048, num_heads=num_heads)
         self.fc = nn.Linear(2048, embed_dim)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x (Tensor): Raw audio [B, L]
+        Returns:
+            Tensor: Normalized embedding [B, embed_dim]
+        """
+        x = self.frontend(x)  # [B, 1, F, T]
         x = self.stem(x)
         x = self.layer1(x)
         x = self.layer2(x)
@@ -252,6 +302,10 @@ class AudioResNeXtStem(nn.Module):
         x = self.attnpool(x)
         x = self.fc(x)
         return F.normalize(x, dim=-1)
+
+
+
+
 
 
 class TransformerLayer(nn.Module):
