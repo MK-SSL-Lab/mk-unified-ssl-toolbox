@@ -1239,6 +1239,15 @@ class Trainer:
             )
 
         elif self.method == "hubert":
+
+            first_sample = train_dataset[0]
+            if "audio" not in first_sample or "length" not in first_sample:
+                self.logger.warning(
+                    "[Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
+                    "Currently missing: "
+                    + ", ".join(k for k in ["audio", "length"] if k not in first_sample)
+                )
+
             wrapped_train_dataset = HuBERTWrapperDataset(
                 train_dataset, logger=self.logger
             )
