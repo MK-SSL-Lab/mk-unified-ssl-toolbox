@@ -158,7 +158,7 @@ class HuBERT(nn.Module):
         correct gradient computation during backpropagation.
 
         Args:
-            features (Tensor): Feature tensor of shape (B, T, D), where
+            features (Tensor): Feature tensor of shape (B, T, C), where
                 B = batch size,
                 T = time steps,
                 D = feature dimension.
@@ -166,12 +166,12 @@ class HuBERT(nn.Module):
         Returns:
             Tuple[Tensor, Tensor, Tensor]:
                 - masked_features (Tensor): Features with masked positions replaced by
-                `self.mask_embedding`, shape (B, T, D).
+                `self.mask_embedding`, shape (B, T, C).
                 - mask_indices (Tensor): Boolean mask indicating which positions were masked,
                 shape (B, T).
                 - masked_lengths (Tensor): Number of masked positions per sample, shape (B,).
         """
-        B, T, D = features.shape
+        B, T, C = features.shape
         mask_indices = torch.zeros((B, T), dtype=torch.bool, device=features.device)
         masked_lengths = torch.zeros(B, dtype=torch.long, device=features.device)
 
@@ -198,12 +198,9 @@ class HuBERT(nn.Module):
         self,
         waveforms: Tensor,
         lengths: Tensor,
-        return_features_only: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         features, lengths = self.feature_extractor(waveforms, lengths)
 
-        if return_features_only:
-            return features, lengths
 
         # Projection to encoder
         features = self.feature_projection(features)
@@ -211,9 +208,13 @@ class HuBERT(nn.Module):
         features = self.post_extract_proj_dropout(features)
 
         # Apply masking
+        print(f'Before masking: {features.shape}')
+
         features, mask_indices, masked_lengths = self._apply_masking(features)
 
         # Transformer encoder
+        print(f'After masking: {features.shape}')
+
         encoder_outputs = self.encoder(features, lengths)
 
         # Projection head
