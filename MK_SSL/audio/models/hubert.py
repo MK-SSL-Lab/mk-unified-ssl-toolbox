@@ -208,13 +208,9 @@ class HuBERT(nn.Module):
         features = self.post_extract_proj_dropout(features)
 
         # Apply masking
-        print(f'Before masking: {features.shape}')
-
         features, mask_indices, masked_lengths = self._apply_masking(features)
-
+        
         # Transformer encoder
-        print(f'After masking: {features.shape}')
-
         encoder_outputs = self.encoder(features, lengths)
 
         # Projection head
