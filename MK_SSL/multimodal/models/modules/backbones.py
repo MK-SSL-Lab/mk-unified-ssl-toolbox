@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torchaudio.transforms as T
 from torchvision.models import resnet50
 from transformers import BertModel, BertConfig
-from MK_SSL.multimodal.models.modules.backbones import AttentionPool2d
+
 
 
 
