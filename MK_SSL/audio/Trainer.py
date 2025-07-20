@@ -1249,7 +1249,9 @@ class Trainer:
                 )
 
             wrapped_train_dataset = HuBERTWrapperDataset(
-                train_dataset, logger=self.logger
+                train_dataset,
+                feature_extractor=self.model.feature_extractor,
+                logger=self.logger
             )
 
             train_loader_for_pseudo_label_gen = DataLoader(
