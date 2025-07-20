@@ -901,6 +901,19 @@ class Trainer:
                 np.save(iteration_pseudo_labels_path, pseudo_labels_dict)
                 self.logger.info(f"Saved pseudo-labels for iteration {iteration + 1}.")
 
+
+            all_dataset_indices = set(range(len(train_loader_for_training.dataset)))
+            all_pseudo_indices = set(pseudo_labels_dict.keys())
+            
+            extra = all_pseudo_indices - all_dataset_indices
+            missing = all_dataset_indices - all_pseudo_indices
+            
+            self.logger.error(f"[DEBUG] Dataset indices: {sorted(list(all_dataset_indices))}")
+            self.logger.error(f"[DEBUG] Pseudo-label indices: {sorted(list(all_pseudo_indices))}")
+            self.logger.error(f"[DEBUG] Extra keys: {sorted(list(extra))}")
+            self.logger.error(f"[DEBUG] Missing keys: {sorted(list(missing))}")
+            
+
             # Safety check
             if len(pseudo_labels_dict) != len(train_loader_for_training.dataset):
                 missing_count = len(train_loader_for_training.dataset) - len(pseudo_labels_dict)
