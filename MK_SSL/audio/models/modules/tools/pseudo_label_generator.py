@@ -78,55 +78,82 @@ class PseudoLabelGenerator:
 
     def generate_pseudo_labels(
         self,
-        dataloader: DataLoader, # Now takes a DataLoader (wrapping HuBERTWrapperDataset)
+        dataloader: DataLoader,
         model: torch.nn.Module,
         is_mfcc: bool,
         transformer_layer: Optional[int],
         device: torch.device
-    ) -> Dict[int, np.ndarray]: # Returns dict mapping original_idx to labels
-        self.model = model.eval().to(device) # Ensure model is in eval mode and on device
+    ) -> Dict[int, np.ndarray]:
+        self.model = model.eval().to(device)
         self.layer = transformer_layer
         self.device = device
 
-        all_features_flattened = [] # For K-means fitting (all time steps concatenated)
-        sample_features_list = [] # List of (T_feat, D_feat) numpy arrays for each sample
-        original_indices_collected = [] # Corresponding original indices for each sample
+        # Cache paths
+        kmeans_model_path = os.path.join(self.save_dir, "kmeans_model.pkl")
+
+        # First pass: collect all features
+        all_features_flattened = []
+        sample_features_list = []
+        original_indices_collected = []
 
         self.logger.info("Starting feature extraction for K-means clustering (first pass over data)...")
-        # Ensure the dataloader provides {"audio": audio_tensor, "original_idx": idx} from HuBERTWrapperDataset
         for batch in tqdm(dataloader, desc="Feature Extraction (K-means)"):
-            audio_batch = batch["audio"] # (B, T)
-            indices_batch = batch["original_idx"] # (B,)
+            audio_batch = batch["audio"]  # (B, T)
+            indices_batch = batch["original_idx"]  # (B,)
 
-            # Extract features for each sample in the batch
             batch_features_list = []
             for i in range(audio_batch.shape[0]):
-                single_audio = audio_batch[i] # Get (T,) tensor for single sample
-                feat = self._extract_features_for_clustering(single_audio, is_mfcc) # Returns (T_feat, D_feat)
-                
-                batch_features_list.append(feat.cpu().numpy()) # Store numpy array of (T_feat, D_feat)
-                all_features_flattened.append(feat.cpu().numpy().reshape(-1, feat.shape[-1])) # Flatten all time steps for K-means fit
+                single_audio = audio_batch[i]
+                feat = self._extract_features_for_clustering(single_audio, is_mfcc)
+                batch_features_list.append(feat.cpu().numpy())
+                all_features_flattened.append(feat.cpu().numpy().reshape(-1, feat.shape[-1]))
 
             sample_features_list.extend(batch_features_list)
             original_indices_collected.extend(indices_batch.cpu().tolist())
 
-        # Fit K-means if not already fitted
+        # Fit or load K-means
         if not self.fitted:
             self.logger.info("Fitting K-means model...")
             flat_features_for_kmeans = np.concatenate(all_features_flattened, axis=0)
+            if flat_features_for_kmeans.shape[0] < self.kmeans_clusters:
+                self.logger.warning(
+                    f"Number of samples ({flat_features_for_kmeans.shape[0]}) < n_clusters ({self.kmeans_clusters}). "
+                    f"Reducing n_clusters to {flat_features_for_kmeans.shape[0]}."
+                )
+                self.kmeans = MiniBatchKMeans(
+                    n_clusters=flat_features_for_kmeans.shape[0],
+                    batch_size=1024,
+                    random_state=0,
+                    n_init='auto'
+                )
             self.kmeans.fit(flat_features_for_kmeans)
             self.fitted = True
             self.logger.info(f"K-means clustering completed with {self.kmeans.n_clusters} clusters.")
+
+            # Save model
+            try:
+                import joblib
+                joblib.dump(self.kmeans, kmeans_model_path)
+                self.logger.info(f"K-means model saved at {kmeans_model_path}")
+            except Exception as e:
+                self.logger.warning(f"Failed to save K-means model: {e}")
         else:
             self.logger.info("Using pre-fitted K-means model for pseudo-label generation.")
+            if os.path.exists(kmeans_model_path):
+                try:
+                    import joblib
+                    self.kmeans = joblib.load(kmeans_model_path)
+                    self.logger.info(f"K-means model loaded from {kmeans_model_path}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to load K-means model: {e}")
 
-        # Generate labels for all features, mapping back to original_idx
+        # Second pass: generate labels
         self.logger.info("Generating pseudo-labels from fitted K-means model (second pass over features)...")
         idx_to_labels = {}
         for i, original_idx in enumerate(original_indices_collected):
-            sample_feats = sample_features_list[i] # (T_feat, D_feat)
-            predicted_labels = self.kmeans.predict(sample_feats) # (T_feat,)
-            idx_to_labels[original_idx] = predicted_labels # Map original_idx to its label sequence
+            sample_feats = sample_features_list[i]
+            predicted_labels = self.kmeans.predict(sample_feats)
+            idx_to_labels[original_idx] = predicted_labels
 
         self.logger.info("Pseudo-label generation completed.")
         return idx_to_labels
