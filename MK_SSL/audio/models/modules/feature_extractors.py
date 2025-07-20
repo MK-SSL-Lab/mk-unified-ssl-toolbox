@@ -91,6 +91,15 @@ class ConvFeatureExtractor(nn.Module):
         return x.transpose(1, 2), lengths  # (B, T', C)
 
 
+    def get_output_lengths(self, input_lengths: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the output lengths (T') for given raw audio input lengths (in samples).
+        """
+        lengths = input_lengths.clone()
+        for out_channels, kernel_size, stride in self.conv_layers:
+            lengths = ((lengths - kernel_size) // stride) + 1
+        return lengths
+
 class FBANKFeatureExtractor(nn.Module):
     """
     Extracts 80-dimensional log Mel filterbank (FBANK) features from raw waveform.
