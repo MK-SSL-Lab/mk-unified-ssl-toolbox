@@ -263,8 +263,7 @@ class FBSPFrontEnd(nn.Module):
         x = x.unsqueeze(1)  # [B, 1, L]
         x = self.relu(self.bn1(self.conv1(x)))  # [B, n_filters, T]
         x = self.relu(self.bn2(self.conv2(x)))  # [B, n_filters, T]
-        print(f"[DEBUG] AudioCLIP.forward: audio_input.shape = {x.shape}")
-        return x  
+        return x.unsqueeze(1)  # [B, 1, n_filters, T]
 
 
 class AudioResNeXtStem(nn.Module):
@@ -298,10 +297,7 @@ class AudioResNeXtStem(nn.Module):
         Returns:
             Tensor: Normalized embedding [B, embed_dim]
         """
-
-        print(f"[DEBUG] AudioResNeXtStem.forward: received x.shape = {x.shape}")
         x = self.frontend(x)  # [B, 1, F, T]
-        print(f"[DEBUG] After FBSPFrontEnd: x.shape = {x.shape}")
         x = self.stem(x)
         x = self.layer1(x)
         x = self.layer2(x)
