@@ -189,23 +189,39 @@ class TimeFrequencyFrontEnd(nn.Module):
         return self.act(x)
 
   
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 class AttentionPool2d(nn.Module):
     def __init__(self, spacial_dim: int = 7, embed_dim: int = 1024, num_heads: int = 8):
         super().__init__()
-        self.positional_embedding = nn.Parameter(torch.randn(spacial_dim**2 + 1, embed_dim) / embed_dim**0.5)
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+
+        # Positional embedding initialized for the default spatial dimension
+        self.positional_embedding = nn.Parameter(
+            torch.randn(spacial_dim**2 + 1, embed_dim) / embed_dim**0.5
+        )
+
         self.q_proj = nn.Linear(embed_dim, embed_dim)
         self.k_proj = nn.Linear(embed_dim, embed_dim)
         self.v_proj = nn.Linear(embed_dim, embed_dim)
         self.c_proj = nn.Linear(embed_dim, embed_dim)
-        self.num_heads = num_heads
 
     def forward(self, x):
         B, C, H, W = x.shape
         x = x.reshape(B, C, H * W).permute(0, 2, 1)  # (B, HW, C)
-        cls_token = x.mean(dim=1, keepdim=True)  # (B, 1, C)
-        x = torch.cat([cls_token, x], dim=1)  # (B, HW+1, C)
-        x = x + self.positional_embedding[: x.size(1), :]
+        cls_token = x.mean(dim=1, keepdim=True)      # (B, 1, C)
+        x = torch.cat([cls_token, x], dim=1)         # (B, HW+1, C)
+
+        # Interpolate positional embeddings if needed
+        if x.size(1) != self.positional_embedding.size(0):
+            pos_embed = self._resize_positional_embedding(x.size(1))
+        else:
+            pos_embed = self.positional_embedding
+
+        x = x + pos_embed[: x.size(1), :]
 
         q = self.q_proj(x)
         k = self.k_proj(x)
@@ -234,83 +250,11 @@ class AttentionPool2d(nn.Module):
         )
         return attn[0][:, 0]  # return [CLS] token output
 
-
-
-class FBSPFrontEnd(nn.Module):
-    """
-    Trainable front-end inspired by ESResNeXt's FBSP (Frequency B-Spline) transform.
-    Converts raw waveforms [B, L] into 2D time-frequency features [B, 1, F, T].
-    """
-
-    def __init__(self, n_filters: int = 64, kernel_size: int = 400, stride: int = 160):
-        super().__init__()
-        self.conv1 = nn.Conv1d(
-            in_channels=1,
-            out_channels=n_filters,
-            kernel_size=kernel_size,
-            stride=stride,
-            bias=False
-        )
-        self.bn1 = nn.BatchNorm1d(n_filters)
-        self.relu = nn.ReLU(inplace=True)
-
-        # Additional layers to refine frequency representation
-        self.conv2 = nn.Conv1d(n_filters, n_filters, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm1d(n_filters)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [B, L]
-        x = x.unsqueeze(1)  # [B, 1, L]
-        x = self.relu(self.bn1(self.conv1(x)))  # [B, n_filters, T]
-        x = self.relu(self.bn2(self.conv2(x)))  # [B, n_filters, T]
-        return x.unsqueeze(1)  # [B, 1, n_filters, T]
-
-
-class AudioResNeXtStem(nn.Module):
-    """
-    Audio encoder following ESResNeXt + FBSP design from the AudioCLIP paper.
-    Accepts raw audio [B, L] and outputs normalized embeddings.
-    """
-
-    def __init__(self, embed_dim: int = 512, num_heads: int = 8, n_filters: int = 64):
-        super().__init__()
-        self.frontend = FBSPFrontEnd(n_filters=n_filters)
-
-        base = resnet50(pretrained=False)
-        # Adjust first conv layer to accept 1-channel (frequency) input
-        base.conv1 = nn.Conv2d(
-            1, 64, kernel_size=7, stride=2, padding=3, bias=False
-        )
-
-        self.stem = nn.Sequential(base.conv1, base.bn1, base.relu, base.maxpool)
-        self.layer1 = base.layer1
-        self.layer2 = base.layer2
-        self.layer3 = base.layer3
-        self.layer4 = base.layer4
-        self.attnpool = AttentionPool2d(spacial_dim=7, embed_dim=2048, num_heads=num_heads)
-        self.fc = nn.Linear(2048, embed_dim)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x (Tensor): Raw audio [B, L]
-        Returns:
-            Tensor: Normalized embedding [B, embed_dim]
-        """
-
-        print(f"[DEBUG] AudioResNeXtStem.forward: received x.shape = {x.shape}")
-        x = self.frontend(x)  # [B, 1, F, T]
-        print(f"[DEBUG] After FBSPFrontEnd: x.shape = {x.shape}")
-        x = self.stem(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = self.attnpool(x)
-        x = self.fc(x)
-        return F.normalize(x, dim=-1)
-
-
+    def _resize_positional_embedding(self, target_length: int):
+        """Interpolates the positional embeddings to the target token length."""
+        pos_embed = self.positional_embedding.unsqueeze(0).permute(0, 2, 1)  # (1, C, L)
+        pos_embed_resized = F.interpolate(pos_embed, size=target_length, mode="linear", align_corners=False)
+        return pos_embed_resized.permute(0, 2, 1).squeeze(0)  # (L, C)
 
 
 
@@ -353,3 +297,82 @@ class CLIPTextEncoder(nn.Module):
         x = self.ln_final(x)
         x = x[torch.arange(x.shape[0]), token_ids.argmax(dim=-1)]  # get <EOT> or max token
         return F.normalize(self.fc(x), dim=-1)
+
+
+
+class FBSPFrontEnd(nn.Module):
+    """
+    Trainable front-end inspired by ESResNeXt's FBSP (Frequency B-Spline) transform.
+    Converts raw waveforms [B, 1, L] into 2D time-frequency features [B, 1, F, T].
+    """
+
+    def __init__(self, n_filters: int = 64, kernel_size: int = 400, stride: int = 160):
+        super().__init__()
+        self.conv1 = nn.Conv1d(
+            in_channels=1,
+            out_channels=n_filters,
+            kernel_size=kernel_size,
+            stride=stride,
+            bias=False
+        )
+        self.bn1 = nn.BatchNorm1d(n_filters)
+        self.relu = nn.ReLU(inplace=True)
+
+        # Additional layers to refine frequency representation
+        self.conv2 = nn.Conv1d(
+            n_filters,
+            n_filters,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            bias=False
+        )
+        self.bn2 = nn.BatchNorm1d(n_filters)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, 1, L]
+        x = self.relu(self.bn1(self.conv1(x)))  # [B, n_filters, T]
+        x = self.relu(self.bn2(self.conv2(x)))  # [B, n_filters, T]
+        return x.unsqueeze(1)  # [B, 1, n_filters, T]
+
+
+class AudioResNeXtStem(nn.Module):
+    """
+    Audio encoder following ESResNeXt + FBSP design from the AudioCLIP paper.
+    Accepts raw audio [B, 1, L] and outputs normalized embeddings.
+    """
+
+    def __init__(self, embed_dim: int = 512, num_heads: int = 8, n_filters: int = 64):
+        super().__init__()
+        self.frontend = FBSPFrontEnd(n_filters=n_filters)
+
+        base = resnet50(pretrained=False)
+        base.conv1 = nn.Conv2d(
+            1, 64, kernel_size=7, stride=2, padding=3, bias=False
+        )
+
+        self.stem = nn.Sequential(base.conv1, base.bn1, base.relu, base.maxpool)
+        self.layer1 = base.layer1
+        self.layer2 = base.layer2
+        self.layer3 = base.layer3
+        self.layer4 = base.layer4
+        self.attnpool = AttentionPool2d(spacial_dim=7, embed_dim=2048, num_heads=num_heads)
+        self.fc = nn.Linear(2048, embed_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x (Tensor): Raw audio [B, 1, L]
+        Returns:
+            Tensor: Normalized embedding [B, embed_dim]
+        """
+
+        x = self.frontend(x)  # [B, 1, F, T]
+        x = self.stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.attnpool(x)
+        x = self.fc(x)
+        return F.normalize(x, dim=-1)
