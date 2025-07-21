@@ -16,6 +16,7 @@ class AudioCLIP(nn.Module):
     AudioCLIP-style contrastive pretraining for joint audio, image, and text embeddings.
     """
 
+
     def __init__(
         self,
         audio_encoder: Optional[nn.Module] = None,
