@@ -95,7 +95,9 @@ class AudioCLIP(nn.Module):
 
         if text_input is not None:
             formatted_text = [self.text_template.format(t) for t in text_input]
-            text_emb = F.normalize(self.text_encoder(formatted_text), dim=-1)
+            tokenized_text = self.tokenizer(formatted_text).to(self.device)
+            text_emb = F.normalize(self.text_encoder(tokenized_text), dim=-1)
+
 
         # similarity matrix
         if text_emb is not None and audio_emb is not None:
