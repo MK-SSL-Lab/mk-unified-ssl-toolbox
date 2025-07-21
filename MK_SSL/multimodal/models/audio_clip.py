@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import clip
 import torch.nn.functional as F
 from typing import Tuple, List, Optional
 
@@ -52,8 +51,6 @@ class AudioCLIP(nn.Module):
         else:
             self.text_encoder = TransformerLayer()
 
-        self.tokenizer = clip.tokenize  # OpenAI CLIP tokenizer
-
         self.audio_clip_loss = AudioCLIPLoss()
 
     def forward(
@@ -98,7 +95,7 @@ class AudioCLIP(nn.Module):
 
         if text_input is not None:
             formatted_text = [self.text_template.format(t) for t in text_input]
-            tokenized_text = self.tokenizer(formatted_text).to(self.device)  # Convert to token IDs
+            tokenized_text = self.tokenizer(formatted_text).to(self.device)
             text_emb = F.normalize(self.text_encoder(tokenized_text), dim=-1)
 
 
