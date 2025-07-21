@@ -297,7 +297,10 @@ class AudioResNeXtStem(nn.Module):
         Returns:
             Tensor: Normalized embedding [B, embed_dim]
         """
+
+        print(f"[DEBUG] AudioResNeXtStem.forward: received x.shape = {x.shape}")
         x = self.frontend(x)  # [B, 1, F, T]
+        print(f"[DEBUG] After FBSPFrontEnd: x.shape = {x.shape}")
         x = self.stem(x)
         x = self.layer1(x)
         x = self.layer2(x)

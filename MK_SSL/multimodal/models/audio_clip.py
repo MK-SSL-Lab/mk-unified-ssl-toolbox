@@ -88,6 +88,7 @@ class AudioCLIP(nn.Module):
 
         # encoder
         if audio_input is not None:
+            print(f"[DEBUG] AudioCLIP.forward: audio_input.shape = {audio_input.shape}")
             audio_emb = F.normalize(self.audio_encoder(audio_input), dim=-1)
 
         if image_input is not None:
