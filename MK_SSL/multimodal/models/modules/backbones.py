@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchaudio.transforms as T
-from torchvision.models import resnet50
+from torchvision.models import resnext50_32x4d
 from transformers import BertModel, BertConfig
+import open_clip
 
 
 
@@ -193,110 +194,65 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class AttentionPool2d(nn.Module):
-    def __init__(self, spacial_dim: int = 7, embed_dim: int = 1024, num_heads: int = 8):
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.num_heads = num_heads
-
-        # Positional embedding initialized for the default spatial dimension
-        self.positional_embedding = nn.Parameter(
-            torch.randn(spacial_dim**2 + 1, embed_dim) / embed_dim**0.5
-        )
-
-        self.q_proj = nn.Linear(embed_dim, embed_dim)
-        self.k_proj = nn.Linear(embed_dim, embed_dim)
-        self.v_proj = nn.Linear(embed_dim, embed_dim)
-        self.c_proj = nn.Linear(embed_dim, embed_dim)
-
-    def forward(self, x):
-        B, C, H, W = x.shape
-        x = x.reshape(B, C, H * W).permute(0, 2, 1)  # (B, HW, C)
-        cls_token = x.mean(dim=1, keepdim=True)      # (B, 1, C)
-        x = torch.cat([cls_token, x], dim=1)         # (B, HW+1, C)
-
-        # Interpolate positional embeddings if needed
-        if x.size(1) != self.positional_embedding.size(0):
-            pos_embed = self._resize_positional_embedding(x.size(1))
-        else:
-            pos_embed = self.positional_embedding
-
-        x = x + pos_embed[: x.size(1), :]
-
-        q = self.q_proj(x)
-        k = self.k_proj(x)
-        v = self.v_proj(x)
-
-        attn = F.multi_head_attention_forward(
-            query=q,
-            key=k,
-            value=v,
-            embed_dim_to_check=q.shape[-1],
-            num_heads=self.num_heads,
-            in_proj_weight=None,
-            in_proj_bias=None,
-            bias_k=None,
-            bias_v=None,
-            add_zero_attn=False,
-            dropout_p=0.0,
-            out_proj_weight=self.c_proj.weight,
-            out_proj_bias=self.c_proj.bias,
-            training=self.training,
-            need_weights=False,
-            use_separate_proj_weight=True,
-            q_proj_weight=self.q_proj.weight,
-            k_proj_weight=self.k_proj.weight,
-            v_proj_weight=self.v_proj.weight
-        )
-        return attn[0][:, 0]  # return [CLS] token output
-
-    def _resize_positional_embedding(self, target_length: int):
-        """Interpolates the positional embeddings to the target token length."""
-        pos_embed = self.positional_embedding.unsqueeze(0).permute(0, 2, 1)  # (1, C, L)
-        pos_embed_resized = F.interpolate(pos_embed, size=target_length, mode="linear", align_corners=False)
-        return pos_embed_resized.permute(0, 2, 1).squeeze(0)  # (L, C)
-
-
-
-
-class TransformerLayer(nn.Module):
-    def __init__(self, embed_dim: int = 1024, num_heads: int =16, mlp_dim: int = 4096, dropout=0.0):
-        super().__init__()
-        self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout)
-        self.ln1 = nn.LayerNorm(embed_dim)
-        self.mlp = nn.Sequential(
-            nn.Linear(embed_dim, mlp_dim),
-            nn.GELU(),
-            nn.Linear(mlp_dim, embed_dim),
-        )
-        self.ln2 = nn.LayerNorm(embed_dim)
-
-    def forward(self, x):
-        attn_out, _ = self.attn(x, x, x)
-        x = self.ln1(x + attn_out)
-        mlp_out = self.mlp(x)
-        return self.ln2(x + mlp_out)
 
 
 class CLIPTextEncoder(nn.Module):
-    def __init__(self, vocab_size, embed_dim=512, max_len=77, num_layers=12, num_heads=8, mlp_dim=2048):
-        super().__init__()
-        self.token_embedding = nn.Embedding(vocab_size, embed_dim)
-        self.pos_embedding = nn.Parameter(torch.empty(max_len, embed_dim).normal_(std=embed_dim**-0.5))
-        self.transformer = nn.Sequential(
-            *[TransformerLayer(embed_dim, num_heads, mlp_dim) for _ in range(num_layers)]
-        )
-        self.ln_final = nn.LayerNorm(embed_dim)
-        self.fc = nn.Linear(embed_dim, embed_dim)
+    """
+    Default text encoder for AudioCLIP, using a pre-trained CLIP text encoder (RN50).
+    This class handles both tokenization and encoding of raw text into embeddings.
+    """
 
-    def forward(self, token_ids):
-        x = self.token_embedding(token_ids) + self.pos_embedding[:token_ids.shape[1]]
-        x = x.permute(1, 0, 2)  # for multi-head attention (T, B, C)
-        x = self.transformer(x)
-        x = x.permute(1, 0, 2)  # (B, T, C)
-        x = self.ln_final(x)
-        x = x[torch.arange(x.shape[0]), token_ids.argmax(dim=-1)]  # get <EOT> or max token
-        return F.normalize(self.fc(x), dim=-1)
+    def __init__(self, device: str = "cpu", model_name: str = "RN50", pretrained: str = "openai"):
+        super().__init__()
+        self.device = device
+
+        # Load CLIP model and tokenizer (RN50 variant)
+        self.model, _, _ = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
+        self.model = self.model.to(device)
+        self.model.eval()
+
+        self.tokenizer = open_clip.get_tokenizer(model_name)
+
+    def forward(self, text: list[str]) -> torch.Tensor:
+        """
+        Encodes a batch of raw text into normalized CLIP embeddings.
+
+        Args:
+            text (list[str]): List of text strings.
+
+        Returns:
+            torch.Tensor: text embeddings [B, D].
+        """
+        tokens = self.tokenizer(text).to(self.device)
+        with torch.no_grad():
+            text_emb = self.model.encode_text(tokens)
+        return F.normalize(text_emb, dim=-1)
+
+
+class CLIPImageEncoder(nn.Module):
+    """
+    Pre-trained CLIP image encoder (RN50) used in AudioCLIP.
+    """
+
+    def __init__(self, device: str = "cpu", model_name: str = "RN50", pretrained: str = "openai"):
+        super().__init__()
+        self.device = device
+        self.model, _, _ = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
+        self.visual = self.model.visual  # CLIP's visual encoder
+        self.visual.eval()  # keep frozen by default
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        """
+        Encodes images into normalized embeddings.
+        Args:
+            images (torch.Tensor): Batch of images [B, C, H, W].
+        Returns:
+            torch.Tensor: Normalized image embeddings [B, D].
+        """
+        with torch.no_grad():
+            img_emb = self.visual(images.to(self.device))
+        return F.normalize(img_emb, dim=-1)
+
 
 
 
@@ -339,14 +295,15 @@ class FBSPFrontEnd(nn.Module):
 class AudioResNeXtStem(nn.Module):
     """
     Audio encoder following ESResNeXt + FBSP design from the AudioCLIP paper.
-    Accepts raw audio [B, 1, L] and outputs normalized embeddings.
+    Accepts raw audio [B, 1, L] and outputs normalized embeddings of size 1024.
     """
 
-    def __init__(self, embed_dim: int = 512, num_heads: int = 8, n_filters: int = 64):
+    def __init__(self, embed_dim: int = 1024, n_filters: int = 64):
         super().__init__()
         self.frontend = FBSPFrontEnd(n_filters=n_filters)
 
-        base = resnet50(pretrained=False)
+        # ESResNeXt backbone
+        base = resnext50_32x4d(pretrained=False)
         base.conv1 = nn.Conv2d(
             1, 64, kernel_size=7, stride=2, padding=3, bias=False
         )
@@ -356,7 +313,9 @@ class AudioResNeXtStem(nn.Module):
         self.layer2 = base.layer2
         self.layer3 = base.layer3
         self.layer4 = base.layer4
-        self.attnpool = AttentionPool2d(spacial_dim=7, embed_dim=2048, num_heads=num_heads)
+
+        # Replace attention pooling with global average pooling
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(2048, embed_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -366,13 +325,12 @@ class AudioResNeXtStem(nn.Module):
         Returns:
             Tensor: Normalized embedding [B, embed_dim]
         """
-
         x = self.frontend(x)  # [B, 1, F, T]
         x = self.stem(x)
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-        x = self.attnpool(x)
-        x = self.fc(x)
+        x = self.global_pool(x).flatten(1)  # [B, 2048]
+        x = self.fc(x)  # [B, embed_dim]
         return F.normalize(x, dim=-1)

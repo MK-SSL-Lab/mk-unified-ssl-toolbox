@@ -11,7 +11,6 @@ from torch.utils.data import Subset, DataLoader, Dataset, RandomSampler
 
 from typing import Optional, Type, Dict, Any
 import optuna
-import clip
 
 from sklearn.metrics import classification_report
 import wandb
@@ -834,8 +833,6 @@ class Trainer:
         **kwargs,
     ):
 
-        self._maybe_load_clip_tokenizer(train_dataset)
-
         if not hasattr(self, "_optuna_trial"):
             self.wandb_logger.init_run()
         else:
@@ -918,8 +915,6 @@ class Trainer:
             batch_size=batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            collate_fn=lambda b: self._collate_fn(b, method=self.method, text_tokenizer=getattr(self, "clip_text_tokenizer", None))
-
         )
         first_train_batch = next(iter(train_loader))
         if "audio" not in first_train_batch or "image" not in first_train_batch or "text" not in first_train_batch:
@@ -1777,46 +1772,3 @@ class Trainer:
 
 
 
-    def _maybe_load_clip_tokenizer(self, dataset):
-        if self.method.lower() == "audio_clip":
-            first_item = dataset[0]
-            if "text" in first_item:
-                self.logger.info("Detected 'text' key. Loading CLIP ViT-B/32 text encoder.")
-                self.clip_text_tokenizer = clip.tokenize
-                self.clip_model, _ = clip.load("ViT-B/32", device=self.device)
-                self.text_encoder = self.clip_model.encode_text
-            else:
-                self.clip_text_tokenizer = None
-                self.text_encoder = None
-
-
-    def _collate_fn(batch, method=None, text_tokenizer=None):
-        """
-        Generic collate function that handles audio, image, and text data.
-        Tokenizes text only when required.
-
-        Args:
-            batch (list of dicts): Each element is a dict containing data samples.
-            method (str): The training method (e.g., "audio_clip").
-            text_tokenizer (callable, optional): Tokenizer for text (e.g., clip.tokenize).
-        Returns:
-            dict: A batched dictionary with tensors and tokenized text (if needed).
-        """
-        collated = {k: [] for k in batch[0].keys()}
-
-        # Collect all items
-        for item in batch:
-            for k, v in item.items():
-                collated[k].append(v)
-
-        # Stack tensors
-        for k, v in collated.items():
-            if isinstance(v[0], torch.Tensor):
-                collated[k] = torch.stack(v, dim=0)
-
-        # Tokenize text if method == audio_clip
-        if "text" in collated and method and method.lower() == "audio_clip":
-            if text_tokenizer is not None:
-                collated["text"] = text_tokenizer(collated["text"], truncate=True)
-
-        return collated
