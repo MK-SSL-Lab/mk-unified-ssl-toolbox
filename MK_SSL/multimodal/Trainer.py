@@ -1776,16 +1776,18 @@ class Trainer:
         return epoch # Return 0-indexed epoch
 
 
-    def _maybe_load_clip_tokenizer(self, dataset: torch.utils.data.Dataset):
+
+    def _maybe_load_clip_tokenizer(self, dataset):
         if self.method.lower() == "audio_clip":
-            first_item = dataset[0]  # Peek at one sample
+            first_item = dataset[0]
             if "text" in first_item:
-                self.logger.info("Detected 'text' key in dataset. Loading CLIP tokenizer (ViT-B/32)...")
-                self.clip_text_tokenizer = clip.tokenize  # CLIP uses tokenize function
+                self.logger.info("Detected 'text' key. Loading CLIP ViT-B/32 text encoder.")
+                self.clip_text_tokenizer = clip.tokenize
+                self.clip_model, _ = clip.load("ViT-B/32", device=self.device)
+                self.text_encoder = self.clip_model.encode_text
             else:
                 self.clip_text_tokenizer = None
-        else:
-            self.clip_text_tokenizer = None
+                self.text_encoder = None
 
 
     def _collate_fn(batch, method=None, text_tokenizer=None):
