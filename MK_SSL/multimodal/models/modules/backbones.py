@@ -263,6 +263,7 @@ class FBSPFrontEnd(nn.Module):
         x = x.unsqueeze(1)  # [B, 1, L]
         x = self.relu(self.bn1(self.conv1(x)))  # [B, n_filters, T]
         x = self.relu(self.bn2(self.conv2(x)))  # [B, n_filters, T]
+        print(f"[DEBUG] AudioCLIP.forward: audio_input.shape = {x.shape}")
         return x  
 
 
