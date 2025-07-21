@@ -189,23 +189,39 @@ class TimeFrequencyFrontEnd(nn.Module):
         return self.act(x)
 
   
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 class AttentionPool2d(nn.Module):
     def __init__(self, spacial_dim: int = 7, embed_dim: int = 1024, num_heads: int = 8):
         super().__init__()
-        self.positional_embedding = nn.Parameter(torch.randn(spacial_dim**2 + 1, embed_dim) / embed_dim**0.5)
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+
+        # Positional embedding initialized for the default spatial dimension
+        self.positional_embedding = nn.Parameter(
+            torch.randn(spacial_dim**2 + 1, embed_dim) / embed_dim**0.5
+        )
+
         self.q_proj = nn.Linear(embed_dim, embed_dim)
         self.k_proj = nn.Linear(embed_dim, embed_dim)
         self.v_proj = nn.Linear(embed_dim, embed_dim)
         self.c_proj = nn.Linear(embed_dim, embed_dim)
-        self.num_heads = num_heads
 
     def forward(self, x):
         B, C, H, W = x.shape
         x = x.reshape(B, C, H * W).permute(0, 2, 1)  # (B, HW, C)
-        cls_token = x.mean(dim=1, keepdim=True)  # (B, 1, C)
-        x = torch.cat([cls_token, x], dim=1)  # (B, HW+1, C)
-        x = x + self.positional_embedding[: x.size(1), :]
+        cls_token = x.mean(dim=1, keepdim=True)      # (B, 1, C)
+        x = torch.cat([cls_token, x], dim=1)         # (B, HW+1, C)
+
+        # Interpolate positional embeddings if needed
+        if x.size(1) != self.positional_embedding.size(0):
+            pos_embed = self._resize_positional_embedding(x.size(1))
+        else:
+            pos_embed = self.positional_embedding
+
+        x = x + pos_embed[: x.size(1), :]
 
         q = self.q_proj(x)
         k = self.k_proj(x)
@@ -233,6 +249,12 @@ class AttentionPool2d(nn.Module):
             v_proj_weight=self.v_proj.weight
         )
         return attn[0][:, 0]  # return [CLS] token output
+
+    def _resize_positional_embedding(self, target_length: int):
+        """Interpolates the positional embeddings to the target token length."""
+        pos_embed = self.positional_embedding.unsqueeze(0).permute(0, 2, 1)  # (1, C, L)
+        pos_embed_resized = F.interpolate(pos_embed, size=target_length, mode="linear", align_corners=False)
+        return pos_embed_resized.permute(0, 2, 1).squeeze(0)  # (L, C)
 
 
 
