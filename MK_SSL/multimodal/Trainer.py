@@ -21,6 +21,7 @@ from MK_SSL.multimodal.models import *
 from MK_SSL.vision.models.modules.losses.nt_xent import NT_Xent
 
 from MK_SSL.multimodal.models.utils.registry import get_method
+from MK_SSL.multimodal.models.utils.clap_audio_text_collate import AudioTextCollator
 
 # from MK_SSL.multimodal.models.modules.clap_backbone import CLAPAudioBackbone
 # from MK_SSL.multimodal.models.modules.clap_backbone import CLAPTextBackbone
@@ -972,6 +973,7 @@ class Trainer:
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
+             collate_fn=collator,
             num_workers=self.num_workers,
         )
         first_train_batch = next(iter(train_loader))
