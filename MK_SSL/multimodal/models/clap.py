@@ -100,7 +100,8 @@ class CLAP(nn.Module):
                 - similarity_matrix: Scaled cosine similarity matrix of shape (B, B)
         """
 
-        if audio_input.dim() == 2:  # (B, L)
+        if audio_input.dim() == 3 and audio_input.size(1) == 1:  
+            audio_input = audio_input.squeeze(1)  # (B, L)
             audio_input = self.mel_transform(audio_input)  # (B, F, T)
             audio_input = self.amplitude_to_db(audio_input)  # log scale
             audio_input = audio_input.unsqueeze(1)  # (B, 1, F, T)
