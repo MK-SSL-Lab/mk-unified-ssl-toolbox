@@ -668,14 +668,20 @@ class Trainer:
 
             # === W&B batch logging ===
             if self.wandb_logger.is_active:
-                self.wandb_logger.log({
+                log_data = {
                     "train/batch_loss": loss.item(),
                     "train/temperature": self.model.temperature.exp().item(),
                     "train/lr": optimizer.param_groups[0]["lr"],
-                    "train/sim_text_audio_loss": sim_text_audio.mean().item(),
-                    "train/sim_text_image_loss": sim_text_image.mean().item(),
-                    "train/sim_audio_image_loss": sim_audio_image.mean().item(),
-                }, step=global_step)
+                }
+
+                if sim_text_audio is not None:
+                    log_data["train/sim_text_audio_loss"] = sim_text_audio.mean().item()
+                if sim_text_image is not None:
+                    log_data["train/sim_text_image_loss"] = sim_text_image.mean().item()
+                if sim_audio_image is not None:
+                    log_data["train/sim_audio_image_loss"] = sim_audio_image.mean().item()
+
+                self.wandb_logger.log(log_data, step=global_step)
 
             tepoch.set_postfix(
                 loss=loss.item(),
