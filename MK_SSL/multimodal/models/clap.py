@@ -12,6 +12,15 @@ class CLAP(nn.Module):
     """
     CLAP-style Contrastive Pretraining for learning joint audio-text embeddings.
     Based on: https://arxiv.org/abs/2206.04769 (CLAP: Learning Audio Concepts from Natural Language Supervision)
+
+
+        Note:
+        For users who need to prepare audio-text batches (e.g., tokenizing raw text),
+        consider using the `AudioTextCollator` class or the `audio_text_collate_fn`
+        function defined in `MK_SSL.utils.data_utils`. These utilities handle 
+        tokenization using HuggingFace's `BertTokenizer` and collate audio-text
+        data into ready-to-use batches.
+
     """
 
     def __init__(
