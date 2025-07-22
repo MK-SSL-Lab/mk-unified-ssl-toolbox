@@ -25,7 +25,7 @@ class AudioTextCollator:
     
         # === Convert raw text to tokenized tensors ===
         if isinstance(texts, list) and isinstance(texts[0], str):
-            texts = tokenizer(
+            texts = self.tokenizer(
                 texts,
                 padding='max_length',
                 truncation=True,
