@@ -969,11 +969,13 @@ class Trainer:
         if self.reload_checkpoint:
             start_epoch = self._reload_latest_checkpoint() + 1 # +1 because _reload returns 0-indexed epoch
 
+        collator = AudioTextCollator()
+
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-             collate_fn=collator,
+            collate_fn=collator,
             num_workers=self.num_workers,
         )
         first_train_batch = next(iter(train_loader))
