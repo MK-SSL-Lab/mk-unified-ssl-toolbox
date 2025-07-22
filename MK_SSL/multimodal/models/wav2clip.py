@@ -38,8 +38,6 @@ class Wav2Clip(nn.Module):
         else:
             self.image_encoder = CLIPImageEncoder(device=self.device)
 
-        if image_encoder is None:
-            raise ValueError("You must provide a pretrained (frozen) CLIP image encoder.")
 
         self.audio_encoder = audio_encoder if audio_encoder is not None else Wav2ClipEncoder(
             backbone=ResNetFeatureExtractor.get_default_resnet_audio(),
