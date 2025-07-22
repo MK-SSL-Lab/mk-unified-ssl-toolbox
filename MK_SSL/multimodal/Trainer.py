@@ -969,12 +969,18 @@ class Trainer:
         if self.reload_checkpoint:
             start_epoch = self._reload_latest_checkpoint() + 1 # +1 because _reload returns 0-indexed epoch
 
+        # Setting AudioTextCollator for tokenizing texts in clap
+        if self.method=="clap" and type(train_dataset[0]['text'][0])==str:
+            self.collator=AudioTextCollator()
+        else:
+            self.collator=None
+
 
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            collate_fn=AudioTextCollator() if self.method=="audio_clip" and 'text' in train_dataset[0] else None,
+            collate_fn=self.collator ,
             num_workers=self.num_workers,
         )
         first_train_batch = next(iter(train_loader))
