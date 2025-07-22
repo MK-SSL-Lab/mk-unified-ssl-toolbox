@@ -7,6 +7,7 @@ from MK_SSL.multimodal.models.modules.backbones import CNN14
 from MK_SSL.multimodal.models.modules.backbones import BERTTextEncoder
 from MK_SSL.multimodal.models.utils import register_method
 from MK_SSL.multimodal.models.modules.losses import CLAPLoss
+import torchaudio
 
 class CLAP(nn.Module):
     """
@@ -67,7 +68,18 @@ class CLAP(nn.Module):
         else: 
             self.text_encoder = BERTTextEncoder()
 
+        self.mel_transform = torchaudio.transforms.MelSpectrogram(
+            sample_rate=44100,
+            n_fft=1024,
+            hop_length=320,
+            n_mels=64,
+            f_min=50,
+            f_max=8000
+        )
+        self.amplitude_to_db = torchaudio.transforms.AmplitudeToDB(stype="power")
+
         self.clap_loss = CLAPLoss()
+
 
     def forward(
         self,
@@ -87,6 +99,13 @@ class CLAP(nn.Module):
                 - text_proj: Projected text embeddings of shape (B, D)
                 - similarity_matrix: Scaled cosine similarity matrix of shape (B, B)
         """
+
+        if audio_input.dim() == 2:  # (B, L)
+            audio_input = self.mel_transform(audio_input)  # (B, F, T)
+            audio_input = self.amplitude_to_db(audio_input)  # log scale
+            audio_input = audio_input.unsqueeze(1)  # (B, 1, F, T)
+
+            
         audio_emb = self.audio_encoder(audio_input)    # (B, D_a)
         text_emb = self.text_encoder(text_input)       # (B, D_t)
 
