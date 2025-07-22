@@ -159,7 +159,7 @@ class BERTTextEncoder(nn.Module):
 
         self.embedding_dim = config.hidden_size  # usually 768
 
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask, **kwargs):
         """
         Args:
             input_ids (Tensor): Token IDs, shape (B, T)
