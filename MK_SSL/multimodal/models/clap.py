@@ -17,10 +17,9 @@ class CLAP(nn.Module):
 
         Note:
         For users who need to prepare audio-text batches (e.g., tokenizing raw text),
-        consider using the `AudioTextCollator` class or the `audio_text_collate_fn`
-        function defined in `MK_SSL.utils.data_utils`. These utilities handle 
-        tokenization using HuggingFace's `BertTokenizer` and collate audio-text
-        data into ready-to-use batches.
+        the `audio_text_collate_fn`function defined in `MK_SSL.utils.data_utils`.
+        These utilities handle tokenization using HuggingFace's `BertTokenizer` and 
+        collate audio-text data into ready-to-use batches.
 
     """
 
