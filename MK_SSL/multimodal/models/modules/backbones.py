@@ -14,7 +14,7 @@ from typing import Optional
 from MK_SSL.multimodal.models.modules.feature_extractors import ResNetFeatureExtractor
 from MK_SSL.multimodal.models.modules.heads import Wav2ClipProjectionHead
 
-class Wav2ClipEncoder(nn.Module):
+class Wav2ClipAudioEncoder(nn.Module):
     """
     Wav2CLIP audio encoder module.
 
