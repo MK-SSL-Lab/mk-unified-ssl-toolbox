@@ -175,6 +175,9 @@ class Trainer:
             else None
         )
 
+        self.logger.info(method_cfg["logs"](self.model))
+
+
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.mixed_precision_training)
 
