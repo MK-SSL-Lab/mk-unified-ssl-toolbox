@@ -242,7 +242,7 @@ class Trainer:
         self,
         train_loader: DataLoader,
         optimizer,
-        max_epochs: int,
+        epochs: int,
         start_epoch: int = 0,
         val_loader: Optional[DataLoader] = None,
         logger_loader: Optional[DataLoader] = None,
@@ -250,7 +250,7 @@ class Trainer:
     ):
         """Train the Wav2Vec2 model with embedding logging via Wav2Vec2Backbone."""
 
-        self.logger.info(f"Starting training for Wav2Vec2 for {max_epochs} epochs.")
+        self.logger.info(f"Starting training for Wav2Vec2 for {epochs} epochs.")
         self.model.train()
 
         # Initialize embedding logger
@@ -291,9 +291,9 @@ class Trainer:
             self.wandb_logger.watch_model(self.model)
 
         # === Training Loop ===
-        for epoch in range(start_epoch, max_epochs):
+        for epoch in range(start_epoch, epochs):
             running_loss = 0.0
-            pbar = tqdm(train_loader, desc=f"Wav2Vec2 Epoch {epoch+1}/{max_epochs}")
+            pbar = tqdm(train_loader, desc=f"Wav2Vec2 Epoch {epoch+1}/{epochs}")
 
             for batch_idx, batch in enumerate(pbar):
                 audio = batch['audio'].to(self.device)
@@ -382,7 +382,7 @@ class Trainer:
                 final_path,
                 name=f"{self.method}-model-final",
                 type="model",
-                metadata={"epochs_trained": max_epochs, "final_loss": avg_loss}
+                metadata={"epochs_trained": epochs, "final_loss": avg_loss}
             )
 
         if use_embedding_logger:
@@ -394,7 +394,7 @@ class Trainer:
                 import wandb
                 self.wandb_logger.log(
                     {"embedding_animation": wandb.Html(animation_path)},
-                    step=max(embedding_logger.steps) if embedding_logger.steps else max_epochs
+                    step=max(embedding_logger.steps) if embedding_logger.steps else epochs
                 )
                 self.logger.info("Embedding animation logged to Weights & Biases.")
 
@@ -447,7 +447,7 @@ class Trainer:
         self,
         train_loader,
         optimizer,
-        max_epochs: int,
+        epochs: int,
         start_epoch: int = 0,
         val_loader: Optional[DataLoader] = None,
         logger_loader: Optional[DataLoader] = None,
@@ -496,9 +496,9 @@ class Trainer:
             self.wandb_logger.watch_model(self.model)
 
         # === Training Loop ===
-        for epoch in range(start_epoch, max_epochs):
+        for epoch in range(start_epoch, epochs):
             running_loss = 0.0
-            pbar = tqdm(train_loader, desc=f"SimCLR Epoch {epoch+1}/{max_epochs}")
+            pbar = tqdm(train_loader, desc=f"SimCLR Epoch {epoch+1}/{epochs}")
 
             for batch_idx, batch in enumerate(pbar):
                 audio = batch["audio"].to(self.device)
@@ -582,7 +582,7 @@ class Trainer:
                 final_path,
                 name=f"{self.method}-model-final",
                 type="model",
-                metadata={"epochs_trained": max_epochs, "final_loss": avg_loss}
+                metadata={"epochs_trained": epochs, "final_loss": avg_loss}
             )
 
         if use_embedding_logger:
@@ -594,7 +594,7 @@ class Trainer:
                 import wandb
                 self.wandb_logger.log(
                     {"embedding_animation": wandb.Html(animation_path)},
-                    step=max(embedding_logger.steps) if embedding_logger.steps else max_epochs
+                    step=max(embedding_logger.steps) if embedding_logger.steps else epochs
                 )
                 self.logger.info("Embedding animation logged to Weights & Biases.")
 
@@ -632,7 +632,7 @@ class Trainer:
         self,
         train_loader,
         optimizer,
-        max_epochs: int,
+        epochs: int,
         start_epoch: int = 0,
         val_loader: Optional[DataLoader] = None,
         logger_loader: Optional[DataLoader] = None,
@@ -681,9 +681,9 @@ class Trainer:
             self.wandb_logger.watch_model(self.model)
 
         # === Training Loop ===
-        for epoch in range(start_epoch, max_epochs):
+        for epoch in range(start_epoch, epochs):
             running_loss = 0.0
-            pbar = tqdm(train_loader, desc=f"COLA Epoch {epoch+1}/{max_epochs}")
+            pbar = tqdm(train_loader, desc=f"COLA Epoch {epoch+1}/{epochs}")
 
             for batch_idx, batch in enumerate(pbar):
                 audio = batch["audio"].to(self.device)
@@ -771,7 +771,7 @@ class Trainer:
                 final_path,
                 name=f"{self.method}-model-final",
                 type="model",
-                metadata={"epochs_trained": max_epochs, "final_loss": avg_loss}
+                metadata={"epochs_trained": epochs, "final_loss": avg_loss}
             )
 
         # === Final animated embedding plot ===
@@ -784,7 +784,7 @@ class Trainer:
                 import wandb
                 self.wandb_logger.log(
                     {"embedding_animation": wandb.Html(animation_path)},
-                    step=max(embedding_logger.steps) if embedding_logger.steps else max_epochs
+                    step=max(embedding_logger.steps) if embedding_logger.steps else epochs
                 )
                 self.logger.info("Embedding animation logged to Weights & Biases.")
 
@@ -822,7 +822,7 @@ class Trainer:
         train_loader_for_training: DataLoader,
         train_loader_full_dataset: DataLoader,
         optimizer,
-        max_epochs: int,
+        epochs: int,
         start_epoch: int = 0,
         start_iteration: int = 0,
         val_loader: Optional[DataLoader] = None,
@@ -922,14 +922,14 @@ class Trainer:
             train_loader_for_training.dataset.set_pseudo_labels(pseudo_labels_dict)
             self.logger.info("Updated training dataset with pseudo-labels.")
 
-            self.logger.info(f"Starting model training for HuBERT Iteration {iteration + 1} for {max_epochs} epochs.")
+            self.logger.info(f"Starting model training for HuBERT Iteration {iteration + 1} for {epochs} epochs.")
             self.model.train()
             current_iter_start_epoch = start_epoch if iteration == start_iteration else 0
 
             # === Epoch Loop ===
-            for epoch in range(current_iter_start_epoch, max_epochs):
+            for epoch in range(current_iter_start_epoch, epochs):
                 running_loss = 0.0
-                pbar = tqdm(train_loader_for_training, desc=f"HuBERT Iter {iteration+1}, Epoch {epoch+1}/{max_epochs}")
+                pbar = tqdm(train_loader_for_training, desc=f"HuBERT Iter {iteration+1}, Epoch {epoch+1}/{epochs}")
 
                 for batch_idx, batch in enumerate(pbar):
                     audio = batch["audio"].to(self.device)
@@ -1044,7 +1044,7 @@ class Trainer:
                     final_model_path,
                     name=f"{self.method}-iter{iteration+1}-final-model",
                     type="model",
-                    metadata={"iteration": iteration+1, "epochs_trained": max_epochs, "final_loss": avg_loss}
+                    metadata={"iteration": iteration+1, "epochs_trained": epochs, "final_loss": avg_loss}
                 )
 
             # === Final animation logging per iteration ===
@@ -1057,7 +1057,7 @@ class Trainer:
                     import wandb
                     self.wandb_logger.log(
                         {f"embedding_animation/iter_{iteration+1}": wandb.Html(animation_path)},
-                        step=max(embedding_logger.steps) if embedding_logger.steps else max_epochs
+                        step=max(embedding_logger.steps) if embedding_logger.steps else epochs
                     )
                     self.logger.info("Embedding animation logged to Weights & Biases.")
 
@@ -1106,14 +1106,14 @@ class Trainer:
         val_dataset: Optional[Dataset] = None,
         batch_size: int = 16,
         start_epoch: int = 0,
-        max_epochs: int = 100,
+        epochs: int = 100,
         start_iteration: int = 0,
         lr: float = 1e-4,
         weight_decay: float = 1e-2,
         optimizer: str = "adamw",
         use_hpo: bool = False,
         n_trials: int = 20,
-        tuning_max_epochs: int = 5, 
+        tuning_epochs: int = 5, 
         use_embedding_logger: bool = False,
         logger_loader: Optional[DataLoader] = None,  # NEW
         **kwargs,
@@ -1125,7 +1125,7 @@ class Trainer:
             train_dataset (Dataset): Dataset object for training.
             batch_size (int, optional): Mini-batch size. Defaults to 16.
             start_epoch (int, optional): Epoch to resume training from. Defaults to 0.
-            max_epochs (int, optional): Total number of epochs. Defaults to 100.
+            epochs (int, optional): Total number of epochs. Defaults to 100.
             start_iteration (int, optional): Iteration to resume HuBERT training from. Defaults to 0.
             lr (float, optional): Learning rate. Defaults to 1e-4.
             weight_decay (float, optional): Weight decay (L2 regularization). Defaults to 1e-2.
@@ -1143,7 +1143,7 @@ class Trainer:
             self.wandb_logger.current_run.config.update({
                 "batch_size": batch_size,
                 "start_epoch": start_epoch,
-                "max_epochs": max_epochs,
+                "epochs": epochs,
                 "learning_rate": lr,
                 "weight_decay": weight_decay,
                 "optimizer": optimizer,
@@ -1164,7 +1164,7 @@ class Trainer:
                 train_dataset=train_dataset,
                 val_dataset=val_dataset,
                 n_trials=n_trials,
-                max_epochs=tuning_max_epochs,
+                epochs=tuning_epochs,
             )
             self.logger.info(f"🌟 Best hyperparameters found: {best_params}")
             
@@ -1247,7 +1247,7 @@ class Trainer:
             self._train_wav2vec2(
                 train_loader,
                 optimizer,
-                max_epochs,
+                epochs,
                 start_epoch,
                 val_loader,
                 use_embedding_logger=use_embedding_logger,
@@ -1306,7 +1306,7 @@ class Trainer:
                 train_loader_for_training=train_loader_for_training,
                 train_loader_full_dataset=train_loader_for_pseudo_label_gen,
                 optimizer=optimizer,
-                max_epochs=max_epochs,
+                epochs=epochs,
                 start_epoch=start_epoch,
                 val_loader=val_loader,
                 start_iteration=start_iteration,
@@ -1348,7 +1348,7 @@ class Trainer:
             self._train_simclr(
                 train_loader,
                 optimizer,
-                max_epochs,
+                epochs,
                 start_epoch,
                 val_loader,
                 use_embedding_logger=use_embedding_logger,
@@ -1379,7 +1379,7 @@ class Trainer:
             self._train_cola(
                 train_loader,
                 optimizer,
-                max_epochs,
+                epochs,
                 start_epoch,
                 val_loader,
                 use_embedding_logger=use_embedding_logger,
@@ -1423,7 +1423,7 @@ class Trainer:
         num_classes: int,
         batch_size: int = 64,
         lr: float = 1e-3,
-        max_epochs: int = 10,
+        epochs: int = 10,
         freeze_backbone: bool = True,
         **kwargs
     ):
@@ -1436,7 +1436,7 @@ class Trainer:
             num_classes (int): Number of output classes.
             batch_size (int): Evaluation batch size.
             lr (float): Learning rate.
-            max_epochs (int): Max number of epochs.
+            epochs (int): Max number of epochs.
             freeze_backbone (bool): Whether to freeze the backbone during evaluation.
         """
 
@@ -1464,7 +1464,7 @@ class Trainer:
 
         # === Training loop ===
         model.train()
-        for epoch in range(max_epochs):
+        for epoch in range(epochs):
             for waveforms, labels in train_loader:
                 waveforms = waveforms.to(self.device)
                 labels = labels.to(self.device)
@@ -1476,7 +1476,7 @@ class Trainer:
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[Wav2Vec2 Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[Wav2Vec2 Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -1524,7 +1524,7 @@ class Trainer:
         num_classes: int,
         batch_size: int = 64,
         lr: float = 1e-3,
-        max_epochs: int = 10,
+        epochs: int = 10,
         freeze_backbone: bool = True,
         **kwargs
     ):
@@ -1537,7 +1537,7 @@ class Trainer:
             num_classes (int): Number of output classes.
             batch_size (int): Evaluation batch size.
             lr (float): Learning rate.
-            max_epochs (int): Max number of epochs.
+            epochs (int): Max number of epochs.
             freeze_backbone (bool): Whether to freeze the backbone during evaluation.
         """
 
@@ -1564,7 +1564,7 @@ class Trainer:
 
         # === Training loop ===
         classifier.train()
-        for epoch in range(max_epochs):
+        for epoch in range(epochs):
             for wavs, labels in train_loader:
                 wavs, labels = wavs.to(self.device), labels.to(self.device)
                 logits = classifier(wavs)
@@ -1574,7 +1574,7 @@ class Trainer:
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[SimCLR Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[SimCLR Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -1619,7 +1619,7 @@ class Trainer:
         num_classes: int,
         batch_size: int = 64,
         lr: float = 1e-3,
-        max_epochs: int = 10,
+        epochs: int = 10,
         freeze_backbone: bool = True,
         **kwargs
     ):
@@ -1632,7 +1632,7 @@ class Trainer:
             num_classes (int): Number of output classes.
             batch_size (int): Evaluation batch size.
             lr (float): Learning rate.
-            max_epochs (int): Max number of epochs.
+            epochs (int): Max number of epochs.
             freeze_backbone (bool): Whether to freeze the backbone during evaluation.
         """
 
@@ -1660,7 +1660,7 @@ class Trainer:
 
         # === Training loop ===
         classifier.train()
-        for epoch in range(max_epochs):
+        for epoch in range(epochs):
             for waveforms, labels in train_loader:
                 waveforms = waveforms.to(self.device)
                 labels = labels.to(self.device)
@@ -1672,7 +1672,7 @@ class Trainer:
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[HuBERT Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[HuBERT Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -1720,7 +1720,7 @@ class Trainer:
         num_classes: int,
         batch_size: int = 64,
         lr: float = 1e-3,
-        max_epochs: int = 10,
+        epochs: int = 10,
         freeze_backbone: bool = True,
         **kwargs
     ):
@@ -1733,7 +1733,7 @@ class Trainer:
             num_classes (int): Number of output classes.
             batch_size (int): Evaluation batch size.
             lr (float): Learning rate.
-            max_epochs (int): Max number of epochs.
+            epochs (int): Max number of epochs.
             freeze_backbone (bool): Whether to freeze the backbone during evaluation.
         """
 
@@ -1759,7 +1759,7 @@ class Trainer:
 
         # === Training ===
         classifier.train()
-        for epoch in range(max_epochs):
+        for epoch in range(epochs):
             for waveforms, labels in train_loader:
                 waveforms = waveforms.to(self.device)
                 labels = labels.to(self.device)
@@ -1771,7 +1771,7 @@ class Trainer:
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[COLA Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[COLA Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -1819,7 +1819,7 @@ class Trainer:
         num_classes: int,
         batch_size: int = 64,
         lr: float = 1e-3,
-        max_epochs: int = 10,
+        epochs: int = 10,
         freeze_backbone: bool = True,
         **kwargs
     ):
@@ -1833,13 +1833,13 @@ class Trainer:
 
         match self.method:
             case "cola":
-                self._evaluate_cola(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+                self._evaluate_cola(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case "hubert":
-                self._evaluate_hubert(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+                self._evaluate_hubert(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case "simclr":
-                self._evaluate_simclr(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+                self._evaluate_simclr(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case "wav2vec2":
-                self._evaluate_wav2vec2(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+                self._evaluate_wav2vec2(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case _:
                 raise ValueError(f"❌ Unknown method '{self.method}' for evaluation.")
 
