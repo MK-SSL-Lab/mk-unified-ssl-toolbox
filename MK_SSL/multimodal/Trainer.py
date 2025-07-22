@@ -516,7 +516,7 @@ class Trainer:
         # === Step 0: Log pre-training embeddings ===
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
-            embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
+            embedding_log_dir = os.path.join(self.save_dir, "embedding_logs")
             self.embedding_logger = EmbeddingLogger(
                 log_dir=embedding_log_dir,
                 method_name=self.method,
@@ -638,7 +638,7 @@ class Trainer:
         # === Step 0: Log pre-training embeddings ===
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
-            embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
+            embedding_log_dir = os.path.join(self.save_dir, "embedding_logs")
             self.embedding_logger = EmbeddingLogger(
                 log_dir=embedding_log_dir,
                 method_name=self.method,
@@ -778,7 +778,7 @@ class Trainer:
         # === Step 0: Log pre-training embeddings ===
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
-            embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
+            embedding_log_dir = os.path.join(self.save_dir, "embedding_logs")
             self.embedding_logger = EmbeddingLogger(
                 log_dir=embedding_log_dir,
                 method_name=self.method,
