@@ -885,6 +885,7 @@ class Trainer:
         n_trials: int = 20,
         tuning_epochs: int = 5, 
         use_embedding_logger: bool = False,
+        logger_loader: Optional[DataLoader] = None,  # NEW
 
         **kwargs,
     ):
@@ -1302,7 +1303,7 @@ class Trainer:
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_clap(tepoch, optimizer, epoch, total_batches_per_epoch, use_embedding_logger=use_embedding_logger) # Pass epoch_idx, total_batches_per_epoch
+                        loss_per_epoch = self._train_clap(tepoch, optimizer, epoch, total_batches_per_epoch, use_embedding_logger=use_embedding_logger, logger_loader=logger_loader) # Pass epoch_idx, total_batches_per_epoch
 
                     # Log epoch-level metrics to W&B
                     if self.wandb_logger.is_active:
@@ -1341,7 +1342,7 @@ class Trainer:
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_audio_clip(tepoch, optimizer, epoch, total_batches_per_epoch, use_embedding_logger=use_embedding_logger) # Pass epoch_idx, total_batches_per_epoch
+                        loss_per_epoch = self._train_audio_clip(tepoch, optimizer, epoch, total_batches_per_epoch, use_embedding_logger=use_embedding_logger, logger_loader=logger_loader) # Pass epoch_idx, total_batches_per_epoch
 
                     # Log epoch-level metrics to W&B
                     if self.wandb_logger.is_active:
@@ -1380,7 +1381,7 @@ class Trainer:
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
                         loss_per_epoch = self._train_wav2clip(
-                            tepoch, optimizer, epoch, total_batches_per_epoch, use_embedding_logger=use_embedding_logger
+                            tepoch, optimizer, epoch, total_batches_per_epoch, use_embedding_logger=use_embedding_logger, logger_loader=logger_loader
                         )
 
                     if self.wandb_logger.is_active:
