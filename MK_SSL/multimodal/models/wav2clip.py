@@ -44,6 +44,7 @@ class Wav2Clip(nn.Module):
             projection_dim=projection_dim,
             input_dim=512
         )
+        self.wav2clip_loss = Wav2ClipLoss()
 
 
     def forward(
