@@ -112,7 +112,8 @@ class CLAP(nn.Module):
             text_emb = self.text_encoder(**text_input)     # Unpacks dict: input_ids, attention_mask
         elif isinstance(text_input, torch.Tensor):
             text_emb = self.text_encoder(text_input)    # (B, D_t)
-        
+        else:
+            raise(ValueError('text_input is not a dict nor a tensor '))
         
         audio_proj = F.normalize(self.audio_proj(audio_emb), dim=-1)  # (B, D)
         text_proj = F.normalize(self.text_proj(text_emb), dim=-1)     # (B, D)
