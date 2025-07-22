@@ -46,7 +46,7 @@ class AudioCLIP(nn.Module):
         if image_encoder is not None:
             self.image_encoder = image_encoder
         else:
-            self.image_encoder = CLIPImageEncoder(device=self.device)
+            self.image_encoder = CLIPImageEncoder(device=self.device, model_name = "RN50")
 
         if text_encoder is not None:
             self.text_encoder = text_encoder

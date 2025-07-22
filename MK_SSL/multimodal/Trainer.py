@@ -514,20 +514,41 @@ class Trainer:
         """
         epoch_loss = 0.0
 
-        # === Initialize EmbeddingLogger ===
+        # === Step 0: Log pre-training embeddings ===
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
-            embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
-            embedding_logger = EmbeddingLogger(
+            embedding_log_dir = os.path.join(self.save_dir, "embedding_logs")
+            self.embedding_logger = EmbeddingLogger(
                 log_dir=embedding_log_dir,
                 method_name=self.method,
                 reduce_method="tsne",
                 log_interval=1,
             )
+            self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
+
+            self.logger.info("[CLAP - Step 0] Logging pre-training embeddings...")
+            backbone = CLAPAudioBackbone(self.model).to(self.device)
+            backbone.eval()
+
+            all_embeddings, all_labels = [], []
+            with torch.no_grad():
+                for batch in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
+                    audio = batch["audio"].to(self.device)
+                    labels = batch["label"].to(self.device)
+                    embeddings = backbone(audio)
+                    all_embeddings.append(embeddings)
+                    all_labels.append(labels)
+
+            embeddings = torch.cat(all_embeddings, dim=0)
+            labels = torch.cat(all_labels, dim=0)
+            self.embedding_logger.log_step(step=0, embeddings=embeddings, labels=labels)
+            self.logger.info("[CLAP - Step 0] Pre-training embeddings logged.")
+            self.model.train()
 
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
+        # === Training loop ===
         for step, batch in enumerate(tepoch):
             batch = {
                 k: v.to(self.device)
@@ -567,33 +588,29 @@ class Trainer:
                 lr=optimizer.param_groups[0]["lr"],
             )
 
-        # === Run EmbeddingLogger after epoch ===
+        # === Post-epoch embedding logging ===
         if use_embedding_logger:
-            self.model.eval()
-            all_embeddings, all_labels = [], []
+            self.logger.info(f"[CLAP - Epoch {epoch_idx+1}] Logging embeddings...")
+            backbone = CLAPAudioBackbone(self.model).to(self.device)
+            backbone.eval()
 
+            all_embeddings, all_labels = [], []
             with torch.no_grad():
-                for batch in logger_loader:
+                for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch_idx+1}"):
                     audio = batch["audio"].to(self.device)
                     labels = batch["label"].to(self.device)
-                    audio_embeds = self.model.encode_audio(audio)
-                    all_embeddings.append(audio_embeds)
+                    embeddings = backbone(audio)
+                    all_embeddings.append(embeddings)
                     all_labels.append(labels)
 
             embeddings = torch.cat(all_embeddings, dim=0)
             labels = torch.cat(all_labels, dim=0)
-            embedding_logger.log_step(step=epoch_idx + 1, embeddings=embeddings, labels=labels)
+            self.embedding_logger.log_step(step=epoch_idx + 1, embeddings=embeddings, labels=labels)
+            self.logger.info(f"[CLAP - Epoch {epoch_idx+1}] Embeddings logged.")
             self.model.train()
 
-            for step in embedding_logger.steps:
-                plot_path = embedding_logger.plot_step(step)
-                if self.wandb_logger.is_active:
-                    self.wandb_logger.log(
-                        {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
-                        step=step
-                    )
-
         return epoch_loss
+
 
 
         
@@ -619,19 +636,41 @@ class Trainer:
         """
         epoch_loss = 0.0
 
+        # === Step 0: Log pre-training embeddings ===
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
-            embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
-            embedding_logger = EmbeddingLogger(
+            embedding_log_dir = os.path.join(self.save_dir, "embedding_logs")
+            self.embedding_logger = EmbeddingLogger(
                 log_dir=embedding_log_dir,
                 method_name=self.method,
                 reduce_method="tsne",
                 log_interval=1,
             )
+            self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
+
+            self.logger.info("[AudioCLIP - Step 0] Logging pre-training embeddings...")
+            backbone = AudioCLIPAudioBackbone(self.model).to(self.device)
+            backbone.eval()
+
+            all_embeddings, all_labels = [], []
+            with torch.no_grad():
+                for batch in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
+                    audio = batch["audio"].to(self.device)
+                    labels = batch["label"].to(self.device)
+                    embeddings = backbone(audio)
+                    all_embeddings.append(embeddings)
+                    all_labels.append(labels)
+
+            embeddings = torch.cat(all_embeddings, dim=0)
+            labels = torch.cat(all_labels, dim=0)
+            self.embedding_logger.log_step(step=0, embeddings=embeddings, labels=labels)
+            self.logger.info("[AudioCLIP - Step 0] Pre-training embeddings logged.")
+            self.model.train()
 
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
 
+        # === Training loop ===
         for step, batch in enumerate(tepoch):
             batch = {
                 k: v.to(self.device) if isinstance(v, torch.Tensor) else v
@@ -690,31 +729,26 @@ class Trainer:
                 lr=optimizer.param_groups[0]["lr"],
             )
 
-        # === Embedding logging after the epoch ===
+        # === Post-epoch embedding logging ===
         if use_embedding_logger:
-            self.model.eval()
-            all_embeddings, all_labels = [], []
+            self.logger.info(f"[AudioCLIP - Epoch {epoch_idx+1}] Logging embeddings...")
+            backbone = AudioCLIPAudioBackbone(self.model).to(self.device)
+            backbone.eval()
 
+            all_embeddings, all_labels = [], []
             with torch.no_grad():
-                for batch in logger_loader:
+                for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch_idx+1}"):
                     audio = batch["audio"].to(self.device)
                     labels = batch["label"].to(self.device)
-                    audio_embeds = self.model.encode_audio(audio)
-                    all_embeddings.append(audio_embeds)
+                    embeddings = backbone(audio)
+                    all_embeddings.append(embeddings)
                     all_labels.append(labels)
 
             embeddings = torch.cat(all_embeddings, dim=0)
             labels = torch.cat(all_labels, dim=0)
-            embedding_logger.log_step(step=epoch_idx + 1, embeddings=embeddings, labels=labels)
+            self.embedding_logger.log_step(step=epoch_idx + 1, embeddings=embeddings, labels=labels)
+            self.logger.info(f"[AudioCLIP - Epoch {epoch_idx+1}] Embeddings logged.")
             self.model.train()
-
-            for step in embedding_logger.steps:
-                plot_path = embedding_logger.plot_step(step)
-                if self.wandb_logger.is_active:
-                    self.wandb_logger.log(
-                        {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
-                        step=step
-                    )
 
         return epoch_loss
 
@@ -742,15 +776,36 @@ class Trainer:
         """
         epoch_loss = 0.0
 
+        # === Step 0: Log pre-training embeddings ===
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
-            embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
-            embedding_logger = EmbeddingLogger(
+            embedding_log_dir = os.path.join(self.save_dir, "embedding_logs")
+            self.embedding_logger = EmbeddingLogger(
                 log_dir=embedding_log_dir,
                 method_name=self.method,
                 reduce_method="tsne",
                 log_interval=1,
             )
+            self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
+
+            self.logger.info("[Wav2CLIP - Step 0] Logging pre-training embeddings...")
+            backbone = Wav2CLIPAudioBackbone(self.model).to(self.device)
+            backbone.eval()
+
+            all_embeddings, all_labels = [], []
+            with torch.no_grad():
+                for batch in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
+                    audio = batch["audio"].to(self.device)
+                    labels = batch["label"].to(self.device)
+                    embeddings = backbone(audio)  
+                    all_embeddings.append(embeddings)
+                    all_labels.append(labels)
+
+            embeddings = torch.cat(all_embeddings, dim=0)
+            labels = torch.cat(all_labels, dim=0)
+            self.embedding_logger.log_step(step=0, embeddings=embeddings, labels=labels)
+            self.logger.info("[Wav2CLIP - Step 0] Pre-training embeddings logged.")
+            self.model.train()
 
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
@@ -794,31 +849,24 @@ class Trainer:
                 lr=optimizer.param_groups[0]["lr"]
             )
 
-        # === Embedding logging after epoch ===
+        # === Embedding logger ===
         if use_embedding_logger:
-            self.model.eval()
+            self.logger.info(f"[Wav2CLIP - Epoch {epoch_idx+1}] Logging embeddings...")
+            backbone = Wav2CLIPAudioBackbone(self.model).to(self.device)
+            backbone.eval()
             all_embeddings, all_labels = [], []
-
             with torch.no_grad():
-                for batch in logger_loader:
+                for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch_idx+1}"):
                     audio = batch["audio"].to(self.device)
                     labels = batch["label"].to(self.device)
-                    audio_embeds = self.model.encode_audio(audio)
-                    all_embeddings.append(audio_embeds)
+                    embeddings = backbone(audio)  
+                    all_embeddings.append(embeddings)
                     all_labels.append(labels)
-
             embeddings = torch.cat(all_embeddings, dim=0)
             labels = torch.cat(all_labels, dim=0)
-            embedding_logger.log_step(step=epoch_idx + 1, embeddings=embeddings, labels=labels)
+            self.embedding_logger.log_step(step=epoch_idx + 1, embeddings=embeddings, labels=labels)
+            self.logger.info(f"[Wav2CLIP - Epoch {epoch_idx+1}] Embeddings logged.")
             self.model.train()
-
-            for step in embedding_logger.steps:
-                plot_path = embedding_logger.plot_step(step)
-                if self.wandb_logger.is_active:
-                    self.wandb_logger.log(
-                        {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
-                        step=step
-                    )
 
         return epoch_loss
 
@@ -836,7 +884,10 @@ class Trainer:
         learning_rate: float = 1e-3,
         use_hpo: bool = False,
         n_trials: int = 20,
-        tuning_max_epochs: int = 5, 
+        tuning_epochs: int = 5, 
+        use_embedding_logger: bool = False,
+        logger_loader: Optional[DataLoader] = None,  # NEW
+
         **kwargs,
     ):
 
@@ -850,7 +901,7 @@ class Trainer:
             self.wandb_logger.current_run.config.update({
                 "batch_size": batch_size,
                 "start_epoch": start_epoch,
-                "max_epochs": epochs,
+                "epochs": epochs,
                 "learning_rate": learning_rate,
                 "weight_decay": weight_decay,
                 "optimizer": optimizer,
@@ -869,7 +920,7 @@ class Trainer:
                 trainer=self,
                 train_dataset=train_dataset,
                 n_trials=n_trials,
-                max_epochs=tuning_max_epochs,
+                epochs=tuning_epochs,
             )
             self.logger.info(f"🌟 Best hyperparameters found: {best_params}")
             
@@ -956,7 +1007,7 @@ class Trainer:
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_clip(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
+                        loss_per_epoch = self._train_clip(tepoch, optimizer, epoch, total_batches_per_epoch,) # Pass epoch_idx, total_batches_per_epoch
                         lr_scheduler.step()
 
                     # self.writer.add_scalar( # Commented out
@@ -969,7 +1020,7 @@ class Trainer:
                     # Log epoch-level metrics to W&B
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
-                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
 
@@ -1009,7 +1060,7 @@ class Trainer:
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_slip(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
+                        loss_per_epoch = self._train_slip(tepoch, optimizer, epoch, total_batches_per_epoch,) # Pass epoch_idx, total_batches_per_epoch
                         lr_scheduler.step()
 
                     # self.writer.add_scalar( # Commented out
@@ -1022,7 +1073,7 @@ class Trainer:
                     # Log epoch-level metrics to W&B
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
-                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
 
@@ -1061,7 +1112,7 @@ class Trainer:
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_albef(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
+                        loss_per_epoch = self._train_albef(tepoch, optimizer, epoch, total_batches_per_epoch,) # Pass epoch_idx, total_batches_per_epoch
                         lr_scheduler.step()
 
                     # self.writer.add_scalar( # Commented out
@@ -1074,7 +1125,7 @@ class Trainer:
                     # Log epoch-level metrics to W&B
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
-                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
 
@@ -1112,7 +1163,7 @@ class Trainer:
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_simvlm(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
+                        loss_per_epoch = self._train_simvlm(tepoch, optimizer, epoch, total_batches_per_epoch,) # Pass epoch_idx, total_batches_per_epoch
                         lr_scheduler.step()
 
                     # self.writer.add_scalar( # Commented out
@@ -1125,7 +1176,7 @@ class Trainer:
                     # Log epoch-level metrics to W&B
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
-                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
 
@@ -1159,7 +1210,7 @@ class Trainer:
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_unitervqa(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
+                        loss_per_epoch = self._train_unitervqa(tepoch, optimizer, epoch, total_batches_per_epoch,) # Pass epoch_idx, total_batches_per_epoch
 
                     # self.writer.add_scalar( # Commented out
                     #     f"{self.method.upper()}/Train/Loss", # Commented out
@@ -1171,7 +1222,7 @@ class Trainer:
                     # Log epoch-level metrics to W&B
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
-                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
 
@@ -1205,7 +1256,7 @@ class Trainer:
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_vse(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
+                        loss_per_epoch = self._train_vse(tepoch, optimizer, epoch, total_batches_per_epoch,) # Pass epoch_idx, total_batches_per_epoch
 
                     # self.writer.add_scalar( # Commented out
                     #     f"{self.method.upper()}/Train/Loss", # Commented out
@@ -1217,7 +1268,7 @@ class Trainer:
                     # Log epoch-level metrics to W&B
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
-                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/AvgNumNegatives": np.mean(self._train_vse_last_num_negs), # Assuming a way to pass this
                             # Note: For _train_vse, `num_negs` is reset per epoch, so this average is for the current epoch's num_negs.
                             # If you need a global average, you'd need to accumulate it.
@@ -1253,12 +1304,12 @@ class Trainer:
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_clap(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
+                        loss_per_epoch = self._train_clap(tepoch, optimizer, epoch, total_batches_per_epoch, use_embedding_logger=use_embedding_logger, logger_loader=logger_loader) # Pass epoch_idx, total_batches_per_epoch
 
                     # Log epoch-level metrics to W&B
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
-                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
 
@@ -1292,12 +1343,12 @@ class Trainer:
                 ):
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
-                        loss_per_epoch = self._train_audio_clip(tepoch, optimizer, epoch, total_batches_per_epoch) # Pass epoch_idx, total_batches_per_epoch
+                        loss_per_epoch = self._train_audio_clip(tepoch, optimizer, epoch, total_batches_per_epoch, use_embedding_logger=use_embedding_logger, logger_loader=logger_loader) # Pass epoch_idx, total_batches_per_epoch
 
                     # Log epoch-level metrics to W&B
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
-                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
 
@@ -1331,12 +1382,12 @@ class Trainer:
                     with tqdm(train_loader, unit="batch", leave=False) as tepoch:
                         tepoch.set_description(f"Epoch {epoch + 1}")
                         loss_per_epoch = self._train_wav2clip(
-                            tepoch, optimizer, epoch, total_batches_per_epoch
+                            tepoch, optimizer, epoch, total_batches_per_epoch, use_embedding_logger=use_embedding_logger, logger_loader=logger_loader
                         )
 
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
-                            f"{self.method.upper()}/Train/Loss": loss_per_epoch / len(train_loader),
+                            f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         }, step=epoch + 1)
 
@@ -1379,7 +1430,19 @@ class Trainer:
                 metadata={"epochs_trained": epochs, "final_loss": loss_per_epoch / len(train_loader)} # Use final epoch's loss
             )
 
+        # === Final animated embedding plot ===
+        if use_embedding_logger:
+            self.logger.info("Generating final embedding animation...")
+            animation_path = self.embedding_logger.plot_all()
+            self.logger.info(f"Embedding animation saved at: {animation_path}")
 
+            if self.wandb_logger.is_active:
+                import wandb
+                self.wandb_logger.log(
+                    {"embedding_animation": wandb.Html(animation_path)},
+                    step=max(self.embedding_logger.steps) if self.embedding_logger.steps else epochs
+                )
+                self.logger.info("Embedding animation logged to Weights & Biases.")
 
         training_mode = "Main" if not hasattr(self, "_optuna_trial") else "HPO"
         if self.wandb_logger.is_active:
@@ -1396,7 +1459,7 @@ class Trainer:
         num_classes: int,
         batch_size: int = 64,
         lr: float = 1e-3,
-        max_epochs: int = 10,
+        epochs: int = 10,
         freeze_backbone: bool = True,
         **kwargs,
     ):
@@ -1434,7 +1497,7 @@ class Trainer:
 
         # === Training loop ===
         classifier.train()
-        for epoch in range(max_epochs):
+        for epoch in range(epochs):
             for x, y in train_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 logits = classifier(x)
@@ -1443,7 +1506,7 @@ class Trainer:
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[AudioCLIP Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[AudioCLIP Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             # ✅ Log training metrics
             if self.wandb_logger.is_active:
@@ -1486,7 +1549,7 @@ class Trainer:
         num_classes: int,
         batch_size: int = 64,
         lr: float = 1e-3,
-        max_epochs: int = 10,
+        epochs: int = 10,
         freeze_backbone: bool = True,
         **kwargs
     ):
@@ -1499,7 +1562,7 @@ class Trainer:
             num_classes (int): Number of output classes.
             batch_size (int): Evaluation batch size.
             lr (float): Learning rate.
-            max_epochs (int): Max number of epochs.
+            epochs (int): Max number of epochs.
             freeze_backbone (bool): Whether to freeze the audio backbone.
         """
 
@@ -1524,7 +1587,7 @@ class Trainer:
 
         # === Training loop ===
         classifier.train()
-        for epoch in range(max_epochs):
+        for epoch in range(epochs):
             for waveforms, labels in train_loader:
                 waveforms = waveforms.to(self.device)
                 labels = labels.to(self.device)
@@ -1536,7 +1599,7 @@ class Trainer:
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[Wav2CLIP Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[Wav2CLIP Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -1585,7 +1648,7 @@ class Trainer:
         modality: str = "audio",  # or "text"
         batch_size: int = 64,
         lr: float = 1e-3,
-        max_epochs: int = 10,
+        epochs: int = 10,
         freeze_backbone: bool = True,
         **kwargs
     ):
@@ -1599,7 +1662,7 @@ class Trainer:
             num_classes (int): Number of output classes.
             batch_size (int): Evaluation batch size.
             lr (float): Learning rate.
-            max_epochs (int): Max number of epochs.
+            epochs (int): Max number of epochs.
             freeze_backbone (bool): Whether to freeze the backbone.
         """
         model = self.model
@@ -1631,7 +1694,7 @@ class Trainer:
 
         # === Training loop ===
         classifier.train()
-        for epoch in range(max_epochs):
+        for epoch in range(epochs):
             for inputs, labels in train_loader:
                 if modality == "text":
                     inputs = (inputs[0].to(self.device), inputs[1].to(self.device))
@@ -1647,7 +1710,7 @@ class Trainer:
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[CLAP {modality.upper()} Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[CLAP {modality.upper()} Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -1699,7 +1762,7 @@ class Trainer:
         num_classes: int,
         batch_size: int = 64,
         lr: float = 1e-3,
-        max_epochs: int = 10,
+        epochs: int = 10,
         freeze_backbone: bool = True,
         **kwargs
     ):
@@ -1713,11 +1776,11 @@ class Trainer:
 
         match self.method:
             case "wav2clip":
-                self._evaluate_wav2clip(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+                self._evaluate_wav2clip(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case "audio_clip":
-                self._evaluate_audioclip(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+                self._evaluate_audioclip(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case "clap":
-                self._evaluate_clap(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+                self._evaluate_clap(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
 
             case _:
                 raise ValueError(f"❌ Unknown method '{self.method}' for evaluation.")

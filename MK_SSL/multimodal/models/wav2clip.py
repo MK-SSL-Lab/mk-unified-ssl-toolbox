@@ -36,7 +36,7 @@ class Wav2Clip(nn.Module):
         if image_encoder is not None:
             self.image_encoder = image_encoder
         else:
-            self.image_encoder = CLIPImageEncoder(device=self.device)
+            self.image_encoder = CLIPImageEncoder(device=self.device, model_name="ViT-B/32" )
 
 
         self.audio_encoder = audio_encoder if audio_encoder is not None else Wav2ClipAudioEncoder(
@@ -44,6 +44,7 @@ class Wav2Clip(nn.Module):
             projection_dim=projection_dim,
             input_dim=512
         )
+        self.wav2clip_loss = Wav2ClipLoss()
 
 
     def forward(

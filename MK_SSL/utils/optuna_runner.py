@@ -6,7 +6,7 @@ def optimize_hyperparameters(
     train_dataset,
     val_dataset=None,
     n_trials=20,
-    max_epochs=5,
+    epochs=5,
     objective_metric="val_loss",
     search_space=None,
     pruner: str = "median",  
@@ -19,7 +19,7 @@ def optimize_hyperparameters(
         train_dataset (Dataset): Training dataset.
         val_dataset (Dataset, optional): Validation dataset.
         n_trials (int): Number of Optuna trials.
-        max_epochs (int): Max epochs during tuning phase.
+        epochs (int): Max epochs during tuning phase.
         objective_metric (str): Metric name to minimize.
         search_space (dict, optional): Custom Optuna search space.
         pruner (str): Pruner strategy name. One of ["median", "successive_halving", "none"].
@@ -42,7 +42,7 @@ def optimize_hyperparameters(
         trial_trainer.train(
             train_dataset=train_dataset,
             val_dataset=val_dataset,
-            max_epochs=max_epochs,
+            epochs=epochs,
             use_optuna=False,
             use_embedding_logger=False,
 
