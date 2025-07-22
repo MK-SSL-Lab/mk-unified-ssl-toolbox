@@ -967,7 +967,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned() 
 
@@ -1020,7 +1020,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned()  
 
@@ -1072,7 +1072,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned() 
 
@@ -1123,7 +1123,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned()  
 
@@ -1169,7 +1169,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned() 
 
@@ -1217,7 +1217,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned() 
 
@@ -1256,7 +1256,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned() 
 
@@ -1295,7 +1295,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned()         
 
@@ -1334,7 +1334,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned()
 
