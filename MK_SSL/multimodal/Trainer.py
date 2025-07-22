@@ -6,7 +6,6 @@ import logging
 import torch.nn as nn
 from tqdm import tqdm
 from datetime import datetime
-# from torch.utils.tensorboard import SummaryWriter # Commented out: Replaced by WandbLogger for unified logging
 from torch.nn.utils.clip_grad import clip_grad_norm_
 from torch.utils.data import Subset, DataLoader, Dataset, RandomSampler
 
@@ -840,7 +839,6 @@ class Trainer:
         **kwargs,
     ):
 
-
         if not hasattr(self, "_optuna_trial"):
             self.wandb_logger.init_run()
         else:
@@ -975,7 +973,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned() 
 
@@ -1028,7 +1026,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned()  
 
@@ -1080,7 +1078,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned() 
 
@@ -1131,7 +1129,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned()  
 
@@ -1177,7 +1175,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned() 
 
@@ -1225,7 +1223,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned() 
 
@@ -1264,7 +1262,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned() 
 
@@ -1303,7 +1301,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned()         
 
@@ -1342,7 +1340,7 @@ class Trainer:
                         }, step=epoch + 1)
 
                     if hasattr(self, "_optuna_trial"):
-                        self._optuna_trial.report(loss_per_epoch, tepoch)
+                        self._optuna_trial.report(loss_per_epoch, epoch)
                         if self._optuna_trial.should_prune():
                             raise optuna.TrialPruned()
 
@@ -1777,3 +1775,6 @@ class Trainer:
             epoch = 0 # Default to epoch 0 if not found
 
         return epoch # Return 0-indexed epoch
+
+
+

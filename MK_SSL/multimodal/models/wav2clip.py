@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 from typing import Optional, Tuple
 
-from MK_SSL.multimodal.models.modules.backbones import Wav2ClipEncoder
+from MK_SSL.multimodal.models.modules.backbones import Wav2ClipAudioEncoder
 from MK_SSL.multimodal.models.modules.feature_extractors import ResNetFeatureExtractor
+from MK_SSL.multimodal.models.modules.backbones import CLIPImageEncoder
 from MK_SSL.multimodal.models.utils import register_method
 from MK_SSL.multimodal.models.modules.losses import Wav2ClipLoss
 
@@ -24,7 +25,6 @@ class Wav2Clip(nn.Module):
         audio_encoder: Optional[nn.Module] = None,
         image_encoder: Optional[nn.Module] = None,
         projection_dim: int = 512,
-        freeze_image_encoder: bool = True,
         device: str = 'cpu',
         **kwargs
     ):
@@ -33,21 +33,18 @@ class Wav2Clip(nn.Module):
         self.device = device
 
 
-        if image_encoder is None:
-            raise ValueError("You must provide a pretrained (frozen) CLIP image encoder.")
+        if image_encoder is not None:
+            self.image_encoder = image_encoder
+        else:
+            self.image_encoder = CLIPImageEncoder(device=self.device)
 
-        self.audio_encoder = audio_encoder if audio_encoder is not None else Wav2ClipEncoder(
+
+        self.audio_encoder = audio_encoder if audio_encoder is not None else Wav2ClipAudioEncoder(
             backbone=ResNetFeatureExtractor.get_default_resnet_audio(),
             projection_dim=projection_dim,
             input_dim=512
         )
 
-        self.image_encoder = image_encoder
-
-        if freeze_image_encoder:
-            for param in self.image_encoder.parameters():
-                param.requires_grad = False
-        self.clap_loss = Wav2ClipLoss()
 
     def forward(
         self,
@@ -82,7 +79,7 @@ register_method(
         "---------------- Wav2CLIP Configuration ----------------\n"
         f"Audio Encoder                    : {model.audio_encoder.__class__.__name__}\n"
         f"Image Encoder                    : {model.image_encoder.__class__.__name__}\n"
-        f"Projection Dimension             : {model.audio_encoder.projection.out_features if hasattr(model.audio_encoder, 'projection') else 'N/A'}\n"
+        f"Projection Dimension             : {model.audio_encoder.projection.output_dim if hasattr(model.audio_encoder, 'projection') else 'N/A'}\n"
         f"Image Encoder Frozen             : {'Yes' if not any(p.requires_grad for p in model.image_encoder.parameters()) else 'No'}\n"
         "Contrastive Learning             : Audio ↔ Image modality alignment\n"
         "Loss                             : Contrastive (user-defined externally)\n"

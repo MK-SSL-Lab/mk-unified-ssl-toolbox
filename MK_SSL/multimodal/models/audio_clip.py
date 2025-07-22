@@ -4,8 +4,8 @@ import torch.nn.functional as F
 from typing import Tuple, List, Optional
 
 from MK_SSL.multimodal.models.modules.backbones import AudioResNeXtStem
-from MK_SSL.multimodal.models.modules.backbones import AttentionPool2d
-from MK_SSL.multimodal.models.modules.backbones import TransformerLayer
+from MK_SSL.multimodal.models.modules.backbones import CLIPImageEncoder
+from MK_SSL.multimodal.models.modules.backbones import CLIPTextEncoder
 from MK_SSL.multimodal.models.modules.losses import AudioCLIPLoss
 from MK_SSL.multimodal.models.utils import register_method
 
@@ -46,12 +46,12 @@ class AudioCLIP(nn.Module):
         if image_encoder is not None:
             self.image_encoder = image_encoder
         else:
-            self.image_encoder = AttentionPool2d()
+            self.image_encoder = CLIPImageEncoder(device=self.device)
 
         if text_encoder is not None:
             self.text_encoder = text_encoder
         else:
-            self.text_encoder = TransformerLayer()
+            self.text_encoder = CLIPTextEncoder(device=self.device)
 
         self.audio_clip_loss = AudioCLIPLoss()
 
@@ -96,9 +96,7 @@ class AudioCLIP(nn.Module):
             image_emb = F.normalize(self.image_encoder(image_input), dim=-1)
 
         if text_input is not None:
-            formatted_text = [self.text_template.format(t) for t in text_input]
-            tokenized_text = self.tokenizer(formatted_text).to(self.device)
-            text_emb = F.normalize(self.text_encoder(tokenized_text), dim=-1)
+            text_emb = F.normalize(self.text_encoder(text_input), dim=-1)
 
 
         # similarity matrix

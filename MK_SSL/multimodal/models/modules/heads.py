@@ -44,6 +44,8 @@ class Wav2ClipProjectionHead(ProjectionHead):
     """
 
     def __init__(self, input_dim: int, output_dim: int, hidden_dim: Optional[int] = None):
+        self.input_dim = input_dim
+        self.output_dim = output_dim
         if hidden_dim is None:
             blocks = [
                 (input_dim, output_dim, None, None)
