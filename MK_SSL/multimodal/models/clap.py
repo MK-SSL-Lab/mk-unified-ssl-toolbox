@@ -100,13 +100,8 @@ class CLAP(nn.Module):
                 - similarity_matrix: Scaled cosine similarity matrix of shape (B, B)
         """
 
-        if audio_input.dim() == 3 and audio_input.size(1) == 1:  
-            audio_input = audio_input.squeeze(1)  # (B, L)
-            audio_input = self.mel_transform(audio_input)  # (B, F, T)
-            audio_input = self.amplitude_to_db(audio_input)  # log scale
-            audio_input = audio_input.unsqueeze(1)  # (B, 1, F, T)
-
-            
+        audio_input = self.mel_spectrogram_transform(audio_input)  # output: (B, 1, F, T)
+    
         audio_emb = self.audio_encoder(audio_input)    # (B, D_a)
 
         
@@ -129,7 +124,23 @@ class CLAP(nn.Module):
 
     def criterion(self, similarity_matrix: torch.Tensor,) -> torch.Tensor:
         return self.clap_loss(similarity_matrix)
-    
+
+    def mel_spectrogram_transform(self, audio_input: torch.Tensor) -> torch.Tensor:
+        """
+        Applies mel spectrogram and log scaling to raw waveform audio.
+
+        Args:
+            audio_input (torch.Tensor): Input audio tensor of shape (B, 1, L) or (B, L).
+
+        Returns:
+            torch.Tensor: Log-mel spectrogram of shape (B, 1, F, T).
+        """
+        if audio_input.dim() == 3 and audio_input.size(1) == 1:
+            audio_input = audio_input.squeeze(1)  # (B, L)
+            audio_input = self.mel_transform(audio_input)  # (B, F, T)
+            audio_input = self.amplitude_to_db(audio_input)  # log scale
+            audio_input = audio_input.unsqueeze(1)  # (B, 1, F, T)
+        return audio_input    
 
 
 register_method(
