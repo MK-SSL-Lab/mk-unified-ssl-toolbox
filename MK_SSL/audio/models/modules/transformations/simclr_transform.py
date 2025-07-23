@@ -1,13 +1,12 @@
+import os
+import random
+import torch
 import torchaudio
 import torchaudio.transforms as AT
-import torch
-import random
-import os
-import urllib.request
-import tarfile
 from pathlib import Path
 from torchaudio.functional import resample
 from torchaudio.sox_effects import apply_effects_tensor
+from typing import Tuple
 
 
 class MUSANNoiseAdder:
@@ -28,8 +27,19 @@ class MUSANNoiseAdder:
         return waveform[:, :target_len]
 
     def __call__(self, waveform: torch.Tensor) -> torch.Tensor:
-        if waveform.dim() == 1:
-            waveform = waveform.unsqueeze(0)
+        """
+        Adds noise to a waveform or a batch of waveforms.
+        Args:
+            waveform: [1, L] or [B, 1, L]
+        """
+        if waveform.dim() == 2:  # [1, L]
+            return self._add_noise_single(waveform)
+        elif waveform.dim() == 3:  # [B, 1, L]
+            return torch.stack([self._add_noise_single(w) for w in waveform])
+        else:
+            raise ValueError(f"Expected [1, L] or [B, 1, L], but got {tuple(waveform.shape)}.")
+
+    def _add_noise_single(self, waveform: torch.Tensor) -> torch.Tensor:
         noise = self._load_random_noise(waveform.size(1))
         snr_db = random.uniform(*self.snr_range_db)
         rms_signal = waveform.pow(2).mean().sqrt()
@@ -66,20 +76,26 @@ class SimCLRAudioTransform:
 
         if not Path(root).exists():
             try:
+                import urllib.request
+                import tarfile
                 urllib.request.urlretrieve(url, archive_path)
-            except Exception as e:
-                raise RuntimeError(f"Failed to download MUSAN dataset: {e}")
-
-            try:
                 with tarfile.open(archive_path, "r:gz") as tar:
                     tar.extractall(path=extract_path)
             except Exception as e:
-                raise RuntimeError(f"Failed to extract MUSAN dataset: {e}")
+                raise RuntimeError(f"Failed to download or extract MUSAN dataset: {e}")
             finally:
                 if Path(archive_path).exists():
                     os.remove(archive_path)
 
     def _add_gaussian_noise(self, waveform: torch.Tensor) -> torch.Tensor:
+        if waveform.dim() == 2:  # [1, L]
+            return self._add_gaussian_noise_single(waveform)
+        elif waveform.dim() == 3:  # [B, 1, L]
+            return torch.stack([self._add_gaussian_noise_single(w) for w in waveform])
+        else:
+            raise ValueError(f"Expected [1, L] or [B, 1, L], but got {tuple(waveform.shape)}.")
+
+    def _add_gaussian_noise_single(self, waveform: torch.Tensor) -> torch.Tensor:
         noise = torch.randn_like(waveform)
         snr = random.uniform(5, 10)
         rms_signal = waveform.pow(2).mean().sqrt()
@@ -87,12 +103,23 @@ class SimCLRAudioTransform:
         return waveform + rms_noise * noise
 
     def _speed_perturb(self, waveform: torch.Tensor) -> torch.Tensor:
+        # This must be applied per sample (not batch).
+        if waveform.dim() == 3:
+            return torch.stack([self._speed_perturb_single(w) for w in waveform])
+        return self._speed_perturb_single(waveform)
+
+    def _speed_perturb_single(self, waveform: torch.Tensor) -> torch.Tensor:
         speed = random.uniform(0.8, 1.2)
         new_sr = int(self.sample_rate * speed)
         waveform = resample(waveform, self.sample_rate, new_sr)
         return resample(waveform, new_sr, self.sample_rate)
 
     def _pitch_shift(self, waveform: torch.Tensor) -> torch.Tensor:
+        if waveform.dim() == 3:
+            return torch.stack([self._pitch_shift_single(w) for w in waveform])
+        return self._pitch_shift_single(waveform)
+
+    def _pitch_shift_single(self, waveform: torch.Tensor) -> torch.Tensor:
         shift = random.randint(-300, 300)  # in cents
         try:
             return torchaudio.functional.pitch_shift(waveform, self.sample_rate, shift)
@@ -100,9 +127,13 @@ class SimCLRAudioTransform:
             return waveform
 
     def _room_reverb(self, waveform: torch.Tensor) -> torch.Tensor:
+        if waveform.dim() == 3:
+            return torch.stack([self._room_reverb_single(w) for w in waveform])
+        return self._room_reverb_single(waveform)
+
+    def _room_reverb_single(self, waveform: torch.Tensor) -> torch.Tensor:
         if waveform.dim() == 1:
             waveform = waveform.unsqueeze(0)
-
         room_scale = random.randint(0, 100)
         effects = [["reverb", "50", "50", str(room_scale)]]
         try:
@@ -122,7 +153,16 @@ class SimCLRAudioTransform:
             waveform = self._room_reverb(waveform)
         return waveform
 
-    def __call__(self, waveform: torch.Tensor):
+    def __call__(self, waveform: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            waveform: [1, L] or [B, 1, L]
+        Returns:
+            Two augmented views of the same input with shape [1, L] or [B, 1, L].
+        """
+        if waveform.dim() not in (2, 3):
+            raise ValueError(f"Expected [1, L] or [B, 1, L], but got {tuple(waveform.shape)}.")
+
         x1 = self._augment_waveform(waveform.clone())
         x2 = self._augment_waveform(waveform.clone())
         return x1, x2
