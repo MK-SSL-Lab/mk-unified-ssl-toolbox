@@ -1,13 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchaudio
 from typing import Tuple , Optional
+from transformers import BatchEncoding
 
 from MK_SSL.multimodal.models.modules.backbones import CNN14
 from MK_SSL.multimodal.models.modules.backbones import BERTTextEncoder
 from MK_SSL.multimodal.models.utils import register_method
 from MK_SSL.multimodal.models.modules.losses import CLAPLoss
-import torchaudio
 
 class CLAP(nn.Module):
     """
@@ -108,12 +109,17 @@ class CLAP(nn.Module):
             
         audio_emb = self.audio_encoder(audio_input)    # (B, D_a)
 
-        if isinstance(text_input[0], dict):
-            text_emb = self.text_encoder(**text_input)     # Unpacks dict: input_ids, attention_mask
-        elif isinstance(text_input[0], torch.Tensor):
-            text_emb = self.text_encoder(text_input)    # (B, D_t)
+        
+        if isinstance(text_input, BatchEncoding):
+            text_input = dict(text_input)
+        elif isinstance(text_input, dict):
+            pass
+        elif isinstance(text_input, torch.Tensor):
+            text_input = {"input_ids": text_input, "attention_mask": (text_input != 0).long()}
         else:
-            raise(ValueError('text_input is not a dict nor a tensor '))
+            raise TypeError(f"Unsupported text_input type: {type(text_input)}")
+        
+        text_emb = self.text_encoder(**text_input)
         
         audio_proj = F.normalize(self.audio_proj(audio_emb), dim=-1)  # (B, D)
         text_proj = F.normalize(self.text_proj(text_emb), dim=-1)     # (B, D)
