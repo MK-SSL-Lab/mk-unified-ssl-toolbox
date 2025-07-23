@@ -8,8 +8,12 @@ class COLAAudioTransform:
         self.segment_len = int(segment_ms / 1000 * sample_rate)
 
     def __call__(self, waveform: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+       
+        # Ensure [1, L] shape
         if waveform.dim() == 1:
             waveform = waveform.unsqueeze(0)
+        elif waveform.dim() == 2 and waveform.shape[0] != 1:
+            raise ValueError("Expected mono waveform [1, L] or [L], but got multi-channel.")
 
         total_len = waveform.size(1)
         if total_len < 2 * self.segment_len:
