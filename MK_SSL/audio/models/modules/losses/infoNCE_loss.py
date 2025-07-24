@@ -1,59 +1,53 @@
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 
 class InfoNCELoss(nn.Module):
-    """
-    InfoNCE Loss (as used in COLA): A softmax-based contrastive loss function that 
-    maximizes agreement between positive pairs and contrasts them against many negatives.
-    
-    Similar to NT-Xent but uses bilinear similarity instead of cosine similarity.
-    
+    """InfoNCE contrastive loss with bilinear similarity.
+
+    Maximises agreement between paired embeddings while contrasting them
+    against negatives in the batch.
+
     Args:
-        temperature (float): Temperature scaling factor for logits.
-        input_dim (int): Dimensionality of projected embeddings.
+        temperature (float, optional): Logit scaling factor. Must be non‑zero.
+            Defaults to 0.2.
+        input_dim (int, optional): Dimensionality of each embedding.
+            Defaults to 512.
+
+    Inputs:
+        out0 (Tensor): Embeddings from view 1 of shape ``(B, D)``.
+        out1 (Tensor): Embeddings from view 2 of shape ``(B, D)``.
+
+    Returns:
+        Tensor: Scalar loss value.
+
+    Raises:
+        ValueError: If ``temperature`` is zero.
     """
 
-    def __init__(self, temperature: float = 0.2, input_dim: int = 512, **kwargs):
+
+    def __init__(self, temperature: float = 0.2, input_dim: int = 512):
         super().__init__()
+        if abs(temperature) < 1e-8:
+            raise ValueError("Temperature must be non‑zero.")
         self.temperature = temperature
-        self.eps = 1e-8
+        # single‑output bilinear: weight shape (1, D, D)
         self.similarity = nn.Bilinear(input_dim, input_dim, 1, bias=False)
 
-        if abs(self.temperature) < self.eps:
-            raise ValueError(f"Illegal temperature: abs({self.temperature}) < 1e-8")
-
     def forward(self, out0: torch.Tensor, out1: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            out0 (torch.Tensor): Embeddings from view 1 of shape (B, D).
-            out1 (torch.Tensor): Embeddings from view 2 of shape (B, D).
-        
-        Returns:
-            torch.Tensor: Scalar loss value.
-        """
-        device = out0.device
-        batch_size = out0.size(0)
+        # Normalise for numerical stability
+        z0, z1 = F.normalize(out0, dim=1), F.normalize(out1, dim=1)
+        z = torch.cat([z0, z1], dim=0)                    # (2B, D)
 
-        # Normalize embeddings (optional, improves stability sometimes)
-        out0 = nn.functional.normalize(out0, dim=1)
-        out1 = nn.functional.normalize(out1, dim=1)
+        # === vectorised bilinear similarity ===
+        W = self.similarity.weight.squeeze(0)             # (D, D)
+        logits = (z @ W) @ z.T                            # (2B, 2B)
+        logits.div_(self.temperature)
 
-        # Combine: z = [z0, z1]
-        z = torch.cat([out0, out1], dim=0)  # (2B, D)
+        # Positive‑pair indices
+        B = out0.size(0)
+        targets = torch.arange(B, device=out0.device)
+        targets = torch.cat([targets + B, targets], dim=0)  # (2B,)
 
-        # Compute pairwise similarity using bilinear function
-        logits = torch.zeros((2 * batch_size, 2 * batch_size), device=device)
-        for i in range(2 * batch_size):
-            logits[i] = self.similarity(z[i].unsqueeze(0).repeat(2 * batch_size, 1), z).squeeze(-1)
-
-        # Apply temperature scaling
-        logits /= self.temperature
-
-        # Positive indices: for i in [0, B), match with i+B; for i in [B, 2B), match with i-B
-        labels = torch.arange(batch_size, device=device)
-        labels = torch.cat([labels + batch_size, labels], dim=0)
-
-        # Cross-entropy loss so we don't need masking
-        loss = nn.CrossEntropyLoss()(logits, labels)
+        loss = F.cross_entropy(logits, targets)
         return loss

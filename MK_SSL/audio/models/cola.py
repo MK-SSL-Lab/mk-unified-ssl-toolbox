@@ -11,27 +11,51 @@ from MK_SSL.audio.models.utils.registry import register_method
 
 
 class COLA(nn.Module):
+    """Contrastive Learning of General‑Purpose Audio Representations (COLA).
+
+    Based on:
+        Saeed, A., et al. *Contrastive Learning of General‑Purpose Audio
+        Representations*. 2021. https://arxiv.org/abs/2010.10915
+
+    This model receives raw mono audio waveforms and produces 512‑dimensional
+    embeddings for contrastive pre‑training.
+
+    Workflow:
+        1. Two 960 ms segments are randomly cropped from each input waveform.
+        2. Each segment is converted to a log‑mel spectrogram and fed to an
+        EfficientNet‑B0 backbone.
+        3. Global max‑pooled features are projected to 512‑D embeddings.
+        4. An InfoNCE loss maximises agreement between paired segments.
+
+    Attributes:
+        feature_size (int): Backbone output dimension.
+        projection_dim (int): Projection head output dimension.
+
+    Args:
+        feature_size (int, optional): Dimension of the backbone output.
+            Defaults to 1280.
+        backbone (nn.Module, optional): Feature‑extractor backbone. If ``None``,
+            ``EfficientNetAudioEncoder`` is used. Defaults to ``None``.
+        projection_dim (int, optional): Projection head output dimension.
+            Defaults to 512.
+        projection_num_layers (int, optional): Number of layers in the projection
+            head. Defaults to 1.
+        projection_batch_norm (bool, optional): If ``True``, applies batch
+            normalisation in the projection head. Defaults to ``True``.
+
+    Inputs:
+        x0 (Tensor): Waveform segment of shape ``(B, 1, T)``.
+        x1 (Tensor, optional): Second waveform segment of shape ``(B, 1, T)``.
+
+    Returns:
+        Tensor | Tuple[Tensor, Tensor]: If ``x1`` is provided, returns
+        ``(emb0, emb1)`` each of shape ``(B, 512)``; otherwise a single
+        tensor of shape ``(B, 512)``.
+
+    Raises:
+        ValueError: If input tensor shapes are invalid.
     """
-    COLA: Contrastive Learning of General-Purpose Audio Representations.
-    
-    This class implements the COLA model based on the paper:
-    "CONTRASTIVE LEARNING OF GENERAL-PURPOSE AUDIO REPRESENTATIONS"
-    (https://arxiv.org/abs/2010.10915)
 
-    COLA learns transferable audio representations via contrastive learning
-    on log-compressed mel-filterbank inputs. It maps two audio segments 
-    (from the same or different clips) through a shared encoder and a 
-    projection head, and computes similarity between the resulting embeddings.
-
-    The encoder can be any convolutional architecture (e.g., EfficientNet),
-    and the projection head is a small MLP that transforms the pooled encoder
-    outputs to a space suitable for contrastive loss (e.g., NT-Xent).
-
-    Note:
-        This model expects pre-computed log-compressed mel-filterbanks 
-        as input tensors with shape (B, 1, F, T), where F is the number of 
-        mel bands and T is the number of frames.
-    """
 
 
     def __init__(
