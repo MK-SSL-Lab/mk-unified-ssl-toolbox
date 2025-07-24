@@ -22,6 +22,9 @@ class EvaluateNet(nn.Module):
 
         for param in self.backbone.parameters():
             param.requires_grad = not is_linear
+            
+        if is_linear:
+            backbone.eval()
 
         self.fc = nn.Linear(feature_size, num_classes, bias=True)
 
