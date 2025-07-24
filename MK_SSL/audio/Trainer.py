@@ -669,8 +669,7 @@ class Trainer:
                 for batch in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
                     audio = batch["audio"].to(self.device)
                     labels = batch["label"].to(self.device)
-                    view0, _ = self.transformation(audio)
-                    embeddings = backbone(view0)  # Get embeddings via COLABackbone
+                    embeddings = backbone(audio)  # Get embeddings via COLABackbone
                     all_embeddings.append(embeddings)
                     all_labels.append(labels)
 
@@ -725,8 +724,7 @@ class Trainer:
                     for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch+1}"):
                         audio = batch["audio"].to(self.device)
                         labels = batch["label"].to(self.device)
-                        view0, _ = self.transformation(audio)
-                        embeddings = backbone(view0)  # Get embeddings via COLABackbone
+                        embeddings = backbone(audio)  # Get embeddings via COLABackbone
                         all_embeddings.append(embeddings)
                         all_labels.append(labels)
 
@@ -1767,9 +1765,7 @@ class Trainer:
                 audio = batch["audio"].to(self.device)
                 labels = batch["label"].to(self.device)
 
-                view0, _ = self.transformation(audio)
-
-                logits = classifier(view0)
+                logits = classifier(audio)
                 loss = criterion(logits, labels)
 
                 optimizer.zero_grad()
@@ -1794,9 +1790,8 @@ class Trainer:
 
                 audio = batch["audio"].to(self.device)
                 labels = batch["label"].to(self.device)
-                view0, _ = self.transformation(audio)
 
-                logits = classifier(view0)
+                logits = classifier(audio)
                 preds = torch.argmax(logits, dim=1)
 
                 all_preds.append(preds.cpu())
