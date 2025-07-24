@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Optional
-from MK_SSL.audio.models.modules.transformations import COLAAudioTransform
 
 
 class COLABackbone(nn.Module):
@@ -19,7 +18,6 @@ class COLABackbone(nn.Module):
     def __init__(self, pretrained_model: nn.Module):
         super().__init__()
         self.backbone = pretrained_model.backbone  # EfficientNetAudioEncoder
-        self.transformation = COLAAudioTransform()
         # Optional: freeze weights (up to user)
         # for p in self.parameters():
         #     p.requires_grad = False
@@ -35,5 +33,4 @@ class COLABackbone(nn.Module):
         Returns:
             Tensor: Global audio embeddings (B, C)
         """
-        view0, _ = self.transformation(waveforms)
-        return self.backbone(view0)  # Includes global pooling internally
+        return self.backbone(waveforms)  # Includes global pooling internally
