@@ -18,7 +18,6 @@ class COLABackbone(nn.Module):
     def __init__(self, pretrained_model: nn.Module):
         super().__init__()
         self.backbone = pretrained_model.backbone  # EfficientNetAudioEncoder
-
         # Optional: freeze weights (up to user)
         # for p in self.parameters():
         #     p.requires_grad = False
@@ -28,7 +27,7 @@ class COLABackbone(nn.Module):
     ) -> Tensor:
         """
         Args:
-            waveforms (Tensor): Input waveform tensor of shape (B, T).
+            waveforms (Tensor): Input waveform tensor of shape (B,1, T).
             lengths (Optional[Tensor]): Valid lengths before padding (not used here).
 
         Returns:
