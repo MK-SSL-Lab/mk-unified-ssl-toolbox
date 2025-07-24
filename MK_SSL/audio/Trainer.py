@@ -1853,7 +1853,7 @@ class Trainer:
         self.logger.info(f"✅ Evaluation for '{self.method}' completed.")
         if self.wandb_logger.is_active:
             self.wandb_logger.log({f"{self.method}/status": "evaluation_complete"})
-            self.wandb_logger.finish()
+            self.wandb_logger.finish_run()
 
     def _reload_latest_checkpoint(self) -> int:
         """
