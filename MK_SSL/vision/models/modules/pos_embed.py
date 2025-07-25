@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 
-from MK_SSL.vision.models.modules import PatchEmbed
-
 class PosEmbed2D(nn.Module):
     """
     2D Sine-Cosine Positional Embedding (Fixed).

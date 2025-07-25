@@ -24,7 +24,6 @@ from MK_SSL.vision.models.modules.transformations import *
 from MK_SSL.utils import get_logger_handler
 from MK_SSL.vision.models.utils import get_method
 from MK_SSL.utils import optimize_hyperparameters
-from MK_SSL.vision.models.modules import Patchify
 from MK_SSL.utils import WandbLogger
 from MK_SSL.vision.models.modules import MAEBackbone
 from MK_SSL.utils import EvaluateNet
@@ -469,7 +468,6 @@ class Trainer:
             self.logger.info(f"Embedding animation saved at: {animation_path}")
 
             if self.wandb_logger.is_active:
-                import wandb
                 self.wandb_logger.log(
                     {"embedding_animation": wandb.Html(animation_path)},
                     step=(
