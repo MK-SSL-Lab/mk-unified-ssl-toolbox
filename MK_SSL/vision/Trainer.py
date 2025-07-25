@@ -51,7 +51,7 @@ class Trainer:
         wandb_notes: Optional[str] = None,
         wandb_tags: Optional[list[str]] = None,
         use_data_parallel: bool = False,
-        mae_variant: str = "vit-b",
+        mae_normalize_target: Optional[bool] = False,
         **kwargs,
     ) -> None:
         """
@@ -114,7 +114,6 @@ class Trainer:
         self.reload_checkpoint = reload_checkpoint
         self.checkpoint_interval = checkpoint_interval
         self.mixed_precision_training = mixed_precision_training
-        self.mae_variant = mae_variant
 
         self.save_dir = os.path.join(save_dir, self.method)
 
@@ -180,7 +179,7 @@ class Trainer:
                 else {}
             ),
             "mae": (
-                {"variant": mae_variant, "image_size": self.image_size}
+                {"image_size": self.image_size}
                 if self.method == "mae"
                 else {}
             ),
@@ -203,7 +202,7 @@ class Trainer:
                 if self.method == "swav"
                 else {}
             ),
-            "mae": {"normalize_target": True} if self.method == "mae" else {},
+            "mae": {"normalize_target": mae_normalize_target} if self.method == "mae" else {},
         }
 
         self.model = method_cfg["model"](
