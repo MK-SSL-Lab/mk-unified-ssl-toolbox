@@ -317,7 +317,7 @@ class Trainer:
         logger_loader: Optional[DataLoader] = None,
     ):
         """
-        Trains the MAE (Masked Autoencoder) model.
+        Trains the MAE (Masked Autoencoder) model aligned with the official implementation.
 
         Args:
             train_loader: PyTorch DataLoader with training data.
@@ -328,7 +328,23 @@ class Trainer:
             logger_loader (Optional[DataLoader]): Labeled image dataloader for visualization only.
         """
         self.model.train()
-        patchify = Patchify(patch_size=self.model.patch_embed.patch_size)
+
+        # --- Updated patchify function ---
+        def patchify(imgs, patch_size):
+            """
+            Args:
+                imgs (Tensor): (B, C, H, W)
+            Returns:
+                patches (Tensor): (B, N, patch_dim)
+            """
+            B, C, H, W = imgs.shape
+            p = patch_size
+            assert H == W and H % p == 0
+            x = imgs.reshape(B, C, H // p, p, W // p, p)
+            x = x.permute(0, 2, 4, 1, 3, 5).reshape(B, (H // p) * (W // p), p * p * C)
+            return x
+
+        patch_size = self.model.patch_embed.patch_size
 
         # === Step 0: Log pre-training embeddings ===
         if use_embedding_logger:
@@ -350,11 +366,9 @@ class Trainer:
 
             all_embeddings, all_labels = [], []
             with torch.no_grad():
-                for images, labels in tqdm(
-                    logger_loader, desc="EmbeddingLogger Step 0"
-                ):
-                    images.to(self.device)
-                    labels.to(self.device)
+                for images, labels in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
+                    images = images.to(self.device)
+                    labels = labels.to(self.device)
                     embeddings = backbone(images)
                     all_embeddings.append(embeddings)
                     all_labels.append(labels)
@@ -365,6 +379,7 @@ class Trainer:
             self.logger.info("[MAE - Step 0] Pre-training embeddings logged.")
             self.model.train()
 
+        # === Training Loop ===
         for epoch in range(start_epoch, epochs):
             running_loss = 0.0
             pbar = tqdm(
@@ -377,18 +392,8 @@ class Trainer:
                 images = images.to(self.device)
 
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
-                    target = patchify(images)
-                    print(f"[DEBUG] Shape before model: {images.shape}")
-                    pred, _, ids_restore = self.model(images)
-                    B, N, _ = pred.shape
-
-                    mask = torch.ones((B, N), device=self.device)
-                    len_keep = int(N * (1 - self.model.mask_ratio))
-                    ids_keep = torch.argsort(
-                        torch.rand(B, N, device=self.device), dim=1
-                    )[:, :len_keep]
-                    mask.scatter_(1, ids_keep, 0)
-
+                    target = patchify(images, patch_size)  # (B, N, patch_dim)
+                    pred, mask = self.model(images)       # pred: (B, N, patch_dim), mask: (B, N)
                     loss = self.loss(pred, target, mask)
 
                 optimizer.zero_grad()
@@ -405,9 +410,7 @@ class Trainer:
                     self.wandb_logger.log(
                         {
                             f"{self.method.upper()}/Train/Batch_Loss": loss.item(),
-                            f"{self.method.upper()}/Train/LR": optimizer.param_groups[
-                                0
-                            ]["lr"],
+                            f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                         },
                         step=global_step,
                     )
@@ -418,9 +421,7 @@ class Trainer:
                 self.wandb_logger.log(
                     {
                         f"{self.method.upper()}/Train/Epoch_Loss": epoch_loss,
-                        f"{self.method.upper()}/Train/LR": optimizer.param_groups[0][
-                            "lr"
-                        ],
+                        f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
                     },
                     step=epoch + 1,
                 )
@@ -433,11 +434,9 @@ class Trainer:
 
                 all_embeddings, all_labels = [], []
                 with torch.no_grad():
-                    for images, labels in tqdm(
-                        logger_loader, desc="EmbeddingLogger Step 0"
-                    ):
-                        images.to(self.device)
-                        labels.to(self.device)
+                    for images, labels in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
+                        images = images.to(self.device)
+                        labels = labels.to(self.device)
                         embeddings = backbone(images)
                         all_embeddings.append(embeddings)
                         all_labels.append(labels)
@@ -471,7 +470,6 @@ class Trainer:
 
             if self.wandb_logger.is_active:
                 import wandb
-
                 self.wandb_logger.log(
                     {"embedding_animation": wandb.Html(animation_path)},
                     step=(
@@ -483,6 +481,7 @@ class Trainer:
                 self.logger.info("Embedding animation logged to Weights & Biases.")
 
         self.logger.info("MAE training complete.")
+
 
     def __del__(self):
         pass  # No need for TensorBoard writer close if not used
