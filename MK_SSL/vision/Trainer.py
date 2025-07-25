@@ -293,7 +293,7 @@ class Trainer:
         self,
         train_loader,
         optimizer,
-        max_epochs,
+        epochs,
         start_epoch=0,
         use_embedding_logger: bool = False,
         logger_loader: Optional[DataLoader] = None,
@@ -304,14 +304,15 @@ class Trainer:
         Args:
             train_loader: PyTorch DataLoader with training data.
             optimizer: Optimizer instance.
-            max_epochs: Number of training epochs.
+            epochs: Number of training epochs.
             start_epoch: Epoch to resume training from.
             use_embedding_logger (bool): Whether to enable embedding visualization.
             logger_loader (Optional[DataLoader]): Labeled image dataloader for visualization only.
         """
         self.model.train()
         patchify = Patchify(patch_size=self.model.patch_embed.patch_size)
-
+        
+        # === Step 0: Log pre-training embeddings ===
         if use_embedding_logger:
             assert logger_loader is not None, "logger_loader must be provided when use_embedding_logger=True"
             embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
@@ -321,10 +322,30 @@ class Trainer:
                 reduce_method="tsne",
                 log_interval=1,
             )
+            self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
 
-        for epoch in range(start_epoch, max_epochs):
+            self.logger.info("[MAE - Step 0] Logging pre-training embeddings...")
+            backbone = MAEBackbone(self.model).to(self.device)
+            backbone.eval()
+
+            all_embeddings, all_labels = [], []
+            with torch.no_grad():
+                for (images, labels) in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
+                    images.to(self.device)
+                    labels.to(self.device)
+                    embeddings = backbone(images) 
+                    all_embeddings.append(embeddings)
+                    all_labels.append(labels)
+
+            embeddings = torch.cat(all_embeddings, dim=0)
+            labels = torch.cat(all_labels, dim=0)
+            embedding_logger.log_step(step=0, embeddings=embeddings, labels=labels)
+            self.logger.info("[MAE - Step 0] Pre-training embeddings logged.")
+            self.model.train()
+
+        for epoch in range(start_epoch, epochs):
             running_loss = 0.0
-            pbar = tqdm(train_loader, desc=f"MAE Training [Epoch {epoch+1}/{max_epochs}]", leave=False)
+            pbar = tqdm(train_loader, desc=f"MAE Training [Epoch {epoch+1}/{epochs}]", leave=False)
 
             for step, (images, _) in enumerate(pbar):
                 images = images.to(self.device)
@@ -367,22 +388,23 @@ class Trainer:
 
             # === Embedding logger eval on external labeled image dataset ===
             if use_embedding_logger:
-                self.model.eval()
+                self.logger.info(f"[MAE - Epoch {epoch+1}] Logging embeddings...")
+                backbone = MAEBackbone(self.model).to(self.device)
+                backbone.eval()
+
                 all_embeddings, all_labels = [], []
-
                 with torch.no_grad():
-                    for batch in logger_loader:
-                        images, labels = batch
-                        images = images.to(self.device)
-                        labels = labels.to(self.device)
-
-                        preds, _, _ = self.model(images)
-                        all_embeddings.append(preds)
+                    for (images, labels) in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
+                        images.to(self.device)
+                        labels.to(self.device)
+                        embeddings = backbone(images) 
+                        all_embeddings.append(embeddings)
                         all_labels.append(labels)
 
                 embeddings = torch.cat(all_embeddings, dim=0)
                 labels = torch.cat(all_labels, dim=0)
-                embedding_logger.log_step(step=epoch + 1, embeddings=embeddings, labels=labels)
+                embedding_logger.log_step(step=0, embeddings=embeddings, labels=labels)
+                self.logger.info(f"[MAE - Epoch {epoch+1}] Embeddings logged.")
                 self.model.train()
 
             # === Save Checkpoint ===
@@ -400,15 +422,23 @@ class Trainer:
                         metadata={"epoch": epoch+1, "loss": epoch_loss}
                     )
 
-        # === Final Embedding Plots ===
+        # === Final animated embedding plot ===
         if use_embedding_logger:
-            for step in embedding_logger.steps:
-                plot_path = embedding_logger.plot_step(step)
-                if self.wandb_logger.is_active:
-                    self.wandb_logger.log(
-                        {f"embedding_plot/step_{step}": wandb.Image(plot_path)},
-                        step=step
-                    )
+            self.logger.info("Generating final embedding animation...")
+            animation_path = embedding_logger.plot_all()
+            self.logger.info(f"Embedding animation saved at: {animation_path}")
+
+            if self.wandb_logger.is_active:
+                import wandb
+                self.wandb_logger.log(
+                    {"embedding_animation": wandb.Html(animation_path)},
+                    step=max(embedding_logger.steps) if embedding_logger.steps else epochs
+                )
+                self.logger.info("Embedding animation logged to Weights & Biases.")
+
+        self.logger.info("MAE training complete.")
+
+
 
 
 
@@ -489,7 +519,7 @@ class Trainer:
         learning_rate: float = 1e-3,
         use_hpo: bool = False,
         n_trials: int = 20,
-        tuning_max_epochs: int = 5, 
+        tuning_epochs: int = 5, 
         **kwargs,
     ):
         """
@@ -518,7 +548,7 @@ class Trainer:
             self.wandb_logger.current_run.config.update({
                 "batch_size": batch_size,
                 "start_epoch": start_epoch,
-                "max_epochs": epochs,
+                "epochs": epochs,
                 "learning_rate": learning_rate,
                 "weight_decay": weight_decay,
                 "optimizer": optimizer,
@@ -537,7 +567,7 @@ class Trainer:
                 trainer=self,
                 train_dataset=train_dataset,
                 n_trials=n_trials,
-                max_epochs=tuning_max_epochs,
+                epochs=tuning_epochs,
             )
             self.logger.info(f"🌟 Best hyperparameters found: {best_params}")
             
@@ -598,7 +628,7 @@ class Trainer:
             return self._train_mae(
                 train_loader=train_loader,
                 optimizer=optimizer,
-                max_epochs=epochs,
+                epochs=epochs,
                 start_epoch=start_epoch
             )
         
@@ -893,7 +923,7 @@ class Trainer:
         num_classes: int,
         batch_size: int = 64,
         lr: float = 1e-3,
-        max_epochs: int = 10,
+        epochs: int = 10,
         freeze_backbone: bool = True,
         **kwargs
     ):
@@ -906,7 +936,7 @@ class Trainer:
             num_classes (int): Number of output classes.
             batch_size (int): Evaluation batch size.
             lr (float): Learning rate.
-            max_epochs (int): Max number of epochs.
+            epochs (int): Max number of epochs.
             freeze_backbone (bool): Freeze encoder during linear probing?
         """
 
@@ -932,7 +962,7 @@ class Trainer:
 
         # === Training ===
         classifier.train()
-        for epoch in range(max_epochs):
+        for epoch in range(epochs):
             for x, y in train_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 logits = classifier(x)
@@ -942,7 +972,7 @@ class Trainer:
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[MAE Eval] Epoch {epoch+1}/{max_epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[MAE Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -988,7 +1018,7 @@ class Trainer:
         num_classes: int,
         batch_size: int = 64,
         lr: float = 1e-3,
-        max_epochs: int = 10,
+        epochs: int = 10,
         freeze_backbone: bool = True,
         **kwargs
     ):
@@ -1000,7 +1030,7 @@ class Trainer:
 
         self.logger.info(f"🔍 Starting evaluation for method: {self.method}")
 
-        self._evaluate_mae(train_dataset, test_dataset, num_classes, batch_size, lr, max_epochs, freeze_backbone, **kwargs)
+        self._evaluate_mae(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
 
         self.logger.info(f"✅ Evaluation for '{self.method}' completed.")
         if self.wandb_logger.is_active:
