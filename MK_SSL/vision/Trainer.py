@@ -127,7 +127,7 @@ class Trainer:
                 f"`feature_size` must be explicitly provided for the selected method '{self.method}'. "
                 "The feature size should match the output dimension of the chosen backbone encoder."
             )
-            
+
             raise ValueError(
                 f"`feature_size` must be explicitly provided for the selected method '{self.method}'. "
                 "The feature size should match the output dimension of the chosen backbone encoder."
@@ -181,7 +181,7 @@ class Trainer:
             "barlowtwins": {"hidden_dim": self.feature_size},
             "simsiam": {
                 "projection_hidden_dim": self.feature_size,
-                "prediction_hidden_dim": self.feature_size // 4 
+                "prediction_hidden_dim": self.feature_size // 4 if self.feature_size else None
             }, 
             "mae": {
                 "variant" : mae_variant,
