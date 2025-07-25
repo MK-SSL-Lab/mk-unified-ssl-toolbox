@@ -5,10 +5,10 @@ import torch.nn.functional as F
 import numpy as np
 from typing import Optional, Type
 
-from MK_SSL.vision.models.modules import PatchEmbed, PositionalEncoding2D, MAEEncoder, MAEDecoder, Patchify, Unpatchify
-from MK_SSL.vision.models.modules import MAEVisionTransformer
-from MK_SSL.vision.models.utils import register_method
-from MK_SSL.vision.models.modules.losses import MAELoss  
+from MK_SSL.vision.models.modules.mae_blocks import PatchEmbed, PositionalEncoding2D, MAEEncoder, MAEDecoder, Patchify, Unpatchify
+from MK_SSL.vision.models.modules.backnones import MAEVisionTransformer
+from MK_SSL.vision.models.utils.registry import register_method
+from MK_SSL.vision.models.modules.losses.mae_loss import MAELoss  
 
 
 class MAE(nn.Module):
@@ -78,10 +78,13 @@ class MAE(nn.Module):
         return x_masked, ids_restore, ids_keep
 
     def forward(self, imgs):
+        print(f"[DEBUG] Before patch_embed  {imgs.shape}")  # Add this
         x = self.patch_embed(imgs)  # (B, N, D)
         x = self.pos_embed_enc(x)
 
         x_masked, ids_restore, ids_keep = self.random_masking(x, self.mask_ratio)
+        print(f"[DEBUG] Input to MAEVisionTransformer: {x.shape}")  # Add this
+
         x_encoded = self.encoder(x_masked)
         x_decoded = self.decoder(x_encoded, ids_restore)
 

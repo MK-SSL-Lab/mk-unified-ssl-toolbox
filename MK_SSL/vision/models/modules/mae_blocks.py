@@ -140,20 +140,31 @@ class MAEDecoder(nn.Module):
         self.decoder_norm = nn.LayerNorm(decoder_dim)
 
     def forward(self, x_visible, ids_restore):
-        # project encoder features to decoder dim
-        x_visible = self.decoder_embed(x_visible)
+        # Project encoder features to decoder dimension
+        x_visible = self.decoder_embed(x_visible)  # (B, N_visible, D)
         B, N_visible, D = x_visible.shape
-        N_total = ids_restore.shape[1]
+        N_total = ids_restore.shape[1]  # total patches
 
-        # prepare full sequence with mask tokens
+        # Prepare full sequence of mask tokens
         x_full = self.mask_token.repeat(B, N_total, 1)
-        ids_keep_expanded = ids_restore.unsqueeze(-1).expand(-1, -1, D)
+
+        # Place visible tokens into their correct positions
+        ids_keep = ids_restore[:, :N_visible]  # indices of visible tokens
+        ids_keep_expanded = ids_keep.unsqueeze(-1).expand(-1, -1, D)
         x_full.scatter_(1, ids_keep_expanded, x_visible)
 
-        x_full = x_full + self.pos_embed
+        # Add position embeddings
+        x_full = x_full + self.pos_embed  # (B, N_total, D)
+
+        # Pass through decoder transformer blocks
         x_full = self.decoder_blocks(x_full)
         x_full = self.decoder_norm(x_full)
+
+        # Project back to patch pixel space
+        x_full = self.decoder_pred(x_full)  # Add this layer (Linear D->patch_dim)
+
         return x_full
+
 
 
 class Patchify(nn.Module):

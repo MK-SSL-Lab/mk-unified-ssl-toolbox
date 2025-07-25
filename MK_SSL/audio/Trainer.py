@@ -200,9 +200,14 @@ class Trainer:
                 logger=self.logger,  # Pass logger to the generator
             )
 
+        self.logger.info(
+            "\n"
+            "---------------- Model Summary ----------------\n"
+            f"Model parameters : {np.sum([int(np.prod(p.shape)) for p in self.model.parameters()]):,}\n"
+            "----------------------------------------------"
+        )
+
         # --- W&B Logger Initialization ---
-        # Combine trainer_config with any specific wandb_config provided
-        # This allows the trainer's internal config to be logged by W&B
         trainer_internal_config = {
             "method": self.method,
             "variant": variant,
