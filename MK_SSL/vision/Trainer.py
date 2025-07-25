@@ -432,7 +432,7 @@ class Trainer:
 
                 all_embeddings, all_labels = [], []
                 with torch.no_grad():
-                    for images, labels in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
+                    for images, labels in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch+1}]"):
                         images = images.to(self.device)
                         labels = labels.to(self.device)
                         embeddings = backbone(images)
@@ -441,7 +441,7 @@ class Trainer:
 
                 embeddings = torch.cat(all_embeddings, dim=0)
                 labels = torch.cat(all_labels, dim=0)
-                embedding_logger.log_step(step=0, embeddings=embeddings, labels=labels)
+                embedding_logger.log_step(step=epoch + 1, embeddings=embeddings, labels=labels)
                 self.logger.info(f"[MAE - Epoch {epoch+1}] Embeddings logged.")
                 self.model.train()
 
@@ -468,7 +468,7 @@ class Trainer:
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
-                    {"embedding_animation": wandb.Html(animation_path)},
+                    {"media/embedding_animation": wandb.Html(animation_path)},
                     step=(
                         max(embedding_logger.steps)
                         if embedding_logger.steps
