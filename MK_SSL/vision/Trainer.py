@@ -567,6 +567,7 @@ class Trainer:
         n_trials: int = 20,
         tuning_epochs: int = 5,
         use_embedding_logger: Optional[bool] = True,
+        logger_loader: Optional[DataLoader] = None,
         **kwargs,
     ):
         """
@@ -683,7 +684,8 @@ class Trainer:
                 optimizer=optimizer,
                 epochs=epochs,
                 start_epoch=start_epoch,
-                use_embedding_logger=use_embedding_logger
+                use_embedding_logger=use_embedding_logger,
+                logger_loader=logger_loader,
             )
 
         else:
