@@ -83,10 +83,13 @@ class MAE(nn.Module):
         x = self.pos_embed_enc(x)
 
         x_masked, ids_restore, ids_keep = self.random_masking(x, self.mask_ratio)
-        print(f"[DEBUG] Input to MAEVisionTransformer: {x.shape}")  # Add this
+        print(f"[DEBUG] Input to MAEVisionTransformer: {x_masked.shape}")  # Add this
 
         x_encoded = self.encoder(x_masked)
+        print(f"[DEBUG] x_encoded: {x_encoded.shape}")  # Add this
+
         x_decoded = self.decoder(x_encoded, ids_restore)
+        print(f"[DEBUG] x_decoded: {x_decoded.shape}")  # Add this
 
         pred = self.head(x_decoded)  # (B, N, patch_dim)
         pred_img = self.unpatchify(pred)
