@@ -32,12 +32,15 @@ class HuBERTBackbone(nn.Module):
     ) -> Tensor:
         """
         Args:
-            waveforms (Tensor): Input waveform tensor of shape (B, T).
+            waveforms (Tensor): Input waveform tensor of shape (B, 1, T).
             lengths (Optional[Tensor]): Valid lengths before padding (not used here).
 
         Returns:
             Tensor: Contextualized feature representations (B, C)
         """
+        if waveforms.dim() != 3 or waveforms.size(1) != 1:
+            raise ValueError(f"Expected input shape (B, 1, T), but got {tuple(waveforms.shape)}")
+        
         x = self.feature_extractor(waveforms)[0]  # discard lengths if returned
         x = self.feature_projection(x)
         x = self.norm(x)

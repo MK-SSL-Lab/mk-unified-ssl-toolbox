@@ -202,6 +202,10 @@ class HuBERT(nn.Module):
         waveforms: Tensor,
         lengths: Tensor,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    
+        if waveforms.dim() != 3 or waveforms.size(1) != 1:
+            raise ValueError(f"Expected input shape (B, 1, T), but got {tuple(waveforms.shape)}")
+        
         features, lengths = self.feature_extractor(waveforms, lengths)
 
 

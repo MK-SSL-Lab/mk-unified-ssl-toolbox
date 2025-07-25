@@ -30,12 +30,15 @@ class Wav2Vec2Backbone(nn.Module):
     ) -> Tensor:
         """
         Args:
-            waveforms (Tensor): Input waveform tensor of shape (B, T).
+            waveforms (Tensor): Input waveform tensor of shape (B, 1, T).
             lengths (Optional[Tensor]): Valid lengths before padding.
 
         Returns:
             Tensor: Contextualized feature representations (B, T', C)
         """
+        if waveforms.dim() != 3 or waveforms.size(1) != 1:
+            raise ValueError(f"Expected input shape (B, 1, T), but got {tuple(waveforms.shape)}")
+        
         z, lengths = self.feature_extractor(waveforms, lengths)
         z = self.feature_proj(z)
         context = self.encoder(z, lengths)

@@ -91,7 +91,7 @@ class Wav2Vec2(nn.Module):
         """Forward pass through Wav2Vec2.
 
         Args:
-            waveforms (Tensor): Raw audio input of shape (B, T).
+            waveforms (Tensor): Raw audio input of shape (B, 1, T).
             lengths (Tensor): Lengths of each audio sample before padding, shape (B,).
 
         Returns:
@@ -101,6 +101,9 @@ class Wav2Vec2(nn.Module):
                 - Codebook probabilities (G, V).
                 - Boolean mask indices indicating masked positions (B, T').
         """
+        if waveforms.dim() != 3 or waveforms.size(1) != 1:
+            raise ValueError(f"Expected input shape (B, 1, T), but got {tuple(waveforms.shape)}")
+        
         hidden_states, lengths = self.feature_extractor(waveforms, lengths)
 
         quantized_features, codevector_probs, _ = self.quantizer(hidden_states, lengths)
