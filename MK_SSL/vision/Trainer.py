@@ -220,7 +220,7 @@ class Trainer:
 
         self.transformation = method_cfg["transformation"](
             image_size=self.image_size, **kwargs
-        )
+        ) if method_cfg["transformation"] else None
 
         # Only define transformation_prime if needed
         if self.method in {"byol", "barlowtwins", "simclr", "simsiam", "mocov3"}:
