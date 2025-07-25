@@ -75,10 +75,12 @@ class Wav2Vec2Loss(nn.Module):
         """Sample negative examples for contrastive loss."""
         negatives = []
         start = 0
+        D = positives.size(-1)
 
         for count in targets_per_batch:
             if count <= 1:
-                negatives.append(positives.new_zeros((count, self.num_distractors, positives.size(-1))))
+
+                negatives.append(positives.new_zeros((count, self.num_distractors, D)))
                 start += count
                 continue
 
@@ -98,7 +100,8 @@ class Wav2Vec2Loss(nn.Module):
             rand_cols = torch.tensor(rand_cols, device=positives.device)
 
             sampled = candidate_indices[rand_rows, rand_cols]
-            negatives.append(positives[sampled])
+            # Reshape to [count, num_distractors, D]
+            negatives.append(positives[sampled].view(count, self.num_distractors, D))
             start += count
 
-        return torch.cat(negatives).view(positives.size(0), self.num_distractors, -1)
+        return torch.cat(negatives, dim=0)  # shape [total_masked, num_distractors, D]
