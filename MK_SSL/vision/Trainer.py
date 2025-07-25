@@ -185,7 +185,7 @@ class Trainer:
             }, 
             "mae": {
                 "variant" : mae_variant,
-                "img_size" : self.img_size
+                "img_size" : self.image_size
             }
         }
 
