@@ -85,7 +85,7 @@ class ConvFeatureExtractor(nn.Module):
         if waveforms.dim() != 3 or waveforms.size(1) != 1:
             raise ValueError(f"Expected input shape (B, 1, T), but got {tuple(waveforms.shape)}")
         
-        x = self.extractor(x)       # (B, C, T')
+        x = self.extractor(waveforms)       # (B, C, T')
 
         if lengths is not None:
             for module in self.extractor:
