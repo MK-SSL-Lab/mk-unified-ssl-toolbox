@@ -55,7 +55,7 @@ class MAEVisionTransformer(nn.Module):
         num_classes=0
     ):
         super().__init__()
-
+        self.variant = variant
         model_config = self._get_config(self.variant)
 
 
