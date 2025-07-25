@@ -100,7 +100,6 @@ class Trainer:
         """
 
 
-
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.propagate = False
 
@@ -123,6 +122,16 @@ class Trainer:
 
         self.save_dir = os.path.join(save_dir, self.method)
         
+        if self.method != 'mae' and self.feature_size is None:
+            self.logger.error(
+                f"`feature_size` must be explicitly provided for the selected method '{self.method}'. "
+                "The feature size should match the output dimension of the chosen backbone encoder."
+            )
+            
+            raise ValueError(
+                f"`feature_size` must be explicitly provided for the selected method '{self.method}'. "
+                "The feature size should match the output dimension of the chosen backbone encoder."
+            )
 
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir)
@@ -172,7 +181,7 @@ class Trainer:
             "barlowtwins": {"hidden_dim": self.feature_size},
             "simsiam": {
                 "projection_hidden_dim": self.feature_size,
-                "prediction_hidden_dim": self.feature_size // 4
+                "prediction_hidden_dim": self.feature_size // 4 
             }, 
             "mae": {
                 "variant" : mae_variant,
