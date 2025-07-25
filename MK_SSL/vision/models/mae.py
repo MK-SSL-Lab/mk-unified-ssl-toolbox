@@ -32,10 +32,10 @@ class MAE(nn.Module):
 
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         self.pos_embed_enc = PositionalEncoding2D(embed_dim, img_size // patch_size)
-
+        self.variant = variant
         if backbone is None:
             backbone = MAEVisionTransformer(
-                variant=variant,
+                variant=self.variant,
                 image_size=img_size,
                 in_chans=in_chans,
                 dropout=encoder_dropout,
