@@ -310,8 +310,8 @@ class Trainer:
         train_loader,
         optimizer,
         epochs,
-        start_epoch=0,
-        use_embedding_logger: bool = False,
+        start_epoch=1,
+        use_embedding_logger: bool = True,
         logger_loader: Optional[DataLoader] = None,
     ):
         """
@@ -378,7 +378,7 @@ class Trainer:
             self.model.train()
 
         # === Training Loop ===
-        for epoch in range(start_epoch, epochs):
+        for epoch in range(start_epoch-1, epochs):
             running_loss = 0.0
             pbar = tqdm(
                 train_loader,
@@ -566,6 +566,7 @@ class Trainer:
         use_hpo: bool = False,
         n_trials: int = 20,
         tuning_epochs: int = 5,
+        use_embedding_logger: Optional[bool] = True,
         **kwargs,
     ):
         """
@@ -674,15 +675,7 @@ class Trainer:
             drop_last=True,
             num_workers=self.num_workers,  # Add num_workers for consistency
         )
-        first_train_batch = next(iter(train_loader))
-        if "audio" not in first_train_batch or "length" not in first_train_batch:
-            self.logger.warning(
-                "[Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
-                "Currently missing: "
-                + ", ".join(
-                    k for k in ["audio", "length"] if k not in first_train_batch
-                )
-            )
+
 
         if self.method == "mae":
             return self._train_mae(
@@ -690,6 +683,7 @@ class Trainer:
                 optimizer=optimizer,
                 epochs=epochs,
                 start_epoch=start_epoch,
+                use_embedding_logger=use_embedding_logger
             )
 
         else:
