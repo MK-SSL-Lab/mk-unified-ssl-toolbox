@@ -4,6 +4,8 @@ import torch.nn as nn
 from MK_SSL.vision.models.modules.mae_blocks import PatchEmbed, MAEEncoder
 from MK_SSL.vision.models.modules.mae_blocks import MAEDecoder
 from MK_SSL.vision.models.modules.pos_embed import PosEmbed2D
+from MK_SSL.vision.models.modules.losses.mae_loss import MAELoss
+from MK_SSL.vision.models.utils.registry import register_method
 
 class MAE(nn.Module):
     """Masked Autoencoder following He et al. (2021)."""
@@ -43,3 +45,27 @@ class MAE(nn.Module):
         x = self.encoder(x)
         pred = self.decoder(x, ids_restore)
         return pred, mask
+
+register_method(
+    name="mae",
+    model_cls=MAE,
+    loss=MAELoss,
+    transformation=None,
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- MAE Configuration ----------------\n"
+        f"Image Size                        : {model.patch_embed.img_size if hasattr(model.patch_embed, 'img_size') else 'N/A'}\n"
+        f"Patch Size                        : {model.patch_embed.patch_size} x {model.patch_embed.patch_size}\n"
+        f"Number of Patches                 : {model.patch_embed.num_patches}\n"
+        f"Input Channels                    : 3\n"
+        f"Encoder Embedding Dimension       : {model.encoder.blocks[0].self_attn.embed_dim if hasattr(model.encoder.blocks[0], 'self_attn') else 'N/A'}\n"
+        f"Encoder Depth                     : {len(model.encoder.blocks)}\n"
+        f"Encoder Heads                     : {model.encoder.blocks[0].self_attn.num_heads if hasattr(model.encoder.blocks[0], 'self_attn') else 'N/A'}\n"
+        f"Decoder Dimension                 : {model.decoder.pred.in_features}\n"
+        f"Decoder Depth                     : {len(model.decoder.blocks)}\n"
+        f"Decoder Attention Heads           : {model.decoder.blocks[0].self_attn.num_heads if hasattr(model.decoder.blocks[0], 'self_attn') else 'N/A'}\n"
+        f"Decoder MLP Ratio                 : {model.decoder.blocks[0].linear1.out_features / model.decoder.blocks[0].linear1.in_features if hasattr(model.decoder.blocks[0], 'linear1') else 'N/A'}\n"
+        f"Mask Ratio                        : {model.mask_ratio}\n"
+        f"Loss                              : Pixel Reconstruction (MAELoss)\n"
+    )
+)
