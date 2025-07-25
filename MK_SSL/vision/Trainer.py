@@ -378,6 +378,7 @@ class Trainer:
 
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     target = patchify(images)
+                    print(f"[DEBUG] Shape before model: {images.shape}")
                     pred, _, ids_restore = self.model(images)
                     B, N, _ = pred.shape
 
