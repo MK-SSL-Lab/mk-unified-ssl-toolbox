@@ -16,7 +16,7 @@ class MAE(nn.Module):
         self,
         backbone: nn.modules =None,
         variant:str = "vit-b",
-        img_size: int =224,
+        image_size: int =224,
         patch_size: int =16,
         in_chans: int =3,
         embed_dim:int =768,
@@ -30,13 +30,18 @@ class MAE(nn.Module):
     ):
         super().__init__()
 
-        self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
-        self.pos_embed_enc = PositionalEncoding2D(embed_dim, img_size // patch_size)
+        self.patch_embed = PatchEmbed(image_size, patch_size, in_chans, embed_dim)
+        self.pos_embed_enc = PositionalEncoding2D(embed_dim, image_size // patch_size)
+        
         self.variant = variant
+        self.image_size = image_size
+        self.encoder_dropout = encoder_dropout
+        self.mask_ratio = mask_ratio
+
         if backbone is None:
             backbone = MAEVisionTransformer(
                 variant=self.variant,
-                image_size=img_size,
+                image_size=image_size,
                 in_chans=in_chans,
                 dropout=encoder_dropout,
                 use_cls_token=False,
@@ -52,12 +57,11 @@ class MAE(nn.Module):
             num_heads=decoder_heads,
             mlp_ratio=mlp_ratio
         )
-        self.decoder.pos_embed = PositionalEncoding2D(decoder_dim, img_size // patch_size).pos_embed
+        self.decoder.pos_embed = PositionalEncoding2D(decoder_dim, image_size // patch_size).pos_embed
 
         self.patchify = Patchify(patch_size)
-        self.unpatchify = Unpatchify(patch_size, img_size)
+        self.unpatchify = Unpatchify(patch_size, image_size)
 
-        self.mask_ratio = mask_ratio
         self.head = nn.Linear(decoder_dim, patch_size * patch_size * in_chans, bias=True)
 
     def random_masking(self, x, mask_ratio):
@@ -103,7 +107,7 @@ register_method(
         "\n"
         "---------------- MAE Configuration ----------------\n"
         f"Vision Transformer Variant        : {model.variant}\n"
-        f"Image Size                        : {model.img_size}\n"
+        f"Image Size                        : {model.image_size}\n"
         f"Patch Size                        : {model.patchify.patch_size} x {model.patchify.patch_size}\n"
         f"Input Channels                    : {model.patch_embed.in_chans}\n"
         f"Encoder Embedding Dimension       : {model.patch_embed.proj.out_channels}\n"

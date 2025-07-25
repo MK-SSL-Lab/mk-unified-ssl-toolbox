@@ -181,7 +181,7 @@ class Trainer:
                 else {}
             ),
             "mae": (
-                {"variant": mae_variant, "img_size": self.image_size}
+                {"variant": mae_variant, "image_size": self.image_size}
                 if self.method == "mae"
                 else {}
             ),
