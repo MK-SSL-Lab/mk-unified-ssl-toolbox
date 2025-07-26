@@ -5,19 +5,23 @@ from typing import List
 
 
 class Wav2Vec2Loss(nn.Module):
-    """Contrastive-plus-diversity loss used for wav2vec 2.0 pre-training.
+    r"""Contrastive‑plus‑diversity loss from *wav2vec 2.0: A Framework for
+    Self‑Supervised Learning of Speech Representations* (Baevski et al., 2020).
 
-    This implements
-        L = L_m + α · L_d             (Eq. 2, Baevski et al., 2020)
+        L = L_m + α · L_d                                      (Eq. 2)
 
     where
-        – L_m is a cross-entropy / NT-Xent contrastive loss (Eq. 3),
-        – L_d is the codebook diversity (entropy) loss (Eq. 4).
+        • L_m – NT‑Xent (cross‑entropy) contrastive loss       (Eq. 3)
+        • L_d – code‑book diversity loss (= –entropy)          (Eq. 4)
 
-    Args:
-        temperature:   κ in the paper (default 0.1).
-        num_distractors: number of negative samples K (default 100).
-        alpha:         weight α for the diversity term (default 0.1).
+    Args
+    ----
+    temperature : float
+        κ in the paper (default 0.1).
+    num_distractors : int
+        Number of negative samples K (default 100).
+    alpha : float
+        Weight α applied to the diversity term (default 0.1).
     """
 
     def __init__(
@@ -32,95 +36,88 @@ class Wav2Vec2Loss(nn.Module):
         self.alpha = alpha
         self.similarity = nn.CosineSimilarity(dim=-1)
 
+
     # Forward
     def forward(
         self,
-        context: Tensor,            # (B, T, D)    – Transformer outputs   (c_t)
-        quantized: Tensor,          # (B, T, D)    – Quantized targets     (q_t)
-        codevector_probs: Tensor,   # (G, V)       – Avg. p_{g,v}
-        time_mask_indices: Tensor,  # (B, T) bool  – Masked positions
+        context: Tensor,            # (B, T, D) – transformer outputs c_t
+        quantized: Tensor,          # (B, T, D) – quantised targets  q_t
+        codevector_probs: Tensor,   # (G, V)    – running mean p̄_{g,v}
+        time_mask_indices: Tensor,  # (B, T) bool – which positions are masked
     ) -> Tensor:
         """Compute total loss L = L_m + α·L_d."""
+        # 1) gather only masked positions (the “positive” pairs)
+        target_ctx   = context[time_mask_indices]          # (M, D)
+        target_quant = quantized[time_mask_indices]        # (M, D)
 
-        # Select only masked positions (positive samples)
-        target_context   = context[time_mask_indices]     # (M, D)
-        target_quantized = quantized[time_mask_indices]   # (M, D)
+        # 2) how many masked positions per sequence? (for same‑utt negatives)
+        per_seq = time_mask_indices.sum(dim=1).tolist()
 
-        # How many masked positions per sequence – used for same-utterance negatives
-        targets_per_seq = [
-            int(time_mask_indices[i].sum()) for i in range(time_mask_indices.size(0))
-        ]
+        # 3) same‑utterance negatives
+        negatives = self._sample_negatives(target_quant, per_seq)  # (M, K, D)
 
-        negatives = self._sample_negatives(target_quantized, targets_per_seq)  # (M, K, D)
+        # 4) losses
+        contrast = self._contrastive_loss(target_ctx, target_quant, negatives)
+        diversity = self._diversity_loss(codevector_probs)
 
-        contrastive_loss = self._contrastive_loss(
-            target_context,                  # c_t
-            target_quantized,                # positive q_t
-            negatives,                       # K negatives
-        )
-        diversity_loss   = self._diversity_loss(codevector_probs)
+        return contrast + self.alpha * diversity
 
-        return contrastive_loss + self.alpha * diversity_loss
 
     # Contrastive loss  L_m
     def _contrastive_loss(
         self,
-        targets:   Tensor,   # (M, D)   – context c_t
-        positives: Tensor,   # (M, D)   – matching q_t
-        negatives: Tensor,   # (M, K, D)
+        targets:   Tensor,          # (M, D) – c_t
+        positives: Tensor,          # (M, D) – matching q_t
+        negatives: Tensor,          # (M, K, D)
     ) -> Tensor:
-        """Contrastive loss – Eq. 3."""
+        """NT‑Xent contrastive loss (Eq. 3)."""
+        T = self.temperature
+
         # Positive similarities
-        pos_sim = torch.exp(self.similarity(targets, positives) / self.temperature)      # (M,)
+        pos_sim = torch.exp(self.similarity(targets, positives) / T)      # (M,)
 
         # Negative similarities (K per example)
         neg_sim = torch.exp(
-            self.similarity(targets.unsqueeze(1), negatives) / self.temperature          # (M, K)
-        ).sum(dim=1)                                                                     # (M,)
+            self.similarity(targets.unsqueeze(1), negatives) / T          # (M, K)
+        ).sum(dim=1)                                                      # (M,)
 
-        total_sim = pos_sim + neg_sim                                                    # denom
-        return -torch.log(pos_sim / total_sim).mean()
+        return -torch.log(pos_sim / (pos_sim + neg_sim)).mean()
+
 
     # Diversity loss  L_d
     def _diversity_loss(self, probs: Tensor) -> Tensor:
-        """Entropy-based diversity loss – Eq. 4."""
-        entropy = -torch.sum(probs * torch.log(probs + 1e-7), dim=-1)  # (G,)
+        """Negative entropy (Eq. 4) → encourages code‑book utilisation."""
+        # NB: *no* leading minus ‑‑ matches the sign in the paper
+        neg_entropy = torch.sum(probs * torch.log(probs + 1e-7), dim=-1)   # (G,) ≤ 0
         G, V = probs.shape
-        return entropy.sum() / (G * V)
+        return neg_entropy.sum() / (G * V)    # value ≤ 0; minimisation ⇒ ↑ entropy
 
-    # Negative sampling (same utterance)
+    # Negative‑sample helper
     def _sample_negatives(
-        self, positives: Tensor, targets_per_seq: List[int]
+        self,
+        positives: Tensor,          # (M, D)
+        targets_per_seq: List[int], # [len(seq₀_masked), len(seq₁_masked), …]
     ) -> Tensor:
-        """Sample K negatives for every masked position from same sequence.
-
-        Args:
-            positives: Flattened (M, D) tensor of positives.
-            targets_per_seq: List with #masked positions for each utterance.
-
-        Returns:
-            Tensor of shape (M, K, D) with negative samples.
-        """
+        """Sample K negatives for each masked position from the *same* utterance."""
         negatives = []
         start = 0
         D = positives.size(-1)
 
         for count in targets_per_seq:
             if count <= 1:
-                # Edge-case: a sequence has ≤1 masked pos → fill zeros
+                # edge‑case: utterance has ≤1 masked position
                 negatives.append(positives.new_zeros((count, self.num_distractors, D)))
                 start += count
                 continue
 
-            # indices for the current utterance in `positives`
-            current_pos = positives[start : start + count]          # (count, D)
+            # masked positions belonging to the current utterance
+            current = positives[start : start + count]                     # (count, D)
 
-            # For each masked position, draw K indices ∈ [0, count-1] (with replacement)
+            # draw K indices ∈ [0, count‑1] with replacement for each position
             idx = torch.randint(
                 0, count, (count, self.num_distractors), device=positives.device
-            )                                                       # (count, K)
-            neg = current_pos[idx]                                  # (count, K, D)
-            negatives.append(neg)
+            )                                                              # (count, K)
+            negatives.append(current[idx])                                 # (count, K, D)
             start += count
 
         return torch.cat(negatives, dim=0)   # (M, K, D)
