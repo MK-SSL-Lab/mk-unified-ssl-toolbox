@@ -104,18 +104,27 @@ class ConvFeatureExtractor(nn.Module):
             lengths = ((lengths - kernel_size) // stride) + 1
         return lengths
 
-class FBANKFeatureExtractor(nn.Module):
-    """
-    Extracts 80-dimensional log Mel filterbank (FBANK) features from raw waveform.
 
-    Includes CMVN (Cepstral Mean and Variance Normalization) per utterance.
+
+class FBANKFeatureExtractor(nn.Module):
+    """Compute 80-dimensional log-Mel FBANK features.
+
+    Accepts raw waveforms shaped ``(B, 1, T)`` or ``(B, T)`` and returns
+    normalized FBANKs shaped ``(B, T', 80)``.
 
     Args:
-        sample_rate (int): Audio sampling rate (default: 16000).
-        n_mels (int): Number of Mel filterbanks (default: 80).
-        cmvn_eps (float): Epsilon for CMVN stability.
+        sample_rate (int, optional): Audio sample rate. Defaults to ``16000``.
+        n_mels (int, optional): Number of Mel filterbanks. Defaults to ``80``.
+        cmvn_eps (float, optional): Numerical stability term for CMVN.
+            Defaults to ``1e-5``.
     """
-    def __init__(self, sample_rate: int = 16000, n_mels: int = 80, cmvn_eps: float = 1e-5):
+
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        n_mels: int = 80,
+        cmvn_eps: float = 1e-5,
+    ):
         super().__init__()
         self.fbank = T.MelSpectrogram(
             sample_rate=sample_rate,
@@ -130,24 +139,33 @@ class FBANKFeatureExtractor(nn.Module):
         self.cmvn_eps = cmvn_eps
 
     def forward(self, waveforms: torch.Tensor) -> torch.Tensor:
-        """
+        """Extract log-Mel FBANKs.
+
         Args:
-            waveforms (torch.Tensor): Tensor of shape (B, T).
+            waveforms (torch.Tensor):
+                Raw audio of shape ``(B, 1, T)`` or ``(B, T)``.
 
         Returns:
-            torch.Tensor: FBANK features of shape (B, T', 80).
+            torch.Tensor: Normalized FBANK features of shape ``(B, T', 80)``.
         """
-        with torch.no_grad():
-            feats = self.fbank(waveforms)              # (B, 80, T')
-            feats = self.log(feats)                    # log scale
-            feats = feats.transpose(1, 2)              # -> (B, T', 80)
+        if waveforms.dim() == 3 and waveforms.size(1) == 1:
+            waveforms = waveforms.squeeze(1)
+        elif waveforms.dim() != 2:
+            raise ValueError(
+                f"Expected (B, 1, T) or (B, T); got {tuple(waveforms.shape)}"
+            )
 
-            # Apply CMVN per sample
+        with torch.no_grad():
+            feats = self.fbank(waveforms)      # (B, 80, T')
+            feats = self.log(feats)
+            feats = feats.transpose(1, 2)      # (B, T', 80)
+
             mean = feats.mean(dim=1, keepdim=True)
             std = feats.std(dim=1, keepdim=True) + self.cmvn_eps
             feats = (feats - mean) / std
 
         return feats
+
 
 
 class MFCCFeatureExtractor(nn.Module):
