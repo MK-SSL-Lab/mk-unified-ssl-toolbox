@@ -415,13 +415,15 @@ class Trainer:
 
             epoch_loss = running_loss / len(train_loader)
 
+            epoch_step = (epoch + 1) * len(train_loader)        
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
                     {
                         f"{self.method.upper()}/Train/Epoch_Loss": epoch_loss,
                         f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
+                        "epoch": epoch + 1,  
                     },
-                    step=epoch + 1,
+                    step=epoch_step,
                 )
 
             # === Embedding logger eval on external labeled image dataset ===
@@ -718,6 +720,8 @@ class Trainer:
                     if self._optuna_trial.should_prune():
                         raise optuna.TrialPruned()
 
+                epoch_step = (epoch + 1) * len(train_loader)        
+
                 # Log epoch-level metrics to W&B
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log(
@@ -727,8 +731,9 @@ class Trainer:
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[
                                 0
                             ]["lr"],
+                            "epoch": epoch + 1,  
                         },
-                        step=epoch + 1,
+                        step=epoch_step
                     )  # Use epoch + 1 for 1-indexed epoch step
 
                 if (epoch + 1) % self.checkpoint_interval == 0:
