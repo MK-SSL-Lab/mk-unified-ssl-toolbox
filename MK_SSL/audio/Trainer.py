@@ -332,7 +332,7 @@ class Trainer:
             self.logger.info(f"[Wav2Vec2 - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
 
             if self.wandb_logger.is_active:
-                self.wandb_logger.log({"train/epoch_loss": avg_loss}, step=epoch + 1)
+                self.wandb_logger.log({"train/epoch_loss": avg_loss}, step=epoch + 1,)
 
             # === Log embeddings during training ===
             if use_embedding_logger:
@@ -716,7 +716,7 @@ class Trainer:
             self.logger.info(f"[COLA - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
 
             if self.wandb_logger.is_active:
-                self.wandb_logger.log({"train/epoch_loss": avg_loss}, step=epoch + 1)
+                self.wandb_logger.log({"train/epoch_loss": avg_loss}, step=epoch + 1, commit=False)
 
             # === Embedding logger ===
             if use_embedding_logger:
@@ -818,7 +818,8 @@ class Trainer:
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
                     {"val/loss": avg_val_loss},
-                    step=epoch + 1
+                    step=epoch + 1,
+                    commit=False
                 )
         self.model.train()
         return avg_val_loss

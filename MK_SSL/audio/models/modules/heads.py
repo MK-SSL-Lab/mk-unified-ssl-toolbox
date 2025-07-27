@@ -35,21 +35,24 @@ class ProjectionHead(nn.Module):
         return self.layers(x)
 
 
+import torch.nn as nn
+from typing import List, Tuple, Optional
+
+
 class COLAProjectionHead(ProjectionHead):
     """
-    Description:
-        Initialize a new COLAProjectionHead instance.
-        Implements the projection head used in the COLA paper, consisting of
-        one or more linear layers with optional LayerNorm and non-linearity.
-        
-        LayerNorm is preferred over BatchNorm for stability in audio.
+    Projection head for COLA (Contrastive Learning of Audio).
+
+    * If ``num_layers == 1``  ➜  Linear → LayerNorm → **tanh**
+    * If ``num_layers  >  1`` ➜  (Linear → LayerNorm → ReLU)×(num_layers‑1)
+                               →  Linear → LayerNorm → **tanh**
 
     Args:
-        input_dim (int): Number of input dimensions (typically 1280 from EfficientNet-B0).
-        hidden_dim (int): Number of hidden dimensions (typically same as input_dim).
-        output_dim (int): Output dimension of the projection space (e.g., 512).
-        num_layers (int): Number of linear layers (1 for minimal COLA-style head).
-        batch_norm (bool): Whether to use LayerNorm after each linear layer.
+        input_dim (int):  Input feature dimension (e.g. 1280).
+        hidden_dim (int): Hidden layer dimension (only used when num_layers > 1).
+        output_dim (int): Output projection dimension (e.g. 512).
+        num_layers (int): Number of linear layers.
+        batch_norm (bool): Use LayerNorm after each linear layer.
     """
 
     def __init__(
@@ -64,17 +67,17 @@ class COLAProjectionHead(ProjectionHead):
         layers: List[Tuple[int, int, Optional[nn.Module], Optional[nn.Module]]] = []
 
         if num_layers == 1:
-            # Simple linear projection with optional norm
+            # Linear → (LayerNorm) → tanh
             layers.append(
                 (
                     input_dim,
                     output_dim,
                     nn.LayerNorm(output_dim) if batch_norm else None,
-                    None,
+                    nn.Tanh(),
                 )
             )
         else:
-            # First hidden layer
+            # (Linear → (LayerNorm) → ReLU) repeated
             layers.append(
                 (
                     input_dim,
@@ -83,7 +86,6 @@ class COLAProjectionHead(ProjectionHead):
                     nn.ReLU(inplace=True),
                 )
             )
-            # Intermediate hidden layers
             for _ in range(2, num_layers):
                 layers.append(
                     (
@@ -93,17 +95,18 @@ class COLAProjectionHead(ProjectionHead):
                         nn.ReLU(inplace=True),
                     )
                 )
-            # Final projection layer
+            # Final Linear → (LayerNorm) → tanh
             layers.append(
                 (
                     hidden_dim,
                     output_dim,
                     nn.LayerNorm(output_dim) if batch_norm else None,
-                    None,
+                    nn.Tanh(),
                 )
             )
 
         super().__init__(layers)
+
 
 
 class InputSpeechSimCLRProjectionHead(ProjectionHead):
