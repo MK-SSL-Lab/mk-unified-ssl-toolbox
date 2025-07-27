@@ -1027,11 +1027,13 @@ class Trainer:
                     # self.writer.flush() # Commented out
 
                     # Log epoch-level metrics to W&B
+                    epoch_step = (epoch + 1) * len(train_loader)        
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
                             f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
-                        }, step=epoch + 1)
+                            "epoch": epoch + 1
+                        }, step=epoch_step)
 
                     if hasattr(self, "_optuna_trial"):
                         self._optuna_trial.report(loss_per_epoch, epoch)
@@ -1080,11 +1082,13 @@ class Trainer:
                     # self.writer.flush() # Commented out
 
                     # Log epoch-level metrics to W&B
+                    epoch_step = (epoch + 1) * len(train_loader)        
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
                             f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
-                        }, step=epoch + 1)
+                            "epoch": epoch + 1
+                        }, step=epoch_step)
 
                     if hasattr(self, "_optuna_trial"):
                         self._optuna_trial.report(loss_per_epoch, epoch)
@@ -1132,11 +1136,13 @@ class Trainer:
                     # self.writer.flush() # Commented out
 
                     # Log epoch-level metrics to W&B
+                    epoch_step = (epoch + 1) * len(train_loader)        
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
                             f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
-                        }, step=epoch + 1)
+                            "epoch": epoch + 1
+                        }, step=epoch_step)
 
                     if hasattr(self, "_optuna_trial"):
                         self._optuna_trial.report(loss_per_epoch, epoch)
@@ -1183,11 +1189,13 @@ class Trainer:
                     # self.writer.flush() # Commented out
 
                     # Log epoch-level metrics to W&B
+                    epoch_step = (epoch + 1) * len(train_loader)
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
                             f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
-                        }, step=epoch + 1)
+                            "epoch": epoch + 1
+                        }, step=epoch_step)
 
                     if hasattr(self, "_optuna_trial"):
                         self._optuna_trial.report(loss_per_epoch, epoch)
@@ -1229,11 +1237,13 @@ class Trainer:
                     # self.writer.flush() # Commented out
 
                     # Log epoch-level metrics to W&B
+                    epoch_step = (epoch + 1) * len(train_loader)
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
                             f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
-                        }, step=epoch + 1)
+                            "epoch": epoch + 1
+                        }, step=epoch_step)
 
                     if hasattr(self, "_optuna_trial"):
                         self._optuna_trial.report(loss_per_epoch, epoch)
@@ -1275,13 +1285,15 @@ class Trainer:
                     # self.writer.flush() # Commented out
 
                     # Log epoch-level metrics to W&B
+                    epoch_step = (epoch + 1) * len(train_loader)
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
                             f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/AvgNumNegatives": np.mean(self._train_vse_last_num_negs), # Assuming a way to pass this
                             # Note: For _train_vse, `num_negs` is reset per epoch, so this average is for the current epoch's num_negs.
                             # If you need a global average, you'd need to accumulate it.
-                        }, step=epoch + 1)
+                            "epoch": epoch + 1,
+                        }, step=epoch_step)
 
                     if hasattr(self, "_optuna_trial"):
                         self._optuna_trial.report(loss_per_epoch, epoch)
@@ -1316,11 +1328,13 @@ class Trainer:
                         loss_per_epoch = self._train_clap(tepoch, optimizer, epoch, total_batches_per_epoch, use_embedding_logger=use_embedding_logger, logger_loader=logger_loader) # Pass epoch_idx, total_batches_per_epoch
 
                     # Log epoch-level metrics to W&B
+                    epoch_step = (epoch + 1) * len(train_loader)
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
                             f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
-                        }, step=epoch + 1)
+                            "epoch": epoch + 1
+                        }, step=epoch_step)
 
                     if hasattr(self, "_optuna_trial"):
                         self._optuna_trial.report(loss_per_epoch, epoch)
@@ -1355,11 +1369,13 @@ class Trainer:
                         loss_per_epoch = self._train_audio_clip(tepoch, optimizer, epoch, total_batches_per_epoch, use_embedding_logger=use_embedding_logger, logger_loader=logger_loader) # Pass epoch_idx, total_batches_per_epoch
 
                     # Log epoch-level metrics to W&B
+                    epoch_step = (epoch + 1) * len(train_loader)
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
                             f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
-                        }, step=epoch + 1)
+                            "epoch": epoch + 1
+                        }, step=epoch_step)
 
                     if hasattr(self, "_optuna_trial"):
                         self._optuna_trial.report(loss_per_epoch, epoch)
@@ -1394,11 +1410,14 @@ class Trainer:
                             tepoch, optimizer, epoch, total_batches_per_epoch, use_embedding_logger=use_embedding_logger, logger_loader=logger_loader
                         )
 
+                    epoch_step = (epoch + 1) * len(train_loader)
+
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log({
                             f"{self.method.upper()}/Train/epoch_loss": loss_per_epoch / len(train_loader),
                             f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
-                        }, step=epoch + 1)
+                            "epoch": epoch + 1
+                        }, step=epoch_step)
 
                     if hasattr(self, "_optuna_trial"):
                         self._optuna_trial.report(loss_per_epoch, epoch)

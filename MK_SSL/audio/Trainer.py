@@ -330,9 +330,10 @@ class Trainer:
 
             avg_loss = running_loss / len(train_loader)
             self.logger.info(f"[Wav2Vec2 - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
-
+            
+            epoch_step = (epoch + 1) * len(train_loader)        
             if self.wandb_logger.is_active:
-                self.wandb_logger.log({"train/epoch_loss": avg_loss}, step=epoch + 1,)
+                self.wandb_logger.log({"train/epoch_loss": avg_loss, "epoch": epoch + 1}, step=epoch_step,)
 
             # === Log embeddings during training ===
             if use_embedding_logger:
@@ -359,7 +360,7 @@ class Trainer:
                 self.model.train()
 
             if val_loader:
-                avg_val_loss = self._validate_wav2vec2(val_loader, epoch)
+                avg_val_loss = self._validate_wav2vec2(val_loader, epoch, epoch_step)
 
             if hasattr(self, "_optuna_trial"):
                 metric = avg_val_loss if val_loader else avg_loss
@@ -409,7 +410,7 @@ class Trainer:
         self.logger.info("Wav2Vec2 training complete.")
 
 
-    def _validate_wav2vec2(self, val_loader: DataLoader, epoch: int) -> float:
+    def _validate_wav2vec2(self, val_loader: DataLoader, epoch: int, epoch_step) -> float:
         """Perform validation for the Wav2Vec2 model.
 
         Args:
@@ -445,7 +446,7 @@ class Trainer:
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
                     {"val/loss": avg_val_loss},
-                    step=epoch + 1  # Use epoch number as step for epoch-level metrics
+                    step=epoch_step  # Use epoch number as step for epoch-level metrics
                 )
         self.model.train()
         return avg_val_loss
@@ -531,8 +532,11 @@ class Trainer:
             avg_loss = running_loss / len(train_loader)
             self.logger.info(f"[SimCLR - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
 
+
+            epoch_step = (epoch + 1) * len(train_loader)        
+    
             if self.wandb_logger.is_active:
-                self.wandb_logger.log({"train/epoch_loss": avg_loss}, step=epoch + 1)
+                self.wandb_logger.log({"train/epoch_loss": avg_loss, "epoch": epoch + 1}, step=epoch_step)
 
             # === Embedding logger ===
             if use_embedding_logger:
@@ -557,7 +561,7 @@ class Trainer:
                 self.model.train()
 
             if val_loader:
-                avg_val_loss = self._validate_simclr(val_loader, epoch)
+                avg_val_loss = self._validate_simclr(val_loader, epoch, epoch_step)
 
             if hasattr(self, "_optuna_trial"):
                 metric = avg_val_loss if val_loader else avg_loss
@@ -609,7 +613,7 @@ class Trainer:
         self.logger.info("SimCLR training complete.")
 
 
-    def _validate_simclr(self, val_loader: DataLoader, epoch: int):
+    def _validate_simclr(self, val_loader: DataLoader, epoch: int, epoch_step):
 
         self.model.eval()
         val_running_loss = 0.0
@@ -630,7 +634,7 @@ class Trainer:
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
                     {"val/loss": avg_val_loss},
-                    step=epoch + 1
+                    step=epoch_step
                 )
         self.model.train()
         return avg_val_loss
@@ -714,9 +718,10 @@ class Trainer:
 
             avg_loss = running_loss / len(train_loader)
             self.logger.info(f"[COLA - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
-
+            
+            epoch_step = (epoch + 1) * len(train_loader)        
             if self.wandb_logger.is_active:
-                self.wandb_logger.log({"train/epoch_loss": avg_loss}, step=epoch + 1, commit=False)
+                self.wandb_logger.log({"train/epoch_loss": avg_loss, "epoch": epoch + 1}, step=epoch_step)
 
             # === Embedding logger ===
             if use_embedding_logger:
@@ -741,7 +746,7 @@ class Trainer:
 
             # === Validation ===
             if val_loader:
-                avg_val_loss = self._validate_cola(val_loader, epoch)
+                avg_val_loss = self._validate_cola(val_loader, epoch, epoch_step)
 
             if hasattr(self, "_optuna_trial"):
                 metric = avg_val_loss if val_loader else avg_loss
@@ -797,7 +802,7 @@ class Trainer:
         self.logger.info("COLA training complete.")
 
 
-    def _validate_cola(self, val_loader: DataLoader, epoch: int):
+    def _validate_cola(self, val_loader: DataLoader, epoch: int, epoch_step):
 
         self.model.eval()
         val_running_loss = 0.0
@@ -818,8 +823,7 @@ class Trainer:
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
                     {"val/loss": avg_val_loss},
-                    step=epoch + 1,
-                    commit=False
+                    step=epoch_step
                 )
         self.model.train()
         return avg_val_loss
@@ -982,13 +986,15 @@ class Trainer:
                 avg_loss = running_loss / max(1, len(train_loader_for_training))
                 self.logger.info(f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
 
+                epoch_step = (epoch + 1) * len(train_loader_for_training)        
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log(
                         {
                             "train/epoch_loss": avg_loss,
                             f"train/iter_{iteration+1}_epoch_loss": avg_loss,
+                            "epoch": epoch + 1
                         },
-                        step=epoch + 1
+                        step=epoch_step
                     )
 
                 # === Embedding logger per epoch ===
@@ -1030,7 +1036,7 @@ class Trainer:
                         )
 
                 if val_loader:
-                    avg_val_loss = self._validate_hubert(val_loader, iteration, epoch)
+                    avg_val_loss = self._validate_hubert(val_loader, iteration, epoch, epoch_step)
 
                 if hasattr(self, "_optuna_trial"):
                     metric = avg_val_loss if val_loader else avg_loss
@@ -1072,7 +1078,7 @@ class Trainer:
 
 
     def _validate_hubert(
-        self, val_loader: DataLoader, iteration: int, epoch: int
+        self, val_loader: DataLoader, iteration: int, epoch: int, epoch_step
     ) -> None:
 
         self.model.eval()
@@ -1101,7 +1107,7 @@ class Trainer:
                 self.wandb_logger.log(
                     {"val/loss": avg_val_loss,
                      f"val/iter_{iteration+1}_loss": avg_val_loss},
-                    step=epoch + 1
+                    step=epoch_step
                 )
         self.model.train()
         return avg_val_loss
