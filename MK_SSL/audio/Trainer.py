@@ -605,7 +605,7 @@ class Trainer:
             if self.wandb_logger.is_active:
                 import wandb
                 self.wandb_logger.log(
-                    {"embedding_animation": wandb.Html(animation_path)},
+                    {"media/embedding_animation": wandb.Html(animation_path)},
                     step=max(embedding_logger.steps) if embedding_logger.steps else epochs
                 )
                 self.logger.info("Embedding animation logged to Weights & Biases.")
@@ -794,7 +794,7 @@ class Trainer:
             if self.wandb_logger.is_active:
                 import wandb
                 self.wandb_logger.log(
-                    {"embedding_animation": wandb.Html(animation_path)},
+                    {"media/embedding_animation": wandb.Html(animation_path)},
                     step=max(embedding_logger.steps) if embedding_logger.steps else epochs
                 )
                 self.logger.info("Embedding animation logged to Weights & Biases.")
@@ -1069,7 +1069,7 @@ class Trainer:
                 if self.wandb_logger.is_active:
                     import wandb
                     self.wandb_logger.log(
-                        {f"embedding_animation/iter_{iteration+1}": wandb.Html(animation_path)},
+                        {f"media/embedding_animation/iter_{iteration+1}": wandb.Html(animation_path)},
                         step=max(embedding_logger.steps) if embedding_logger.steps else epochs
                     )
                     self.logger.info("Embedding animation logged to Weights & Biases.")
