@@ -77,12 +77,12 @@ class HuBERTWrapperDataset(Dataset):
         if not torch.is_tensor(audio_tensor):
             raise TypeError(f"Expected 'audio' to be a torch.Tensor but got {type(audio_tensor)}.")
 
-        if audio_tensor.ndim > 1:
-            self.logger.warning(f"Audio tensor for index {idx} has {audio_tensor.ndim} dims. Squeezing.")
-            audio_tensor = audio_tensor.squeeze()
+        # if audio_tensor.ndim > 1:
+        #     self.logger.warning(f"Audio tensor for index {idx} has {audio_tensor.ndim} dims. Squeezing.")
+        #     audio_tensor = audio_tensor.squeeze()
 
-        if audio_tensor.ndim != 1:
-            raise ValueError(f"Audio tensor for index {idx} is not 1D after squeezing: {audio_tensor.shape}.")
+        # if audio_tensor.ndim != 1:
+        #     raise ValueError(f"Audio tensor for index {idx} is not 1D after squeezing: {audio_tensor.shape}.")
 
         sample_dict = {"audio": audio_tensor, "length": length, "original_idx": idx}
 

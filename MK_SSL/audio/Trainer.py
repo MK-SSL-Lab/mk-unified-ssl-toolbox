@@ -1283,14 +1283,6 @@ class Trainer:
                 logger=self.logger
             )
 
-            train_loader_for_pseudo_label_gen = DataLoader(
-                wrapped_train_dataset,
-                batch_size=batch_size,
-                shuffle=False,
-                num_workers=self.num_workers,
-                pin_memory=True,
-                collate_fn=self._data_loader_safe_collate,
-            )
             
 
             train_loader_for_training = DataLoader(
@@ -1299,8 +1291,6 @@ class Trainer:
                 shuffle=True,
                 num_workers=self.num_workers,
                 pin_memory=True,
-                collate_fn=self._data_loader_safe_collate,
-
             )
 
             val_loader = None
@@ -1317,7 +1307,6 @@ class Trainer:
 
             self._train_hubert(
                 train_loader_for_training=train_loader_for_training,
-                train_loader_full_dataset=train_loader_for_pseudo_label_gen,
                 optimizer=optimizer,
                 epochs=epochs,
                 start_epoch=start_epoch,
