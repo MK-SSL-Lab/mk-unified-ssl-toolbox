@@ -85,6 +85,8 @@ class HuBERTWrapperDataset(Dataset):
         #     raise ValueError(f"Audio tensor for index {idx} is not 1D after squeezing: {audio_tensor.shape}.")
 
         sample_dict = {"audio": audio_tensor, "length": length, "original_idx": idx}
+        
+        padded_len = audio_tensor.shape[1]
 
         if self.pseudo_labels_dict:
             pseudo_label = self.pseudo_labels_dict.get(idx)
@@ -92,7 +94,7 @@ class HuBERTWrapperDataset(Dataset):
                 self.logger.error(f"Pseudo-labels for index {idx} not found.")
                 raise KeyError(f"Pseudo-labels for index {idx} not found.")
 
-            pseudo_label = self._align_pseudo_labels(pseudo_label, audio_len=length)
+            pseudo_label = self._align_pseudo_labels(pseudo_label, audio_len=padded_len)
             sample_dict["pseudo_labels"] = torch.from_numpy(pseudo_label).long()
 
         return sample_dict
