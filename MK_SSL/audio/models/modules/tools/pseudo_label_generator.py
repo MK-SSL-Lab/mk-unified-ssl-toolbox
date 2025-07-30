@@ -120,9 +120,10 @@ class PseudoLabelGenerator:
                     continue
 
                 seen_indices.add(idx)
-                all_features_flattened.append(sample_feats.reshape(-1, sample_feats.shape[-1]))
+                flat_feats   = sample_feats.reshape(-1, sample_feats.shape[-1])  # always 2‑D
+                all_features_flattened.append(flat_feats)
                 all_indices.append(idx)
-                idx_to_labels[idx] = sample_feats
+                idx_to_labels[idx] = flat_feats
 
         # === K-means Fitting ===
         flat_features_for_kmeans = np.concatenate(all_features_flattened, axis=0)
