@@ -81,17 +81,14 @@ class EAT(nn.Module):
 
         total_loss = 0.0
         for _ in range(self.num_clones):
-            mask = InverseBlockMasking((T, F), self.mask_ratio, self.block_size)().view(T * F)
+            mask = InverseBlockMasking((T, F), self.mask_ratio, self.block_size)().view(-1)
             visible_mask = mask
             masked_mask = ~mask
 
-            x_vis = []
-            for i in range(B):
-                x_vis.append(x[i][visible_mask])
-            x_vis = torch.stack(x_vis)
+            x_vis = x[:, visible_mask, :]  # (B, P_vis, E)
+            cls = self.cls_token.expand(B, -1, -1)  # (B, 1, E)
+            student_input = torch.cat([cls, x_vis], dim=1)  # (B, 1 + P_vis, E)
 
-            cls = self.cls_token.expand(B, -1, -1)
-            student_input = torch.cat([cls, x_vis], dim=1)
             student_out = self.student_encoder(student_input)
             student_cls = student_out[:, 0]
             student_tokens = student_out[:, 1:]
@@ -101,10 +98,8 @@ class EAT(nn.Module):
             student_2d = student_tokens.view(B, h, w, E).permute(0, 3, 1, 2)
             decoded = self.decoder(student_2d)
 
-            tgt_masked = []
-            for i in range(B):
-                tgt_masked.append(teacher_avg[i][masked_mask])
-            tgt_masked = torch.stack(tgt_masked).view_as(decoded)
+            tgt_masked = teacher_avg[:, masked_mask, :]  # (B, P_masked, E)
+            tgt_masked = tgt_masked.view_as(decoded)
 
             loss = self.loss_fn(decoded, tgt_masked, student_cls, teacher_avg)
             total_loss += loss
