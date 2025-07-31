@@ -2,15 +2,16 @@ import torch
 import torch.nn as nn
 from typing import Optional, Tuple
 
-from MK_SSL.audio.models.utils.registry import register_method
+
 from MK_SSL.audio.models.modules.losses.ufo_loss import UFO
 from MK_SSL.audio.models.modules.transformations.base_masking import InverseBlockMasking
 from MK_SSL.audio.models.modules.backbones import ViTAudioEncoder
 from MK_SSL.audio.models.modules.decoders import CNNAudioDecoder
 from MK_SSL.audio.models.modules.feature_extractors import SpectrogramPatchEmbedder
 
+from MK_SSL.audio.models.utils.registry import register_methods
 
-@register_method("eat")
+
 class EAT(nn.Module):
     """
     EAT: Efficient Audio Transformer
@@ -104,3 +105,21 @@ class EAT(nn.Module):
             total_loss += loss
 
         return total_loss / self.num_clones
+
+
+register_method(
+    name= "eat",
+    model_cls= EAT,
+    loss= UFO,
+    transformation= COLAAudioTransform,
+    default_params={},
+    logs=lambda model, loss: (
+        "\n"
+        "---------------- COLA Configuration ----------------\n"
+        f"Input Type                       : Log-mel spectrograms (B, 1, F, T)\n"
+        f"Backbone Architecture            : {model.backbone.__class__.__name__}\n"
+        "Loss                             : InfoNCE Loss\n"
+        "Augmentation                     : COLAAudioTransform"
+
+    )
+)
