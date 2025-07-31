@@ -7,6 +7,7 @@ from MK_SSL.audio.models.modules.losses.ufo_loss import UFO
 from MK_SSL.audio.models.modules.transformations.base_masking import InverseBlockMasking
 from MK_SSL.audio.models.modules.backbones import ViTAudioEncoder
 from MK_SSL.audio.models.modules.decoders import CNNAudioDecoder
+from MK_SSL.audio.models.modules.feature_extractors import SpectrogramPatchEmbedder
 
 
 @register_method("eat")
@@ -41,6 +42,7 @@ class EAT(nn.Module):
         self.ema_tau = ema_tau
         self.num_clones = num_clones
 
+        self.feature_extractor = SpectrogramPatchEmbedder(embed_dim=embed_dim)
         self.student_encoder = ViTAudioEncoder(embed_dim=embed_dim, output_all_layers=False)
         self.teacher_encoder = ViTAudioEncoder(embed_dim=embed_dim, output_all_layers=True)
         self.decoder = CNNAudioDecoder(input_dim=embed_dim)
@@ -64,14 +66,6 @@ class EAT(nn.Module):
         x: torch.Tensor,
         patch_grid: Tuple[int, int],
     ) -> torch.Tensor:
-        """
-        Args:
-            x (torch.Tensor): Patchified spectrogram input of shape (B, P, E).
-            patch_grid (Tuple[int, int]): Grid size (T, F) of patches.
-
-        Returns:
-            torch.Tensor: UFO loss (averaged over clones).
-        """
         B, P, E = x.shape
         T, F = patch_grid
 
@@ -81,14 +75,17 @@ class EAT(nn.Module):
 
         total_loss = 0.0
         for _ in range(self.num_clones):
-            mask = InverseBlockMasking((T, F), self.mask_ratio, self.block_size)().view(-1)
+            mask = InverseBlockMasking((T, F), self.mask_ratio, self.block_size)().view(T * F)
             visible_mask = mask
             masked_mask = ~mask
 
-            x_vis = x[:, visible_mask, :]  # (B, P_vis, E)
-            cls = self.cls_token.expand(B, -1, -1)  # (B, 1, E)
-            student_input = torch.cat([cls, x_vis], dim=1)  # (B, 1 + P_vis, E)
+            x_vis = []
+            for i in range(B):
+                x_vis.append(x[i][visible_mask])
+            x_vis = torch.stack(x_vis)
 
+            cls = self.cls_token.expand(B, -1, -1)
+            student_input = torch.cat([cls, x_vis], dim=1)
             student_out = self.student_encoder(student_input)
             student_cls = student_out[:, 0]
             student_tokens = student_out[:, 1:]
@@ -98,8 +95,10 @@ class EAT(nn.Module):
             student_2d = student_tokens.view(B, h, w, E).permute(0, 3, 1, 2)
             decoded = self.decoder(student_2d)
 
-            tgt_masked = teacher_avg[:, masked_mask, :]  # (B, P_masked, E)
-            tgt_masked = tgt_masked.view_as(decoded)
+            tgt_masked = []
+            for i in range(B):
+                tgt_masked.append(teacher_avg[i][masked_mask])
+            tgt_masked = torch.stack(tgt_masked).view_as(decoded)
 
             loss = self.loss_fn(decoded, tgt_masked, student_cls, teacher_avg)
             total_loss += loss
