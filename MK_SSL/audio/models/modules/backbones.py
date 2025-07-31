@@ -270,3 +270,63 @@ class EfficientNetAudioEncoder(nn.Module):
         feats = self.encoder(mel)                # (B, C, H, W)
         pooled = self.pool(feats).flatten(1)     # (B, C)
         return pooled
+    
+
+
+class ViTAudioEncoder(nn.Module):
+    """
+    ViT-style Transformer encoder for audio spectrograms.
+
+    This encoder maps audio patch embeddings to contextual representations using
+    stacked Transformer layers. It supports optional output of all hidden states
+    for teacher-student distillation.
+
+    Args:
+        embed_dim (int): Dimension of the input patch embeddings.
+        num_layers (int): Number of Transformer encoder layers.
+        num_heads (int): Number of attention heads.
+        mlp_ratio (float): Expansion factor for MLP hidden dimension.
+        dropout (float): Dropout rate.
+        output_all_layers (bool): Whether to return outputs from all layers.
+    """
+
+    def __init__(
+        self,
+        embed_dim: int = 768,
+        num_layers: int = 12,
+        num_heads: int = 12,
+        mlp_ratio: float = 4.0,
+        dropout: float = 0.0,
+        output_all_layers: bool = False,
+    ):
+        super().__init__()
+        self.output_all_layers = output_all_layers
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim,
+            nhead=num_heads,
+            dim_feedforward=int(embed_dim * mlp_ratio),
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x (torch.Tensor): Input of shape (B, P, E), where P is number of patches.
+
+        Returns:
+            torch.Tensor: If output_all_layers=False, output from final layer (B, P, E).
+                          If output_all_layers=True, list of outputs from all layers.
+        """
+        if self.output_all_layers:
+            out_all = []
+            for mod in self.encoder.layers:
+                x = mod(x)
+                out_all.append(x)
+            return out_all
+        return self.encoder(x)
