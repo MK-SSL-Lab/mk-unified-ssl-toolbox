@@ -836,9 +836,7 @@ class Trainer:
         epochs: int,
         start_epoch: int = 0,
         start_iteration: int = 0,
-        val_loader: Optional[DataLoader] = None,
         num_hubert_iterations: int = 5,
-        pseudo_label_sample_ratio: float = 0.1,  # Kept in signature but no longer used
         logger_loader: Optional[DataLoader] = None,
         use_embedding_logger: bool = False,
         **kwargs,
@@ -848,7 +846,7 @@ class Trainer:
             "transformer_layer", getattr(self.model, "extractor_layer", None)
         )
         if transformer_layer is None:
-            self.logger.warning("No 'transformer_layer' specified for HuBERT.")
+            self.logger.warning("⚠️  No 'transformer_layer' specified for HuBERT.")
 
         # === Initialize embedding logger and log initial embeddings ===
         if use_embedding_logger:
@@ -919,12 +917,12 @@ class Trainer:
             missing = all_dataset_indices - all_pseudo_indices
             
             if extra:
-                self.logger.warning(f"Removing {len(extra)} extra pseudo-labels: {sorted(list(extra))[:10]}...")
+                self.logger.warning(f"⚠️  Removing {len(extra)} extra pseudo-labels: {sorted(list(extra))[:10]}...")
                 for idx in extra:
                     pseudo_labels_dict.pop(idx, None)
 
             if missing:
-                self.logger.warning(f"Filling {len(missing)} missing pseudo-labels with zeros: {sorted(list(missing))[:10]}...")
+                self.logger.warning(f"⚠️  Filling {len(missing)} missing pseudo-labels with zeros: {sorted(list(missing))[:10]}...")
                 for idx in missing:
                     pseudo_labels_dict[idx] = np.zeros(self.model.num_clusters, dtype=np.int64)
 
@@ -954,7 +952,7 @@ class Trainer:
                         # === NaN loss guard ===
                         if mask_indices.sum() == 0:
                             self.logger.warning(
-                                f"[Iteration {iteration+1}, Epoch {epoch+1}, Batch {batch_idx}] No masked positions. Skipping."
+                                f"⚠️  [Iteration {iteration+1}, Epoch {epoch+1}, Batch {batch_idx}] No masked positions. Skipping."
                             )
                             continue
 
@@ -1035,11 +1033,9 @@ class Trainer:
                             metadata={"iteration": iteration+1, "epoch": epoch+1, "loss": avg_loss}
                         )
 
-                if val_loader:
-                    avg_val_loss = self._validate_hubert(val_loader, iteration, epoch, epoch_step)
 
                 if hasattr(self, "_optuna_trial"):
-                    metric = avg_val_loss if val_loader else avg_loss
+                    metric = avg_loss
                     self._optuna_trial.report(metric, epoch)
                     if self._optuna_trial.should_prune():
                         raise optuna.TrialPruned()
@@ -1077,40 +1073,6 @@ class Trainer:
         self.logger.info("HuBERT training complete across all specified iterations.")
 
 
-    def _validate_hubert(
-        self, val_loader: DataLoader, iteration: int, epoch: int, epoch_step
-    ) -> None:
-
-        self.model.eval()
-        val_running_loss = 0.0
-        with torch.no_grad():
-            pbar = tqdm(
-                val_loader,
-                desc=f"Validation HuBERT Iter {iteration+1}, Epoch {epoch+1}",
-            )
-            for batch in pbar:
-                audio = batch['audio'].to(self.device)
-                pseudo_labels = batch["pseudo_labels"].to(self.device)
-
-                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
-                    logits, mask_indices, _, _ = self.model(audio)
-                    loss = self.loss(logits, pseudo_labels, mask_indices)
-
-                val_running_loss += loss.item()
-
-            avg_val_loss = val_running_loss / len(val_loader)
-            self.logger.info(
-                f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f}"
-            )
-            # Log validation loss to W&B
-            if self.wandb_logger.is_active:
-                self.wandb_logger.log(
-                    {"val/loss": avg_val_loss,
-                     f"val/iter_{iteration+1}_loss": avg_val_loss},
-                    step=epoch_step
-                )
-        self.model.train()
-        return avg_val_loss
 
 
     def train(
@@ -1238,7 +1200,7 @@ class Trainer:
             first_train_batch = next(iter(train_loader))
             if "audio" not in first_train_batch or "length" not in first_train_batch:
                 self.logger.warning(
-                    "[Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
+                    "⚠️  [Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
                     "Currently missing: "
                     + ", ".join(k for k in ["audio", "length"] if k not in first_train_batch)
                 )
@@ -1255,7 +1217,7 @@ class Trainer:
                 )
                 first_val_batch = next(iter(val_loader))
                 if "audio" not in first_val_batch or "length" not in first_val_batch:
-                    self.logger.warning("[Dataset Check] val_loader should return both 'audio' and 'length'.")
+                    self.logger.warning("⚠️  [Dataset Check] val_loader should return both 'audio' and 'length'.")
 
             self._train_wav2vec2(
                 train_loader,
@@ -1272,9 +1234,15 @@ class Trainer:
             first_sample = train_dataset[0]
             if "audio" not in first_sample or "length" not in first_sample:
                 self.logger.warning(
-                    "[Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
+                    "⚠️  [Dataset Check] Your dataset should return both 'audio' and 'length' keys. "
                     "Currently missing: "
                     + ", ".join(k for k in ["audio", "length"] if k not in first_sample)
+                )
+            
+            if val_dataset:
+                self.logger.warning(
+                    "⚠️  HuBERT pre-training uses on-the-fly pseudo-labels; external "
+                    "validation sets aren’t compatible. Validation step will be skipped."
                 )
 
             wrapped_train_dataset = HuBERTWrapperDataset(
@@ -1301,35 +1269,18 @@ class Trainer:
 
             )
 
-            val_loader = None
-            if val_dataset:
-                val_loader = DataLoader(
-                    val_dataset,
-                    batch_size=batch_size,
-                    shuffle=False,
-                    num_workers=self.num_workers,
-                    pin_memory=True,
-                    collate_fn=self._data_loader_safe_collate,
-                )
-
-
             self._train_hubert(
                 train_loader_for_training=train_loader_for_training,
                 train_loader_full_dataset=train_loader_for_pseudo_label_gen,
                 optimizer=optimizer,
                 epochs=epochs,
                 start_epoch=start_epoch,
-                val_loader=val_loader,
                 start_iteration=start_iteration,
                 num_hubert_iterations=kwargs.get(
                     "num_hubert_iterations", getattr(self.model, "config", {}).get("max_iterations", 2)
                 ),
                 transformer_layer=kwargs.get(
                     "transformer_layer", getattr(self.model, "config", {}).get("extractor_layer", None)
-                ),
-                pseudo_label_sample_ratio=kwargs.get(
-                    "pseudo_label_sample_ratio",
-                    getattr(self.model, "config", {}).get("pseudo_label_sample_ratio", 0.1),
                 ),
                 use_embedding_logger= use_embedding_logger,
                 logger_loader=logger_loader,
@@ -1880,7 +1831,7 @@ class Trainer:
 
         if not filtered_checkpoints:
             self.logger.warning(
-                f"No valid checkpoints found for method '{self.method}' in {self.checkpoint_path}. Starting from scratch."
+                f"⚠️  No valid checkpoints found for method '{self.method}' in {self.checkpoint_path}. Starting from scratch."
             )
             return 0
 
@@ -1898,7 +1849,7 @@ class Trainer:
             self.logger.info(f"Reloaded checkpoint from epoch {epoch + 1}")
         else:
             self.logger.warning(
-                f"No epoch number found in the checkpoint name '{latest_ckpt}'. Resuming from epoch 1."
+                f"⚠️  No epoch number found in the checkpoint name '{latest_ckpt}'. Resuming from epoch 1."
             )
             epoch = 0
 
