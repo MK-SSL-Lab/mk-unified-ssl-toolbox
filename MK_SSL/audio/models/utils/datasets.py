@@ -4,6 +4,7 @@ from torch.utils.data import Dataset
 import torchaudio.transforms as T
 from typing import Dict
 import logging
+from torch import nn
 
 
 class HuBERTWrapperDataset(Dataset):
