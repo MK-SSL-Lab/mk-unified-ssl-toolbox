@@ -1074,6 +1074,81 @@ class Trainer:
 
 
 
+    def _train_eat(
+        self,
+        train_loader,
+        optimizer,
+        epochs: int,
+        start_epoch: int = 0,
+        val_loader: Optional[DataLoader] = None,
+        use_embedding_logger: bool = False,
+        logger_loader: Optional[DataLoader] = None,
+    ):
+        """Train the EAT model."""
+        self.logger.info(f"Starting EAT training for {epochs} epochs.")
+        self.model.train()
+    
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(self.model)
+    
+        for epoch in range(start_epoch, epochs):
+            running_loss = 0.0
+            pbar = tqdm(train_loader, desc=f"EAT Epoch {epoch+1}/{epochs}")
+    
+            for batch_idx, batch in enumerate(pbar):
+                audio = batch["audio"].to(self.device)
+    
+                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
+                    with torch.no_grad():
+                        patches, patch_grid = self.model.feature_extractor(audio)
+                    loss = self.model(patches, patch_grid)
+    
+                optimizer.zero_grad()
+                self.scaler.scale(loss).backward()
+                self.scaler.step(optimizer)
+                self.scaler.update()
+    
+                running_loss += loss.item()
+                pbar.set_postfix({"loss": loss.item()})
+    
+                global_step = epoch * len(train_loader) + batch_idx
+                if self.wandb_logger.is_active:
+                    self.wandb_logger.log({"train/batch_loss": loss.item()}, step=global_step)
+    
+            avg_loss = running_loss / len(train_loader)
+            self.logger.info(f"[EAT - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
+            epoch_step = (epoch + 1) * len(train_loader)
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({"train/epoch_loss": avg_loss, "epoch": epoch + 1}, step=epoch_step)
+    
+            if (epoch + 1) % self.checkpoint_interval == 0:
+                model_path = os.path.join(self.checkpoint_path, f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth")
+                torch.save(self.model.state_dict(), model_path)
+                self.logger.info(f"Model checkpoint saved: {model_path}")
+    
+                if self.wandb_logger.is_active:
+                    self.wandb_logger.save_artifact(
+                        model_path,
+                        name=f"{self.method}-model-epoch-{epoch+1}",
+                        type="model",
+                        metadata={"epoch": epoch+1, "loss": avg_loss},
+                    )
+    
+        final_path = os.path.join(self.checkpoint_path, f"{self.method}_model_{self.timestamp}_final.pth")
+        torch.save(self.model.state_dict(), final_path)
+        self.logger.info(f"Final model checkpoint saved: {final_path}")
+    
+        if self.wandb_logger.is_active:
+            self.wandb_logger.save_artifact(
+                final_path,
+                name=f"{self.method}-model-final",
+                type="model",
+                metadata={"epochs_trained": epochs, "final_loss": avg_loss},
+            )
+        self.logger.info("EAT training complete.")
+    
+    
+
 
     def train(
         self,
@@ -1090,7 +1165,7 @@ class Trainer:
         n_trials: int = 20,
         tuning_epochs: int = 5, 
         use_embedding_logger: bool = False,
-        logger_loader: Optional[DataLoader] = None,  # NEW
+        logger_loader: Optional[DataLoader] = None, 
         **kwargs,
     ) -> None:
         """
@@ -1347,6 +1422,9 @@ class Trainer:
                 use_embedding_logger=use_embedding_logger,
                 logger_loader=logger_loader,
             )
+
+
+            
 
         else:
             raise NotImplementedError(
