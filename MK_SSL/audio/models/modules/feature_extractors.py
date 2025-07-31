@@ -224,9 +224,6 @@ class MFCCFeatureExtractor(nn.Module):
         return feats
 
 
-import torch
-import torch.nn as nn
-
 
 class SpectrogramPatchEmbedder(nn.Module):
     """
