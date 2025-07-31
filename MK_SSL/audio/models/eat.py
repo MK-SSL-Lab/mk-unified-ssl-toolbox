@@ -4,12 +4,13 @@ from typing import Optional, Tuple
 
 
 from MK_SSL.audio.models.modules.losses.ufo_loss import UFO
-from MK_SSL.audio.models.modules.transformations.base_masking import InverseBlockMasking
+from MK_SSL.audio.models.utils.base_masking import InverseBlockMasking
 from MK_SSL.audio.models.modules.backbones import ViTAudioEncoder
 from MK_SSL.audio.models.modules.decoders import CNNAudioDecoder
 from MK_SSL.audio.models.modules.feature_extractors import SpectrogramPatchEmbedder
+from MK_SSL.audio.models.modules.transformations.eat_transform import LogMelSpectrogramTransform
 
-from MK_SSL.audio.models.utils.registry import register_methods
+from MK_SSL.audio.models.utils.registry import register_method
 
 
 class EAT(nn.Module):
@@ -25,6 +26,7 @@ class EAT(nn.Module):
         lambda_u (float): Weight for utterance loss.
         ema_tau (float): EMA decay rate for teacher.
         num_clones (int): Number of masked clones per input.
+        sample_rate (int): Input waveform sample rate.
     """
 
     def __init__(
@@ -35,6 +37,7 @@ class EAT(nn.Module):
         lambda_u: float = 1.0,
         ema_tau: float = 0.996,
         num_clones: int = 1,
+        sample_rate: int = 16000,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -43,6 +46,7 @@ class EAT(nn.Module):
         self.ema_tau = ema_tau
         self.num_clones = num_clones
 
+        self.logmel_transform = LogMelSpectrogramTransform(sample_rate=sample_rate)
         self.feature_extractor = SpectrogramPatchEmbedder(embed_dim=embed_dim)
         self.student_encoder = ViTAudioEncoder(embed_dim=embed_dim, output_all_layers=False)
         self.teacher_encoder = ViTAudioEncoder(embed_dim=embed_dim, output_all_layers=True)
@@ -64,14 +68,23 @@ class EAT(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
-        patch_grid: Tuple[int, int],
+        wav: torch.Tensor,
     ) -> torch.Tensor:
-        B, P, E = x.shape
+        """
+        Args:
+            wav (torch.Tensor): Input waveform (B, 1, T)
+
+        Returns:
+            torch.Tensor: UFO loss
+        """
+        logmel = self.logmel_transform(wav)                    # (B, 1, F, T)
+        patches, patch_grid = self.feature_extractor(logmel)  # (B, P, E), (T, F)
+
+        B, P, E = patches.shape
         T, F = patch_grid
 
         with torch.no_grad():
-            teacher_out = self.teacher_encoder(x)
+            teacher_out = self.teacher_encoder(patches)
             teacher_avg = torch.stack(teacher_out).mean(dim=0)  # (B, P, E)
 
         total_loss = 0.0
@@ -82,7 +95,7 @@ class EAT(nn.Module):
 
             x_vis = []
             for i in range(B):
-                x_vis.append(x[i][visible_mask])
+                x_vis.append(patches[i][visible_mask])
             x_vis = torch.stack(x_vis)
 
             cls = self.cls_token.expand(B, -1, -1)
@@ -107,11 +120,13 @@ class EAT(nn.Module):
         return total_loss / self.num_clones
 
 
+
+
 register_method(
     name= "eat",
     model_cls= EAT,
     loss= UFO,
-    transformation= COLAAudioTransform,
+    transformation= LogMelSpectrogramTransform,
     default_params={},
     logs=lambda model, loss: (
         "\n"
