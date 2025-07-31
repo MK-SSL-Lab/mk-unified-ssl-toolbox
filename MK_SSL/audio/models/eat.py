@@ -9,7 +9,6 @@ from MK_SSL.audio.models.modules.backbones import ViTAudioEncoder
 from MK_SSL.audio.models.modules.decoders import CNNAudioDecoder
 
 
-@register_method("eat")
 class EAT(nn.Module):
     """
     EAT: Efficient Audio Transformer
