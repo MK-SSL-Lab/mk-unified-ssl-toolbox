@@ -32,7 +32,7 @@ class CNNAudioDecoder(nn.Module):
             out_ch = output_dim if i == num_layers - 1 else hidden_dim
             layers.append(nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1))
             if i != num_layers - 1:
-                layers.append(nn.LayerNorm([out_ch, 1, 1]))
+                layers.append(nn.GroupNorm(1, out_ch))
                 layers.append(nn.GELU())
 
         self.decoder = nn.Sequential(*layers)
