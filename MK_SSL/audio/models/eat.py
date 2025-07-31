@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 
 from MK_SSL.audio.models.utils.registry import register_method
 from MK_SSL.audio.models.modules.losses.ufo_loss import UFO
-from MK_SSL.audio.models.modules.transformations.base_masking import InverseBlockMasking
+from MK_SSL.audio.models.utils.base_masking import InverseBlockMasking
 from MK_SSL.audio.models.modules.backbones import ViTAudioEncoder
 from MK_SSL.audio.models.modules.decoders import CNNAudioDecoder
 

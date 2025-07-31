@@ -100,28 +100,3 @@ class HuBERTWrapperDataset(Dataset):
             sample_dict["pseudo_labels"] = torch.from_numpy(pseudo_label).long()
 
         return sample_dict
-
-
-class LogMelSpectrogramTransform(nn.Module):
-    """
-    Converts waveform to log-Mel spectrogram for EAT input.
-
-    Output shape: (B, 1, F=128, T)
-    """
-
-    def __init__(self, sample_rate: int = 16000):
-        super().__init__()
-        self.mel = T.MelSpectrogram(
-            sample_rate=sample_rate,
-            n_fft=400,
-            win_length=400,
-            hop_length=160,
-            n_mels=128,
-            window_fn=torch.hann_window,
-        )
-        self.db = T.AmplitudeToDB()
-
-    def forward(self, wav: torch.Tensor) -> torch.Tensor:
-        mel = self.mel(wav)
-        logmel = self.db(mel)
-        return logmel.unsqueeze(1)  # Shape: (B, 1, F, T)
