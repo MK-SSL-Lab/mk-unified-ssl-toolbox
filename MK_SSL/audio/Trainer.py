@@ -30,6 +30,8 @@ from MK_SSL.audio.models.modules.cola_backbone import COLABackbone
 from MK_SSL.audio.models.modules.wav2vec2_backbone import Wav2Vec2Backbone
 from MK_SSL.audio.models.modules.hubert_backbone import HuBERTBackbone
 from MK_SSL.audio.models.modules.simclr_backbone import SimCLRBackbone
+from MK_SSL.audio.models.modules.backbones import ViTAudioEncoder
+
 
 from MK_SSL.utils import EvaluateNet
 from MK_SSL.utils import EmbeddingLogger
@@ -1074,6 +1076,81 @@ class Trainer:
 
 
 
+    def _train_eat(
+        self,
+        train_loader,
+        optimizer,
+        epochs: int,
+        start_epoch: int = 0,
+        val_loader: Optional[DataLoader] = None,
+        use_embedding_logger: bool = False,
+        logger_loader: Optional[DataLoader] = None,
+    ):
+        """Train the EAT model."""
+        self.logger.info(f"Starting EAT training for {epochs} epochs.")
+        self.model.train()
+    
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(self.model)
+    
+        for epoch in range(start_epoch, epochs):
+            running_loss = 0.0
+            pbar = tqdm(train_loader, desc=f"EAT Epoch {epoch+1}/{epochs}")
+    
+            for batch_idx, batch in enumerate(pbar):
+                audio = batch["audio"].to(self.device)
+    
+                with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
+                    with torch.no_grad():
+                        patches, patch_grid = self.model.feature_extractor(audio)
+                    loss = self.model(patches, patch_grid)
+    
+                optimizer.zero_grad()
+                self.scaler.scale(loss).backward()
+                self.scaler.step(optimizer)
+                self.scaler.update()
+    
+                running_loss += loss.item()
+                pbar.set_postfix({"loss": loss.item()})
+    
+                global_step = epoch * len(train_loader) + batch_idx
+                if self.wandb_logger.is_active:
+                    self.wandb_logger.log({"train/batch_loss": loss.item()}, step=global_step)
+    
+            avg_loss = running_loss / len(train_loader)
+            self.logger.info(f"[EAT - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
+            epoch_step = (epoch + 1) * len(train_loader)
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({"train/epoch_loss": avg_loss, "epoch": epoch + 1}, step=epoch_step)
+    
+            if (epoch + 1) % self.checkpoint_interval == 0:
+                model_path = os.path.join(self.checkpoint_path, f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth")
+                torch.save(self.model.state_dict(), model_path)
+                self.logger.info(f"Model checkpoint saved: {model_path}")
+    
+                if self.wandb_logger.is_active:
+                    self.wandb_logger.save_artifact(
+                        model_path,
+                        name=f"{self.method}-model-epoch-{epoch+1}",
+                        type="model",
+                        metadata={"epoch": epoch+1, "loss": avg_loss},
+                    )
+    
+        final_path = os.path.join(self.checkpoint_path, f"{self.method}_model_{self.timestamp}_final.pth")
+        torch.save(self.model.state_dict(), final_path)
+        self.logger.info(f"Final model checkpoint saved: {final_path}")
+    
+        if self.wandb_logger.is_active:
+            self.wandb_logger.save_artifact(
+                final_path,
+                name=f"{self.method}-model-final",
+                type="model",
+                metadata={"epochs_trained": epochs, "final_loss": avg_loss},
+            )
+        self.logger.info("EAT training complete.")
+    
+    
+
 
     def train(
         self,
@@ -1090,7 +1167,7 @@ class Trainer:
         n_trials: int = 20,
         tuning_epochs: int = 5, 
         use_embedding_logger: bool = False,
-        logger_loader: Optional[DataLoader] = None,  # NEW
+        logger_loader: Optional[DataLoader] = None, 
         **kwargs,
     ) -> None:
         """
@@ -1347,6 +1424,39 @@ class Trainer:
                 use_embedding_logger=use_embedding_logger,
                 logger_loader=logger_loader,
             )
+
+
+        elif self.method == "eat":
+               train_loader = DataLoader(
+                   train_dataset,
+                   batch_size=batch_size,
+                   shuffle=True,
+                   num_workers=self.num_workers,
+                   pin_memory=True,
+                   collate_fn=self._data_loader_safe_collate,
+               )
+        
+               val_loader = None
+               if val_dataset:
+                   val_loader = DataLoader(
+                       val_dataset,
+                       batch_size=batch_size,
+                       shuffle=False,
+                       num_workers=self.num_workers,
+                       pin_memory=True,
+                       collate_fn=self._data_loader_safe_collate,
+                   )
+        
+               self._train_eat(
+                   train_loader,
+                   optimizer,
+                   epochs,
+                   start_epoch,
+                   val_loader=val_loader,
+                   use_embedding_logger=use_embedding_logger,
+                   logger_loader=logger_loader,
+               )
+        
 
         else:
             raise NotImplementedError(
@@ -1775,6 +1885,96 @@ class Trainer:
             })
 
 
+
+    def _evaluate_eat(
+        self,
+        train_dataset: torch.utils.data.Dataset,
+        test_dataset: torch.utils.data.Dataset,
+        num_classes: int,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs
+    ):
+
+
+        feature_size = self.model.embed_dim
+
+        classifier = EvaluateNet(
+            backbone=self.model.student_encoder,
+            feature_size=feature_size,
+            num_classes=num_classes,
+            is_linear=freeze_backbone,
+        ).to(self.device)
+
+        optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
+        )
+        criterion = nn.CrossEntropyLoss()
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        if self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(classifier)
+
+        classifier.train()
+        for epoch in range(epochs):
+            for waveforms, labels in train_loader:
+                waveforms = waveforms.to(self.device)
+                labels = labels.to(self.device)
+
+                logits = classifier(waveforms)
+                loss = criterion(logits, labels)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            self.logger.info(f"[EAT Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
+
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log({
+                    "eat/train_loss": loss.item(),
+                    "eat/epoch": epoch + 1,
+                    "eat/lr": optimizer.param_groups[0]["lr"]
+                }, step=epoch + 1)
+
+        classifier.eval()
+        all_preds, all_labels = [], []
+        with torch.no_grad():
+            for waveforms, labels in test_loader:
+                waveforms = waveforms.to(self.device)
+                labels = labels.to(self.device)
+
+                logits = classifier(waveforms)
+                preds = torch.argmax(logits, dim=1)
+
+                all_preds.append(preds.cpu())
+                all_labels.append(labels.cpu())
+
+        all_preds = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+
+        from sklearn.metrics import classification_report
+        self.logger.info("\n📊 [EAT Evaluation Report]:\n" +
+                         classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
+
+        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+
+        if self.wandb_logger.is_active:
+            self.wandb_logger.log({
+                "eat/test_accuracy": report["accuracy"],
+                "eat/test_macro_avg_f1": report["macro avg"]["f1-score"],
+                "eat/test_macro_avg_precision": report["macro avg"]["precision"],
+                "eat/test_macro_avg_recall": report["macro avg"]["recall"]
+            })
+
+
+
+
+
     def evaluate(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -1803,6 +2003,8 @@ class Trainer:
                 self._evaluate_simclr(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case "wav2vec2":
                 self._evaluate_wav2vec2(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
+            case "eat":
+                self._evaluate_eat(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case _:
                 raise ValueError(f"❌ Unknown method '{self.method}' for evaluation.")
 
