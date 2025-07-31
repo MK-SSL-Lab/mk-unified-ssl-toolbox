@@ -1897,72 +1897,72 @@ class Trainer:
         freeze_backbone: bool = True,
         **kwargs
     ):
-        
-    
+
+
         feature_size = self.model.embed_dim
-    
+
         classifier = EvaluateNet(
             backbone=self.model.student_encoder,
             feature_size=feature_size,
             num_classes=num_classes,
             is_linear=freeze_backbone,
         ).to(self.device)
-    
+
         optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
         )
         criterion = nn.CrossEntropyLoss()
-    
+
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    
+
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
-    
+
         classifier.train()
         for epoch in range(epochs):
             for waveforms, labels in train_loader:
                 waveforms = waveforms.to(self.device)
                 labels = labels.to(self.device)
-    
+
                 logits = classifier(waveforms)
                 loss = criterion(logits, labels)
-    
+
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-    
+
             self.logger.info(f"[EAT Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
-    
+
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
                     "eat/train_loss": loss.item(),
                     "eat/epoch": epoch + 1,
                     "eat/lr": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
-    
+
         classifier.eval()
         all_preds, all_labels = [], []
         with torch.no_grad():
             for waveforms, labels in test_loader:
                 waveforms = waveforms.to(self.device)
                 labels = labels.to(self.device)
-    
+
                 logits = classifier(waveforms)
                 preds = torch.argmax(logits, dim=1)
-    
+
                 all_preds.append(preds.cpu())
                 all_labels.append(labels.cpu())
-    
+
         all_preds = torch.cat(all_preds)
         all_labels = torch.cat(all_labels)
-    
+
         from sklearn.metrics import classification_report
         self.logger.info("\n📊 [EAT Evaluation Report]:\n" +
                          classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
-    
+
         report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
-    
+
         if self.wandb_logger.is_active:
             self.wandb_logger.log({
                 "eat/test_accuracy": report["accuracy"],
@@ -1970,10 +1970,10 @@ class Trainer:
                 "eat/test_macro_avg_precision": report["macro avg"]["precision"],
                 "eat/test_macro_avg_recall": report["macro avg"]["recall"]
             })
-    
-    
-    
-    
+
+
+
+
 
     def evaluate(
         self,
@@ -2003,6 +2003,8 @@ class Trainer:
                 self._evaluate_simclr(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case "wav2vec2":
                 self._evaluate_wav2vec2(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
+            case "eat":
+                self._evaluate_eat(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case _:
                 raise ValueError(f"❌ Unknown method '{self.method}' for evaluation.")
 
