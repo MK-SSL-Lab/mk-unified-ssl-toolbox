@@ -222,3 +222,44 @@ class MFCCFeatureExtractor(nn.Module):
             # Transpose to (B, T_frames, n_mfcc) to match common feature conventions
             feats = feats.transpose(1, 2)
         return feats
+
+
+import torch
+import torch.nn as nn
+
+
+class SpectrogramPatchEmbedder(nn.Module):
+    """
+    CNN-based patch embedding for log-mel spectrograms.
+
+    Converts input of shape (B, 1, F, T) to (B, P, E) where
+    P = (F/16) * (T/16), E = embed_dim.
+
+    Args:
+        embed_dim (int): Output embedding dimension.
+    """
+
+    def __init__(self, embed_dim: int = 768):
+        super().__init__()
+        self.proj = nn.Conv2d(
+            in_channels=1,
+            out_channels=embed_dim,
+            kernel_size=(16, 16),
+            stride=(16, 16),
+            padding=0,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, 1, F, T).
+
+        Returns:
+            Tuple[torch.Tensor, Tuple[int, int]]:
+                - Flattened patches (B, P, E)
+                - Patch grid size (T//16, F//16)
+        """
+        x = self.proj(x)  # (B, E, F', T')
+        B, E, F, T = x.shape
+        x = x.permute(0, 2, 3, 1).reshape(B, F * T, E)  # (B, P, E)
+        return x, (F, T)
