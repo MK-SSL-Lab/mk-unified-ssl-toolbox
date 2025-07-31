@@ -1424,7 +1424,37 @@ class Trainer:
             )
 
 
-            
+        elif self.method == "eat":
+               train_loader = DataLoader(
+                   train_dataset,
+                   batch_size=batch_size,
+                   shuffle=True,
+                   num_workers=self.num_workers,
+                   pin_memory=True,
+                   collate_fn=self._data_loader_safe_collate,
+               )
+        
+               val_loader = None
+               if val_dataset:
+                   val_loader = DataLoader(
+                       val_dataset,
+                       batch_size=batch_size,
+                       shuffle=False,
+                       num_workers=self.num_workers,
+                       pin_memory=True,
+                       collate_fn=self._data_loader_safe_collate,
+                   )
+        
+               self._train_eat(
+                   train_loader,
+                   optimizer,
+                   epochs,
+                   start_epoch,
+                   val_loader=val_loader,
+                   use_embedding_logger=use_embedding_logger,
+                   logger_loader=logger_loader,
+               )
+        
 
         else:
             raise NotImplementedError(
