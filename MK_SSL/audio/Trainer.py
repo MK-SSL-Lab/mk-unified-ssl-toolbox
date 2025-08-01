@@ -30,6 +30,8 @@ from MK_SSL.audio.models.modules.cola_backbone import COLABackbone
 from MK_SSL.audio.models.modules.wav2vec2_backbone import Wav2Vec2Backbone
 from MK_SSL.audio.models.modules.hubert_backbone import HuBERTBackbone
 from MK_SSL.audio.models.modules.simclr_backbone import SimCLRBackbone
+from MK_SSL.audio.models.modules.eat_backnone import EATBackbone
+
 from MK_SSL.audio.models.modules.backbones import ViTAudioEncoder
 
 
@@ -1085,61 +1087,125 @@ class Trainer:
         val_loader: Optional[DataLoader] = None,
         use_embedding_logger: bool = False,
         logger_loader: Optional[DataLoader] = None,
-    ):
-        """Train the EAT model."""
+    ) -> None:
+        """Train the EAT model with optional embedding logging via EATBackbone."""
         self.logger.info(f"Starting EAT training for {epochs} epochs.")
         self.model.train()
-    
+
+        # ── Step 0: optional embedding logger ‐‐─────────────────────────────────────
+        if use_embedding_logger:
+            assert (
+                logger_loader is not None
+            ), "logger_loader must be provided when use_embedding_logger=True"
+
+            embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
+            embedding_logger = EmbeddingLogger(
+                log_dir=embedding_log_dir,
+                method_name=self.method,
+                reduce_method="tsne",
+                log_interval=1,
+            )
+            self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
+
+            self.logger.info("[EAT - Step 0] Logging pre-training embeddings…")
+            backbone = EATBackbone(self.model).to(self.device)  # <-- same pattern as COLA
+            backbone.eval()
+
+            all_embeddings, all_labels = [], []
+            with torch.inference_mode():
+                for batch in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
+                    audio = batch["audio"].to(self.device)
+                    labels = batch["label"].to(self.device)
+                    embeddings = backbone(audio)
+                    all_embeddings.append(embeddings)
+                    all_labels.append(labels)
+
+            embeddings = torch.cat(all_embeddings, dim=0)
+            labels = torch.cat(all_labels, dim=0)
+            embedding_logger.log_step(step=0, embeddings=embeddings, labels=labels)
+            self.logger.info("[EAT - Step 0] Pre-training embeddings logged.")
+            self.model.train()
+
+        # ── W&B model watching ‐‐───────────────────────────────────────────────────
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(self.model)
-    
+
+        # ── Training loop ‐‐────────────────────────────────────────────────────────
         for epoch in range(start_epoch, epochs):
             running_loss = 0.0
             pbar = tqdm(train_loader, desc=f"EAT Epoch {epoch+1}/{epochs}")
-    
+
             for batch_idx, batch in enumerate(pbar):
                 audio = batch["audio"].to(self.device)
-    
+
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     with torch.no_grad():
                         patches, patch_grid = self.model.feature_extractor(audio)
                     loss = self.model(patches, patch_grid)
-    
+
                 optimizer.zero_grad()
                 self.scaler.scale(loss).backward()
                 self.scaler.step(optimizer)
                 self.scaler.update()
-    
+
                 running_loss += loss.item()
                 pbar.set_postfix({"loss": loss.item()})
-    
+
                 global_step = epoch * len(train_loader) + batch_idx
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log({"train/batch_loss": loss.item()}, step=global_step)
-    
+
             avg_loss = running_loss / len(train_loader)
             self.logger.info(f"[EAT - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
             epoch_step = (epoch + 1) * len(train_loader)
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({"train/epoch_loss": avg_loss, "epoch": epoch + 1}, step=epoch_step)
-    
+
+            # ── Per-epoch embedding logging ‐‐───────────────────────────────────────
+            if use_embedding_logger:
+                self.logger.info(f"[EAT - Epoch {epoch+1}] Logging embeddings…")
+                backbone = EATBackbone(self.model).to(self.device)
+                backbone.eval()
+
+                all_embeddings, all_labels = [], []
+                with torch.inference_mode():
+                    for batch in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch+1}"):
+                        audio = batch["audio"].to(self.device)
+                        labels = batch["label"].to(self.device)
+                        embeddings = backbone(audio)
+                        all_embeddings.append(embeddings)
+                        all_labels.append(labels)
+
+                embeddings = torch.cat(all_embeddings, dim=0)
+                labels = torch.cat(all_labels, dim=0)
+                embedding_logger.log_step(step=epoch + 1, embeddings=embeddings, labels=labels)
+                self.logger.info(f"[EAT - Epoch {epoch+1}] Embeddings logged.")
+                self.model.train()
+
+            # ── Checkpointing ‐‐─────────────────────────────────────────────────────
             if (epoch + 1) % self.checkpoint_interval == 0:
-                model_path = os.path.join(self.checkpoint_path, f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth")
+                model_path = os.path.join(
+                    self.checkpoint_path,
+                    f"{self.method}_model_{self.timestamp}_epoch{epoch+1}.pth",
+                )
                 torch.save(self.model.state_dict(), model_path)
                 self.logger.info(f"Model checkpoint saved: {model_path}")
-    
+
                 if self.wandb_logger.is_active:
                     self.wandb_logger.save_artifact(
                         model_path,
                         name=f"{self.method}-model-epoch-{epoch+1}",
                         type="model",
-                        metadata={"epoch": epoch+1, "loss": avg_loss},
+                        metadata={"epoch": epoch + 1, "loss": avg_loss},
                     )
-    
-        final_path = os.path.join(self.checkpoint_path, f"{self.method}_model_{self.timestamp}_final.pth")
+
+        # ── Final model save ‐‐──────────────────────────────────────────────────────
+        final_path = os.path.join(
+            self.checkpoint_path, f"{self.method}_model_{self.timestamp}_final.pth"
+        )
         torch.save(self.model.state_dict(), final_path)
         self.logger.info(f"Final model checkpoint saved: {final_path}")
-    
+
         if self.wandb_logger.is_active:
             self.wandb_logger.save_artifact(
                 final_path,
@@ -1147,8 +1213,23 @@ class Trainer:
                 type="model",
                 metadata={"epochs_trained": epochs, "final_loss": avg_loss},
             )
+
+        # ── Final animated embedding plot ‐‐─────────────────────────────────────────
+        if use_embedding_logger:
+            self.logger.info("Generating final embedding animation…")
+            animation_path = embedding_logger.plot_all()
+            self.logger.info(f"Embedding animation saved at: {animation_path}")
+
+            if self.wandb_logger.is_active:
+                import wandb  # local import to keep optional
+                self.wandb_logger.log(
+                    {"media/embedding_animation": wandb.Html(animation_path)},
+                    step=max(embedding_logger.steps) if embedding_logger.steps else epochs,
+                )
+                self.logger.info("Embedding animation logged to Weights & Biases.")
+
         self.logger.info("EAT training complete.")
-    
+
     
 
 
