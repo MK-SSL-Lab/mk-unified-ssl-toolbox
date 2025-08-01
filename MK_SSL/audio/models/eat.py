@@ -38,6 +38,7 @@ class EAT(nn.Module):
         ema_tau: float = 0.996,
         num_clones: int = 1,
         sample_rate: int = 16000,
+        **kwargs,
     ):
         super().__init__()
         self.embed_dim = embed_dim
