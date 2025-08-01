@@ -165,6 +165,6 @@ register_method(
         f"{'EMA Tau':<32}: {model.ema_tau}\n"
         f"{'Clones per Sample':<32}: {model.num_clones}\n"
         f"{'Masking Strategy':<32}: InverseBlockMasking\n"
-        f"{'Loss':<32}: {model.UFO.__name__}\n"
+        f"{'Loss':<32}: {UFO.__name__}\n"
     )
 )
