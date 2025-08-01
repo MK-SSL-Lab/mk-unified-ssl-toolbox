@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as Fnn
 from typing import Tuple, List
 
 from MK_SSL.audio.models.utils.base_masking import InverseBlockMasking
@@ -9,11 +9,26 @@ from MK_SSL.audio.models.modules.decoders import CNNAudioDecoder
 from MK_SSL.audio.models.modules.feature_extractors import SpectrogramPatchEmbedder
 from MK_SSL.audio.models.modules.transformations.eat_transform import LogMelSpectrogramTransform
 from MK_SSL.audio.models.utils.registry import register_method
+
 from MK_SSL.audio.models.modules.losses.ufo_loss import UFO
 
 
 class EAT(nn.Module):
-    """Efficient Audio Transformer (student–teacher, inverse-block masking)."""
+    """Efficient Audio Transformer (student–teacher, inverse-block masking).
+
+    The model **does not compute the loss**.  
+    It returns the tensors needed by the trainer so the loss can be
+    evaluated there, mirroring the COLA training style.
+
+    Args:
+        embed_dim: Patch/transformer embedding dimension.
+        mask_ratio: Fraction of blocks to mask.
+        block_size: Size (time, freq) of each inverse mask block.
+        lambda_u: Weighting for utterance-level term inside UFO (passed later).
+        ema_tau: Exponential-moving-average coefficient for the teacher.
+        num_clones: Number of masked clones per input.
+        sample_rate: Input waveform sample-rate.
+    """
 
     def __init__(
         self,
@@ -44,7 +59,9 @@ class EAT(nn.Module):
 
         self._init_teacher()
 
-    # ------------------------------------------------------------------ #
+    # --------------------------------------------------------------------- #
+    #                                helpers                                #
+    # --------------------------------------------------------------------- #
     def _init_teacher(self) -> None:
         for ps, pt in zip(self.student_encoder.parameters(), self.teacher_encoder.parameters()):
             pt.data.copy_(ps.data)
@@ -55,22 +72,32 @@ class EAT(nn.Module):
         for ps, pt in zip(self.student_encoder.parameters(), self.teacher_encoder.parameters()):
             pt.data.mul_(self.ema_tau).add_(ps.data * (1.0 - self.ema_tau))
 
-    # ------------------------------------------------------------------ #
+    # --------------------------------------------------------------------- #
+    #                               forward                                 #
+    # --------------------------------------------------------------------- #
     def forward(
         self, wav: torch.Tensor
-    ) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor], torch.Tensor]:
-        """
-        Returns
-        -------
-        decoded_list : list[(B, E, h, w)]
-        target_list  : list[(B, E, h, w)]
-        cls_list     : list[(B, E)]
-        teacher_avg  : (B, P, E)
+    ) -> Tuple[
+        List[torch.Tensor],  # decoded blocks
+        List[torch.Tensor],  # target blocks
+        List[torch.Tensor],  # student CLS
+        torch.Tensor,        # teacher avg (B,P,E)
+    ]:
+        """Compute masked-prediction tensors.
+
+        Args:
+            wav: Tensor shape ``(B, 1, T)``.
+
+        Returns:
+            decoded_list: ``len = num_clones``; each tensor ``(B, E, h, w)``
+            target_list:  same shapes as ``decoded_list``
+            cls_list:     list of student CLS tokens, ``(B, E)``
+            teacher_avg:  average of teacher layers, ``(B, P, E)``
         """
         logmel = self.logmel_transform(wav)
-        patches, (Fq_grid, T_grid) = self.feature_extractor(logmel)  # ← (freq, time)
+        patches, (F_g, T_g) = self.feature_extractor(logmel)
 
-        Tt, Fq = T_grid, Fq_grid                 # avoid shadowing torch.nn.functional as F
+        T, F = T_g, F_g
         B, _, E = patches.shape
 
         with torch.no_grad():
@@ -78,38 +105,43 @@ class EAT(nn.Module):
             teacher_avg = torch.stack(teacher_layers).mean(dim=0)
 
         bh, bw = self.block_size
-        seq_len = Tt * Fq
-        h, w = Tt // bh, Fq // bw
+        seq_len = T * F
+        h, w = T // bh, F // bw
 
-        decoded_list, target_list, cls_list = [], [], []
+        decoded_list: List[torch.Tensor] = []
+        target_list: List[torch.Tensor] = []
+        cls_list: List[torch.Tensor] = []
 
         for _ in range(self.num_clones):
-            mask_flat = InverseBlockMasking((Tt, Fq), self.mask_ratio, self.block_size)().view(seq_len)
-            vis_flat, msk_flat = mask_flat, ~mask_flat
+            mask_flat = InverseBlockMasking((T, F), self.mask_ratio, self.block_size)().view(seq_len)
+            vis_flat = mask_flat
+            msk_flat = ~mask_flat
 
             x_vis = patches[:, vis_flat]
 
             cls = self.cls_token.expand(B, -1, -1)
             student_inp = torch.cat([cls, x_vis], dim=1)
             student_out = self.student_encoder(student_inp)
-            student_cls, student_tok = student_out[:, 0], student_out[:, 1:]
+            student_cls = student_out[:, 0]
+            student_tok = student_out[:, 1:]
 
             full = torch.empty(B, seq_len, E, device=patches.device, dtype=patches.dtype)
             full[:, vis_flat] = student_tok
             full[:, msk_flat] = self.mask_token
 
-            full_2d = full.view(B, Tt, Fq, E).permute(0, 3, 1, 2)
-            student_blk = F.avg_pool2d(full_2d, kernel_size=self.block_size, stride=self.block_size)
+            full_2d = full.view(B, T, F, E).permute(0, 3, 1, 2)
+            student_blk = Fnn.avg_pool2d(full_2d, kernel_size=self.block_size, stride=self.block_size)
 
             with torch.no_grad():
-                teacher_2d = teacher_avg.view(B, Tt, Fq, E).permute(0, 3, 1, 2)
-                tgt_blk = F.avg_pool2d(teacher_2d, kernel_size=self.block_size, stride=self.block_size)
+                teacher_2d = teacher_avg.view(B, T, F, E).permute(0, 3, 1, 2)
+                tgt_blk = Fnn.avg_pool2d(teacher_2d, kernel_size=self.block_size, stride=self.block_size)
 
             decoded_list.append(self.decoder(student_blk))
             target_list.append(tgt_blk)
             cls_list.append(student_cls)
 
         return decoded_list, target_list, cls_list, teacher_avg
+
 
 # Register method
 register_method(
