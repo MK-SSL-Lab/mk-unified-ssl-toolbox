@@ -53,14 +53,18 @@ class Wav2Clip(nn.Module):
         image_input: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Forward pass of the Wav2Clip model.
+        Forward pass.
 
-        Args:
-            audio_waveform (torch.Tensor): Input waveform of shape (B, T).
-            image_input (torch.Tensor): Input image or embedding tensor of shape (B, ...) depending on encoder.
+        Parameters
+        ----------
+        audio_waveform : torch.Tensor
+            Raw audio shaped **(B, 1, T)** (preferred) or **(B, T)**.
+        image_input : torch.Tensor
+            Input for the image branch (shape depends on the image encoder).
 
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Tuple of (audio_embed, image_embed)
+        Returns
+        -------
+        (audio_embed, image_embed) : Tuple[torch.Tensor, torch.Tensor]
         """
         audio_embed = self.audio_encoder(audio_waveform)
         image_embed = self.image_encoder(image_input)

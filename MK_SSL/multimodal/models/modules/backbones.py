@@ -61,21 +61,37 @@ class Wav2ClipAudioEncoder(nn.Module):
 
     def forward(self, waveform: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass of the audio encoder.
+        Args
+        ----
+        waveform : torch.Tensor
+            Audio waveform shaped **(B, 1, T)** *or* legacy **(B, T)**.
 
-        Args:
-            waveform (torch.Tensor): Input tensor of shape (B, T).
-
-        Returns:
-            torch.Tensor: Encoded (and optionally projected) audio representation of shape (B, D).
+        Returns
+        -------
+        torch.Tensor
+            Encoded (and optionally projected) audio representation,
+            shape (B, D).
         """
-        if waveform.dim() == 2:
-            waveform = waveform.unsqueeze(1)  # (B, 1, T)
+        # Accept both (B, T) and (B, 1, T)
+        if waveform.dim() == 2:                 # (B, T) → (B, 1, T)
+            waveform = waveform.unsqueeze(1)
+        elif waveform.dim() == 3:
+            if waveform.shape[1] != 1:          # (B, C, T) but C ≠ 1
+                raise ValueError(
+                    "Expected audio of shape (B, 1, T) or (B, T). "
+                    f"Got {waveform.shape}."
+                )
+        else:
+            raise ValueError(
+                "Audio tensor must be 2-D or 3-D, got "
+                f"{waveform.dim()}-D input."
+            )
 
-        spec = self.spectrogram(waveform)  # (B, 1, F, T)
-        mag = self.magnitude(spec)         # drop phase
+        # (B, 1, T) → (B, 1, F, T) complex spectrogram
+        spec = self.spectrogram(waveform)
+        mag  = self.magnitude(spec)
+
         features = self.backbone(mag)
-
         if self.projection is not None:
             features = self.projection(features)
 
