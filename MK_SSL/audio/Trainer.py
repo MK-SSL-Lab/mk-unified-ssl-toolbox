@@ -1139,9 +1139,7 @@ class Trainer:
                 audio = batch["audio"].to(self.device)
 
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
-                    with torch.no_grad():
-                        patches, patch_grid = self.model.feature_extractor(audio)
-                    loss = self.model(patches, patch_grid)
+                    loss = self.model(audio)
 
                 optimizer.zero_grad()
                 self.scaler.scale(loss).backward()
