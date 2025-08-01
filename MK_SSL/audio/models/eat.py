@@ -131,11 +131,19 @@ register_method(
     default_params={},
     logs=lambda model, loss: (
         "\n"
-        "---------------- COLA Configuration ----------------\n"
-        f"Input Type                       : Log-mel spectrograms (B, 1, F, T)\n"
-        f"Backbone Architecture            : {model.backbone.__class__.__name__}\n"
-        "Loss                             : InfoNCE Loss\n"
-        "Augmentation                     : COLAAudioTransform"
-
+        "---------------- EAT Configuration ----------------\n"
+        f"{'Input Type':<32}: Raw waveform (B, 1, T)\n"
+        f"{'Log-mel Transform':<32}: {model.logmel_transform.__class__.__name__}\n"
+        f"{'Patch Embedder':<32}: {model.feature_extractor.__class__.__name__}\n"
+        f"{'Student Encoder':<32}: {model.student_encoder.__class__.__name__}\n"
+        f"{'Teacher Encoder':<32}: {model.teacher_encoder.__class__.__name__}\n"
+        f"{'Decoder':<32}: {model.decoder.__class__.__name__}\n"
+        f"{'Embedding Dimension':<32}: {model.embed_dim}\n"
+        f"{'Mask Ratio':<32}: {model.mask_ratio}\n"
+        f"{'Block Size':<32}: {model.block_size}\n"
+        f"{'EMA Tau':<32}: {model.ema_tau}\n"
+        f"{'Clones per Sample':<32}: {model.num_clones}\n"
+        f"{'Masking Strategy':<32}: InverseBlockMasking\n"
+        f"{'Loss':<32}: {model.loss_fn.__class__.__name__}\n"
     )
 )
