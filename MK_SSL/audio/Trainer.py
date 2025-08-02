@@ -1154,7 +1154,15 @@ class Trainer:
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     # Forward - returns lists for each masked-clone
                     decoded, target, cls_tok, teacher_avg = self.model(audio)
-
+                for name, tensor in {
+                    "decoded": decoded,
+                    "t_masked": target,
+                    "cls": cls_tok,
+                    "t_all": teacher_avg,
+                }.items():
+                    if torch.isnan(tensor).any() or torch.isinf(tensor).any():
+                        print(name, "is already bad at batch", batch_idx)
+                        break
                     # UFO loss per clone → mean
                     clone_losses = [
                         self.loss(d, t, c, teacher_avg)
