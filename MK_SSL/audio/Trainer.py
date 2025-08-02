@@ -1173,6 +1173,7 @@ class Trainer:
 
                 # Logs
                 running_loss += loss.item()
+                print(f"[DEBUG] {loss},\n{clone_losses},\n{self.loss.__class__.__name__}")
                 pbar.set_postfix({"loss": loss.item()})
                 global_step = epoch * len(train_loader) + batch_idx
                 if self.wandb_logger.is_active:
