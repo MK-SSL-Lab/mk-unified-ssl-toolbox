@@ -1128,15 +1128,23 @@ class Trainer:
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     decoded_l, target_l, cls_l, teacher_avg = self.model(audio)
 
-                    loss_val = 0.0
+                    loss_val = torch.zeros((), device=audio.device)
+
+                    if len(decoded_l) == 0:
+                        raise ValueError("num_clones must be ≥ 1; got an empty decoded list")
+
                     for dec, tgt, cls in zip(decoded_l, target_l, cls_l):
-                        loss_val += self.loss(dec, tgt, cls, teacher_avg)  # UFO
-                    loss_val = loss_val / len(decoded_l)
+                        loss_val += self.loss(dec, tgt, cls, teacher_avg)   # UFO
+
+                    loss_val = loss_val / len(decoded_l)                    # mean across clones
 
                 optimizer.zero_grad()
                 self.scaler.scale(loss_val).backward()
                 self.scaler.step(optimizer)
                 self.scaler.update()
+
+                # --- FIX ③: keep the EMA teacher in sync ----------------------------
+                self.model.update_teacher()
 
                 running_loss += loss_val.item()
                 pbar.set_postfix({"loss": loss_val.item()})
