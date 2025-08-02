@@ -59,9 +59,6 @@ class EAT(nn.Module):
 
         self._init_teacher()
 
-    # --------------------------------------------------------------------- #
-    #                                helpers                                #
-    # --------------------------------------------------------------------- #
     def _init_teacher(self) -> None:
         for ps, pt in zip(self.student_encoder.parameters(), self.teacher_encoder.parameters()):
             pt.data.copy_(ps.data)
@@ -72,9 +69,6 @@ class EAT(nn.Module):
         for ps, pt in zip(self.student_encoder.parameters(), self.teacher_encoder.parameters()):
             pt.data.mul_(self.ema_tau).add_(ps.data * (1.0 - self.ema_tau))
 
-    # --------------------------------------------------------------------- #
-    #                               forward                                 #
-    # --------------------------------------------------------------------- #
     def forward(
         self, wav: torch.Tensor
     ) -> Tuple[
@@ -83,8 +77,7 @@ class EAT(nn.Module):
         List[torch.Tensor],  # student CLS
         torch.Tensor,        # teacher avg (B,P,E)
     ]:
-        """Compute masked-prediction tensors.
-
+        """
         Args:
             wav: Tensor shape ``(B, 1, T)``.
 
@@ -126,8 +119,8 @@ class EAT(nn.Module):
             student_tok = student_out[:, 1:]
 
             full = torch.empty(B, seq_len, E, device=patches.device, dtype=patches.dtype)
-            full[:, vis_flat] = student_tok
-            full[:, msk_flat] = self.mask_token
+            full[:, vis_flat] = student_tok.to(full.dtype)
+            full[:, msk_flat] = self.mask_token.to(full.dtype)
 
             full_2d = full.view(B, T, F, E).permute(0, 3, 1, 2)
             student_blk = Fnn.avg_pool2d(full_2d, kernel_size=self.block_size, stride=self.block_size)
@@ -143,7 +136,6 @@ class EAT(nn.Module):
         return decoded_list, target_list, cls_list, teacher_avg
 
 
-# Register method
 register_method(
     name="eat",
     model_cls=EAT,
