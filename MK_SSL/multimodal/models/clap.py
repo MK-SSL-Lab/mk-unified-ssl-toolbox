@@ -32,7 +32,7 @@ class CLAP(nn.Module):
         audio_encoder: Optional[nn.Module] = None,
         text_encoder: Optional[nn.Module] = None,
         projection_dim: int = 1024,
-        temperature_init: float = 0.07,
+        temperature_init: float = 1,
         device: str = 'cpu',
         **kwargs
 
@@ -62,7 +62,7 @@ class CLAP(nn.Module):
         if audio_encoder is not None:
             self.audio_encoder = audio_encoder
         else:
-            self.audio_encoder = CNN14(use_groupnorm= True)
+            self.audio_encoder = CNN14(use_groupnorm= False)
         
         if self.text_encoder is not None: 
             self.text_encoder = text_encoder
