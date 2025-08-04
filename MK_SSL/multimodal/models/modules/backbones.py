@@ -99,64 +99,65 @@ class Wav2ClipAudioEncoder(nn.Module):
 
 
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
 class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, use_groupnorm=False):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.act1 = nn.ReLU()
 
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        self.act2 = nn.ReLU()
+        if use_groupnorm:
+            norm1 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
+            norm2 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
+        else:
+            norm1 = nn.BatchNorm2d(out_channels, eps=1e-3, momentum=0.1)
+            norm2 = nn.BatchNorm2d(out_channels, eps=1e-3, momentum=0.1)
 
-        self.pool = nn.AvgPool2d(kernel_size=2)
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            norm1,
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            norm2,
+            nn.ReLU(inplace=True),
+            nn.AvgPool2d(kernel_size=2),
+        )
 
     def forward(self, x):
-        x = self.act1(self.bn1(self.conv1(x)))
-        x = self.act2(self.bn2(self.conv2(x)))
-        x = self.pool(x)
+        x = self.block(x)
+        if torch.isnan(x).any():
+            raise ValueError("NaN detected in ConvBlock output")
         return x
 
 
 class CNN14(nn.Module):
     """
-    CNN14 architecture from PANNs (Pretrained Audio Neural Networks), without pretrained weights.
-
-    Input:
-        log-mel spectrogram: Tensor of shape (B, 1, F, T), e.g., (B, 1, 64, 1024)
-
-    Output:
-        Feature embedding: Tensor of shape (B, 2048)
+    CNN14 architecture from PANNs, without pretrained weights.
+    Input: log-mel spectrogram (B, 1, F, T)
+    Output: Tensor of shape (B, 2048)
     """
 
-    def __init__(self):
+    def __init__(self, use_groupnorm=False):
         super().__init__()
         self.conv_blocks = nn.Sequential(
-            ConvBlock(1, 64),
-            ConvBlock(64, 128),
-            ConvBlock(128, 256),
-            ConvBlock(256, 512),
-            ConvBlock(512, 1024),
-            ConvBlock(1024, 2048),
+            ConvBlock(1, 64, use_groupnorm),
+            ConvBlock(64, 128, use_groupnorm),
+            ConvBlock(128, 256, use_groupnorm),
+            ConvBlock(256, 512, use_groupnorm),
+            ConvBlock(512, 1024, use_groupnorm),
+            ConvBlock(1024, 2048, use_groupnorm),
         )
-
         self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
 
     def forward(self, x):
-        """
-        Args:
-            x (Tensor): log-mel spectrogram (B, 1, F, T)
-
-        Returns:
-            Tensor: (B, 2048) feature embedding
-        """
-        x = self.conv_blocks(x)  # (B, 2048, F', T')
+        x = self.conv_blocks(x)
         x = self.global_pool(x)  # (B, 2048, 1, 1)
-        x = x.view(x.size(0), -1)
+        x = x.view(x.size(0), -1)  # (B, 2048)
+        if torch.isnan(x).any():
+            raise ValueError("NaN detected in CNN14 output")
         return x
-
-
 
 
 class BERTTextEncoder(nn.Module):
