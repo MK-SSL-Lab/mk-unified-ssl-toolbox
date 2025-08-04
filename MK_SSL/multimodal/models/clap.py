@@ -120,7 +120,10 @@ class CLAP(nn.Module):
         audio_proj = F.normalize(self.audio_proj(audio_emb), dim=-1)  # (B, D)
         text_proj = F.normalize(self.text_proj(text_emb), dim=-1)     # (B, D)
 
-        similarity_matrix = self.temperature * torch.matmul(text_proj, audio_proj.T)  # (B, B)
+        # similarity_matrix = self.temperature * torch.matmul(text_proj, audio_proj.T)  # (B, B)
+        # similarity_matrix = similarity_matrix.clamp(-100.0, 100.0)
+        similarity_matrix = torch.exp(self.temperature) * torch.matmul(text_proj, audio_proj.T)
+
         return audio_proj, text_proj, similarity_matrix
 
     def criterion(self, similarity_matrix: torch.Tensor,) -> torch.Tensor:
@@ -138,6 +141,14 @@ class CLAP(nn.Module):
         """
 
         if audio_input.dim() == 3 and audio_input.size(1) == 1:
+
+            audio_input = audio_input.squeeze(1)  # (B, L)
+            audio_input = self.mel_transform(audio_input)  # (B, F, T)
+            # audio_input = self.amplitude_to_db(audio_input).clamp(min=-80.0, max=80.0)  # log scale
+            audio_input = self.amplitude_to_db(audio_input) # log scale
+            audio_input = audio_input.unsqueeze(1)  # (B, 1, F, T)
+        return audio_input    
+
             audio_input = audio_input.squeeze(1)
         mel = self.mel_transform(audio_input)
         mel = torch.nan_to_num(mel, nan=0.0, posinf=1e4, neginf=-1e4)  # just in case
@@ -145,6 +156,7 @@ class CLAP(nn.Module):
         mel = mel.clamp(min=-80.0, max=80.0)
         return mel.unsqueeze(1)
     
+
 
 
 register_method(

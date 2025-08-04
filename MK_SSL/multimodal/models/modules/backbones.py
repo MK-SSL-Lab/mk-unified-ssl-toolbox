@@ -3,8 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchaudio.transforms as T
 from torchvision.models import resnext50_32x4d
-from transformers import BertModel, BertConfig
+from transformers import BertModel
 import open_clip
+
 
 
 
@@ -162,35 +163,30 @@ class CNN14(nn.Module):
             raise ValueError("NaN detected in CNN14 output")
         return x
 
-
 class BERTTextEncoder(nn.Module):
     """
-    BERTTextEncoder: Extracts text embeddings using BERT-base (uncased).
-
-    This module returns the [CLS] token embedding from the final layer as the text representation.
+    BERTTextEncoder: returns the [CLS] embedding from a frozen BERT-base-uncased.
     """
-
     def __init__(self):
         super().__init__()
 
-        # Load architecture of bert-base-uncased (no pretrained weights)
-        config = BertConfig.from_pretrained("bert-base-uncased")
-        self.bert = BertModel(config)
+        # 1. Load the full checkpoint (weights + config)
+        self.bert = BertModel.from_pretrained("bert-base-uncased")
 
-        self.embedding_dim = config.hidden_size  # usually 768
+        # 2. Freeze all of BERT
+        for p in self.bert.parameters():
+            p.requires_grad = False
 
+        # (optional) put BERT in evaluation mode so dropout is disabled
+        self.bert.eval()
+
+        self.embedding_dim = self.bert.config.hidden_size  # 768
+
+    @torch.no_grad()          # <- prevents accidental grad tracking at call-time
     def forward(self, input_ids, attention_mask, **kwargs):
-        """
-        Args:
-            input_ids (Tensor): Token IDs, shape (B, T)
-            attention_mask (Tensor): Attention mask, shape (B, T)
-
-        Returns:
-            Tensor: (B, 768) [CLS] token representation
-        """
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        cls_representation = outputs.last_hidden_state[:, 0, :]  # [CLS] token
-        return cls_representation
+        return outputs.last_hidden_state[:, 0, :]           # [CLS]
+
 
 
 
