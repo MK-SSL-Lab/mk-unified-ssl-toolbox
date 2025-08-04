@@ -6,7 +6,7 @@ from typing import Tuple , Optional
 from transformers import BatchEncoding
 import numpy as np 
 
-from MK_SSL.multimodal.models.modules.backbones import CNN14,AudioResNeXtStem
+from MK_SSL.multimodal.models.modules.backbones import CNN14
 from MK_SSL.multimodal.models.modules.backbones import BERTTextEncoder
 from MK_SSL.multimodal.models.utils import register_method
 from MK_SSL.multimodal.models.modules.losses import CLAPLoss
@@ -62,7 +62,7 @@ class CLAP(nn.Module):
         if audio_encoder is not None:
             self.audio_encoder = audio_encoder
         else:
-            self.audio_encoder = AudioResNeXtStem()
+            self.audio_encoder = CNN14()
         
         if self.text_encoder is not None: 
             self.text_encoder = text_encoder
