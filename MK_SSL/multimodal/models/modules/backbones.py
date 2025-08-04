@@ -99,67 +99,69 @@ class Wav2ClipAudioEncoder(nn.Module):
         return features
 
 
-
 class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, use_groupnorm=True):
         super().__init__()
+        norm1 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
+        norm2 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
+
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.act1 = nn.ReLU()
+        self.norm1 = norm1
+        self.act1 = nn.ReLU(inplace=True)
 
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        self.act2 = nn.ReLU()
+        self.norm2 = norm2
+        self.act2 = nn.ReLU(inplace=True)
 
         self.pool = nn.AvgPool2d(kernel_size=2)
 
     def forward(self, x):
-        x = self.act1(self.bn1(self.conv1(x)))
-        x = self.act2(self.bn2(self.conv2(x)))
+        x = self.conv1(x)
+        if torch.isnan(x).any():
+            raise ValueError("NaN after conv1")
+        x = self.norm1(x)
+        x = self.act1(x)
+
+        x = self.conv2(x)
+        if torch.isnan(x).any():
+            raise ValueError("NaN after conv2")
+        x = self.norm2(x)
+        x = self.act2(x)
+
         x = self.pool(x)
+        if torch.isnan(x).any():
+            raise ValueError("NaN after pool")
         return x
+
+
 
 
 class CNN14(nn.Module):
     """
-    CNN14 architecture from PANNs (Pretrained Audio Neural Networks), without pretrained weights.
-
-    Input:
-        log-mel spectrogram: Tensor of shape (B, 1, F, T), e.g., (B, 1, 64, 1024)
-
-    Output:
-        Feature embedding: Tensor of shape (B, 2048)
+    CNN14 architecture from PANNs, without pretrained weights.
+    Input: log-mel spectrogram (B, 1, F, T)
+    Output: Tensor of shape (B, 2048)
     """
 
-    def __init__(self):
+    def __init__(self, use_groupnorm=False):
         super().__init__()
         self.conv_blocks = nn.Sequential(
-            ConvBlock(1, 64),
-            ConvBlock(64, 128),
-            ConvBlock(128, 256),
-            ConvBlock(256, 512),
-            ConvBlock(512, 1024),
-            ConvBlock(1024, 2048),
+            ConvBlock(1, 64, use_groupnorm),
+            ConvBlock(64, 128, use_groupnorm),
+            ConvBlock(128, 256, use_groupnorm),
+            ConvBlock(256, 512, use_groupnorm),
+            ConvBlock(512, 1024, use_groupnorm),
+            ConvBlock(1024, 2048, use_groupnorm),
         )
-
         self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
 
     def forward(self, x):
-        """
-        Args:
-            x (Tensor): log-mel spectrogram (B, 1, F, T)
-
-        Returns:
-            Tensor: (B, 2048) feature embedding
-        """
-        x = self.conv_blocks(x)  # (B, 2048, F', T')
+        x = self.conv_blocks(x)
         x = self.global_pool(x)  # (B, 2048, 1, 1)
-        x = x.view(x.size(0), -1)
+        x = x.view(x.size(0), -1)  # (B, 2048)
+        if torch.isnan(x).any():
+            raise ValueError("NaN detected in CNN14 output")
         return x
-
-
-
-          # <- we load weights from HF here
 
 class BERTTextEncoder(nn.Module):
     """
@@ -213,16 +215,20 @@ class CLIPTextEncoder(nn.Module):
     This class handles both tokenization and encoding of raw text into embeddings.
     """
 
-    def __init__(self, device: str = "cpu", model_name: str = "RN50", pretrained: str = "openai"):
+    def __init__(self, device: str = "cpu", model_name: str = "RN50", pretrained: str = "openai", freeze: bool = True):
         super().__init__()
         self.device = device
 
         # Load CLIP model and tokenizer (RN50 variant)
         self.model, _, _ = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
         self.model = self.model.to(device)
-        self.model.eval()
 
         self.tokenizer = open_clip.get_tokenizer(model_name)
+        
+        self.model.eval() if freeze else self.model.train()
+        if freeze:
+            for p in self.model.transformer.parameters():
+                p.requires_grad = False
 
     def forward(self, text: list[str]) -> torch.Tensor:
         """
@@ -245,12 +251,16 @@ class CLIPImageEncoder(nn.Module):
     Pre-trained CLIP image encoder (RN50) used in AudioCLIP.
     """
 
-    def __init__(self, device: str = "cpu", model_name: str = "RN50", pretrained: str = "openai"):
+    def __init__(self, device: str = "cpu", model_name: str = "RN50", pretrained: str = "openai", freeze: bool = True):
         super().__init__()
         self.device = device
         self.model, _, _ = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
         self.visual = self.model.visual  # CLIP's visual encoder
-        self.visual.eval()  # keep frozen by default
+
+        self.visual.eval() if freeze else self.visual.train()
+        if freeze:
+            for p in self.visual.parameters():
+                p.requires_grad = False
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """

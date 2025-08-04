@@ -25,13 +25,32 @@ class AudioCLIP(nn.Module):
         temperature_init: float = 0.07,
         text_template: str = "{}",
         device: str = 'cpu',
+        is_trio: bool = False,
         **kwargs
 
     ):
+        
+        """
+        Initializes the AudioCLIP model for tri-modal contrastive pretraining.
+
+        This model supports audio, image, and text encoders. If encoders are not provided,
+        default implementations are used. If `is_trio` is set to True, all encoders are unfrozen
+        to allow joint training, matching the full training setup described in the AudioCLIP paper.
+
+        Args:
+            audio_encoder (Optional[nn.Module]): Custom audio encoder. If None, uses `AudioResNeXtStem`.
+            image_encoder (Optional[nn.Module]): Custom image encoder. If None, uses `CLIPImageEncoder`.
+            text_encoder (Optional[nn.Module]): Custom text encoder. If None, uses `CLIPTextEncoder`.
+            temperature_init (float): Initial value for the contrastive temperature parameter.
+            text_template (str): Format string used for textual prompts. Default is `"{}"`.
+            device (str): Device for encoder models, e.g., `"cpu"` or `"cuda"`.
+            is_trio (bool): If True, enables full tri-modal training (unfreezes all encoders).
+            **kwargs: Additional keyword arguments (currently unused).
+        """
 
         super().__init__()
         self.device = device
-
+        self.is_trio = is_trio
         self.audio_encoder = audio_encoder
         self.image_encoder = image_encoder
         self.text_encoder = text_encoder
@@ -46,12 +65,12 @@ class AudioCLIP(nn.Module):
         if image_encoder is not None:
             self.image_encoder = image_encoder
         else:
-            self.image_encoder = CLIPImageEncoder(device=self.device, model_name = "RN50")
+            self.image_encoder = CLIPImageEncoder(device=self.device, model_name = "RN50" , freeze= (not self.is_trio))
 
         if text_encoder is not None:
             self.text_encoder = text_encoder
         else:
-            self.text_encoder = CLIPTextEncoder(device=self.device)
+            self.text_encoder = CLIPTextEncoder(device=self.device, freeze= (not self.is_trio))
 
         self.audio_clip_loss = AudioCLIPLoss()
 
@@ -92,8 +111,10 @@ class AudioCLIP(nn.Module):
         if audio_input is not None:
             audio_emb = F.normalize(self.audio_encoder(audio_input), dim=-1)
 
+
         if image_input is not None:
             image_emb = F.normalize(self.image_encoder(image_input), dim=-1)
+
 
         if text_input is not None:
             text_emb = F.normalize(self.text_encoder(text_input), dim=-1)

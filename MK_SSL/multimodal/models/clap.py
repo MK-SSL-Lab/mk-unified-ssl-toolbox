@@ -57,12 +57,12 @@ class CLAP(nn.Module):
         # Projection heads for mapping raw encoder outputs into a shared embedding space.
         self.audio_proj = nn.Linear(audio_embedding_dim, projection_dim)
         self.text_proj = nn.Linear(text_embedding_dim, projection_dim)
-        self.temperature = nn.Parameter(torch.tensor(np.log(1 /temperature_init)))
+        self.temperature = nn.Parameter(torch.tensor(temperature_init))
 
         if audio_encoder is not None:
             self.audio_encoder = audio_encoder
         else:
-            self.audio_encoder = CNN14()
+            self.audio_encoder = CNN14(use_groupnorm= True)
         
         if self.text_encoder is not None: 
             self.text_encoder = text_encoder
@@ -139,13 +139,24 @@ class CLAP(nn.Module):
         Returns:
             torch.Tensor: Log-mel spectrogram of shape (B, 1, F, T).
         """
+
         if audio_input.dim() == 3 and audio_input.size(1) == 1:
+
             audio_input = audio_input.squeeze(1)  # (B, L)
             audio_input = self.mel_transform(audio_input)  # (B, F, T)
             # audio_input = self.amplitude_to_db(audio_input).clamp(min=-80.0, max=80.0)  # log scale
             audio_input = self.amplitude_to_db(audio_input) # log scale
             audio_input = audio_input.unsqueeze(1)  # (B, 1, F, T)
         return audio_input    
+
+            audio_input = audio_input.squeeze(1)
+        mel = self.mel_transform(audio_input)
+        mel = torch.nan_to_num(mel, nan=0.0, posinf=1e4, neginf=-1e4)  # just in case
+        mel = self.amplitude_to_db(mel)  # log scale
+        mel = mel.clamp(min=-80.0, max=80.0)
+        return mel.unsqueeze(1)
+    
+
 
 
 register_method(
