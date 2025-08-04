@@ -100,21 +100,9 @@ class CLAP(nn.Module):
                 - similarity_matrix: Scaled cosine similarity matrix of shape (B, B)
         """
 
-
-        print("=== DEBUG START ===")
-
-        print("raw audio_input shape:", audio_input.shape)
-        print("audio_input any NaN:", torch.isnan(audio_input).any())
-
         audio_input = self.mel_spectrogram_transform(audio_input)  # output: (B, 1, F, T)
-
-
-        print("mel-spectrogram shape:", audio_input.shape)
-        print("mel-spectrogram any NaN:", torch.isnan(audio_input).any())
     
         audio_emb = self.audio_encoder(audio_input)    # (B, D_a)
-
-        print("audio_emb any NaN:", torch.isnan(audio_emb).any())
 
         
         if isinstance(text_input, BatchEncoding):
@@ -125,25 +113,13 @@ class CLAP(nn.Module):
             text_input = {"input_ids": text_input, "attention_mask": (text_input != 0).long()}
         else:
             raise TypeError(f"Unsupported text_input type: {type(text_input)}")
-
         
         text_emb = self.text_encoder(**text_input)
-        print("text_emb any NaN:", torch.isnan(text_emb).any())
-
-
-
+        
         audio_proj = F.normalize(self.audio_proj(audio_emb), dim=-1)  # (B, D)
         text_proj = F.normalize(self.text_proj(text_emb), dim=-1)     # (B, D)
 
-
-        print("audio_proj any NaN:", torch.isnan(audio_proj).any())
-        print("text_proj any NaN:", torch.isnan(text_proj).any())
-
-
         similarity_matrix = self.temperature * torch.matmul(text_proj, audio_proj.T)  # (B, B)
-        print("similarity_matrix any NaN:", torch.isnan(similarity_matrix).any())
-
-        print("=== DEBUG END ===")
         return audio_proj, text_proj, similarity_matrix
 
     def criterion(self, similarity_matrix: torch.Tensor,) -> torch.Tensor:
