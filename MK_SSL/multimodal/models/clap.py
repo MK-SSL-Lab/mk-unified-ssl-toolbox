@@ -4,7 +4,6 @@ import torch.nn.functional as F
 import torchaudio
 from typing import Tuple , Optional
 from transformers import BatchEncoding
-import numpy as np 
 
 from MK_SSL.multimodal.models.modules.backbones import CNN14
 from MK_SSL.multimodal.models.modules.backbones import BERTTextEncoder
@@ -32,7 +31,7 @@ class CLAP(nn.Module):
         audio_encoder: Optional[nn.Module] = None,
         text_encoder: Optional[nn.Module] = None,
         projection_dim: int = 1024,
-        temperature_init: float = 0.07,
+        temperature_init: float = 0.007,
         device: str = 'cpu',
         **kwargs
 
@@ -57,7 +56,7 @@ class CLAP(nn.Module):
         # Projection heads for mapping raw encoder outputs into a shared embedding space.
         self.audio_proj = nn.Linear(audio_embedding_dim, projection_dim)
         self.text_proj = nn.Linear(text_embedding_dim, projection_dim)
-        self.temperature = nn.Parameter(torch.tensor(np.log(1 /temperature_init)))
+        self.temperature = nn.Parameter(torch.tensor(temperature_init))
 
         if audio_encoder is not None:
             self.audio_encoder = audio_encoder
@@ -120,9 +119,7 @@ class CLAP(nn.Module):
         audio_proj = F.normalize(self.audio_proj(audio_emb), dim=-1)  # (B, D)
         text_proj = F.normalize(self.text_proj(text_emb), dim=-1)     # (B, D)
 
-
-        logit_scale = self.temperature.exp().clamp(1e-4, 100)
-        similarity_matrix = logit_scale * torch.matmul(text_proj, audio_proj.T)  # (B, B)
+        similarity_matrix = self.temperature * torch.matmul(text_proj, audio_proj.T)  # (B, B)
         return audio_proj, text_proj, similarity_matrix
 
     def criterion(self, similarity_matrix: torch.Tensor,) -> torch.Tensor:

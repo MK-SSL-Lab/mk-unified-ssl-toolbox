@@ -983,7 +983,7 @@ class Trainer:
             collate_fn=self.collator ,
             num_workers=self.num_workers,
         )
-        first_train_batch = next(iter(train_loader))
+        first_train_batch = train_dataset[0]
         if "audio" not in first_train_batch or "image" not in first_train_batch or "text" not in first_train_batch:
             self.logger.warning(
                 "[Dataset Check] Your dataset should return all 'audio', 'image' and 'text'  keys. "
