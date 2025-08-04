@@ -44,11 +44,4 @@ class CLAPLoss(nn.Module):
         loss_audio = -torch.diag(logits_audio).mean()
 
         loss = 0.5 * (loss_text + loss_audio)
-
-
-        if torch.isnan(loss) or torch.isinf(loss):
-            print("********************************Loss is NaN/Inf!")
-            print("Similarity matrix:", similarity_matrix)
-            print("Loss components:", loss_text, loss_audio)
-            raise ValueError("NaN loss")
         return loss
