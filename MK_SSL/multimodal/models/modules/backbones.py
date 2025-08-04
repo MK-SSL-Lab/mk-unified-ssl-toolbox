@@ -163,31 +163,47 @@ class CNN14(nn.Module):
             raise ValueError("NaN detected in CNN14 output")
         return x
 
+
 class BERTTextEncoder(nn.Module):
     """
-    BERTTextEncoder: returns the [CLS] embedding from a frozen BERT-base-uncased.
+    BERTTextEncoder: returns mean-pooled embeddings from a frozen BERT-base-uncased model.
+
+    The mean is computed over non-padding tokens as indicated by the attention mask.
+    This is the correct strategy for contrastive learning tasks like CLAP.
     """
+
     def __init__(self):
         super().__init__()
 
-        # 1. Load the full checkpoint (weights + config)
         self.bert = BertModel.from_pretrained("bert-base-uncased")
 
-        # 2. Freeze all of BERT
+        # Freeze all BERT parameters
         for p in self.bert.parameters():
             p.requires_grad = False
 
-        # (optional) put BERT in evaluation mode so dropout is disabled
         self.bert.eval()
+        self.embedding_dim = self.bert.config.hidden_size  # typically 768
 
-        self.embedding_dim = self.bert.config.hidden_size  # 768
+    @torch.no_grad()
+    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, **kwargs) -> torch.Tensor:
+        """
+        Args:
+            input_ids (Tensor): Token IDs, shape (B, T)
+            attention_mask (Tensor): Attention mask, shape (B, T)
 
-    @torch.no_grad()          # <- prevents accidental grad tracking at call-time
-    def forward(self, input_ids, attention_mask, **kwargs):
+        Returns:
+            Tensor: Mean-pooled sentence embeddings, shape (B, D)
+        """
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        return outputs.last_hidden_state[:, 0, :]           # [CLS]
+        last_hidden = outputs.last_hidden_state  # (B, T, D)
 
+        # Mean pooling over non-padding tokens
+        mask = attention_mask.unsqueeze(-1).expand_as(last_hidden)  # (B, T, D)
+        summed = (last_hidden * mask).sum(dim=1)  # (B, D)
+        counts = mask.sum(dim=1).clamp(min=1e-9)  # (B, 1)
+        mean_pooled = summed / counts  # (B, D)
 
+        return mean_pooled
 
 
 
