@@ -105,32 +105,24 @@ import torch.nn.functional as F
 
 
 class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, use_groupnorm=False):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
-
-        if use_groupnorm:
-            norm1 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
-            norm2 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
-        else:
-            norm1 = nn.BatchNorm2d(out_channels, eps=1e-3, momentum=0.1)
-            norm2 = nn.BatchNorm2d(out_channels, eps=1e-3, momentum=0.1)
-
         self.block = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            norm1,
+            nn.GroupNorm(8, out_channels),  # ← REPLACE BATCHNORM
             nn.ReLU(inplace=True),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            norm2,
+            nn.GroupNorm(8, out_channels),  # ← REPLACE BATCHNORM
             nn.ReLU(inplace=True),
             nn.AvgPool2d(kernel_size=2),
         )
-
-    def forward(self, x):
-        x = self.block(x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN detected in ConvBlock output")
-        return x
-
+    
+        def forward(self, x):
+            x = self.block(x)
+            if torch.isnan(x).any():
+                raise ValueError("NaN detected in ConvBlock output")
+            return x
+    
 
 class CNN14(nn.Module):
     """
