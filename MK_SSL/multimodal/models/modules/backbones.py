@@ -98,32 +98,38 @@ class Wav2ClipAudioEncoder(nn.Module):
         return features
 
 
-
 class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, use_groupnorm=False):
+    def __init__(self, in_channels, out_channels, use_groupnorm=True):
         super().__init__()
+        norm1 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
+        norm2 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
 
-        if use_groupnorm:
-            norm1 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
-            norm2 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
-        else:
-            norm1 = nn.BatchNorm2d(out_channels, eps=1e-3, momentum=0.1)
-            norm2 = nn.BatchNorm2d(out_channels, eps=1e-3, momentum=0.1)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.norm1 = norm1
+        self.act1 = nn.ReLU(inplace=True)
 
-        self.block = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            norm1,
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            norm2,
-            nn.ReLU(inplace=True),
-            nn.AvgPool2d(kernel_size=2),
-        )
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.norm2 = norm2
+        self.act2 = nn.ReLU(inplace=True)
+
+        self.pool = nn.AvgPool2d(kernel_size=2)
 
     def forward(self, x):
-        x = self.block(x)
+        x = self.conv1(x)
         if torch.isnan(x).any():
-            raise ValueError("NaN detected in ConvBlock output")
+            raise ValueError("NaN after conv1")
+        x = self.norm1(x)
+        x = self.act1(x)
+
+        x = self.conv2(x)
+        if torch.isnan(x).any():
+            raise ValueError("NaN after conv2")
+        x = self.norm2(x)
+        x = self.act2(x)
+
+        x = self.pool(x)
+        if torch.isnan(x).any():
+            raise ValueError("NaN after pool")
         return x
 
 
