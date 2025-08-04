@@ -62,7 +62,7 @@ class CLAP(nn.Module):
         if audio_encoder is not None:
             self.audio_encoder = audio_encoder
         else:
-            self.audio_encoder = CNN14()
+            self.audio_encoder = CNN14(use_groupnorm= True)
         
         if self.text_encoder is not None: 
             self.text_encoder = text_encoder
