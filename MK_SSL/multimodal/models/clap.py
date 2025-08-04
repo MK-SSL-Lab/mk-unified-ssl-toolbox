@@ -149,14 +149,6 @@ class CLAP(nn.Module):
             audio_input = audio_input.unsqueeze(1)  # (B, 1, F, T)
         return audio_input    
 
-            audio_input = audio_input.squeeze(1)
-        mel = self.mel_transform(audio_input)
-        mel = torch.nan_to_num(mel, nan=0.0, posinf=1e4, neginf=-1e4)  # just in case
-        mel = self.amplitude_to_db(mel)  # log scale
-        mel = mel.clamp(min=-80.0, max=80.0)
-        return mel.unsqueeze(1)
-    
-
 
 
 register_method(
