@@ -57,7 +57,7 @@ class CLAP(nn.Module):
         # Projection heads for mapping raw encoder outputs into a shared embedding space.
         self.audio_proj = nn.Linear(audio_embedding_dim, projection_dim)
         self.text_proj = nn.Linear(text_embedding_dim, projection_dim)
-        self.temperature = nn.Parameter(torch.tensor(np.log(1 /temperature_init)))
+        self.temperature = nn.Parameter(torch.tensor(temperature_init))
 
         if audio_encoder is not None:
             self.audio_encoder = audio_encoder
