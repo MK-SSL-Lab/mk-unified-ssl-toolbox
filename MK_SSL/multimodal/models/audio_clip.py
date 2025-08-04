@@ -29,6 +29,24 @@ class AudioCLIP(nn.Module):
         **kwargs
 
     ):
+        
+        """
+        Initializes the AudioCLIP model for tri-modal contrastive pretraining.
+
+        This model supports audio, image, and text encoders. If encoders are not provided,
+        default implementations are used. If `is_trio` is set to True, all encoders are unfrozen
+        to allow joint training, matching the full training setup described in the AudioCLIP paper.
+
+        Args:
+            audio_encoder (Optional[nn.Module]): Custom audio encoder. If None, uses `AudioResNeXtStem`.
+            image_encoder (Optional[nn.Module]): Custom image encoder. If None, uses `CLIPImageEncoder`.
+            text_encoder (Optional[nn.Module]): Custom text encoder. If None, uses `CLIPTextEncoder`.
+            temperature_init (float): Initial value for the contrastive temperature parameter.
+            text_template (str): Format string used for textual prompts. Default is `"{}"`.
+            device (str): Device for encoder models, e.g., `"cpu"` or `"cuda"`.
+            is_trio (bool): If True, enables full tri-modal training (unfreezes all encoders).
+            **kwargs: Additional keyword arguments (currently unused).
+        """
 
         super().__init__()
         self.device = device
