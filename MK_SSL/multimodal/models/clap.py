@@ -123,6 +123,7 @@ class CLAP(nn.Module):
         # similarity_matrix = self.temperature * torch.matmul(text_proj, audio_proj.T)  # (B, B)
         # similarity_matrix = similarity_matrix.clamp(-100.0, 100.0)
         similarity_matrix = torch.exp(self.temperature) * torch.matmul(text_proj, audio_proj.T)
+        similarity_matrix = similarity_matrix.clamp(-100.0, 100.0)
 
         return audio_proj, text_proj, similarity_matrix
 
@@ -144,8 +145,8 @@ class CLAP(nn.Module):
 
             audio_input = audio_input.squeeze(1)  # (B, L)
             audio_input = self.mel_transform(audio_input)  # (B, F, T)
-            # audio_input = self.amplitude_to_db(audio_input).clamp(min=-80.0, max=80.0)  # log scale
-            audio_input = self.amplitude_to_db(audio_input) # log scale
+            audio_input = self.amplitude_to_db(audio_input).clamp(min=-80.0, max=80.0)  # log scale
+            # audio_input = self.amplitude_to_db(audio_input) # log scale
             audio_input = audio_input.unsqueeze(1)  # (B, 1, F, T)
         return audio_input    
 
