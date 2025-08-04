@@ -219,16 +219,20 @@ class CLIPTextEncoder(nn.Module):
     This class handles both tokenization and encoding of raw text into embeddings.
     """
 
-    def __init__(self, device: str = "cpu", model_name: str = "RN50", pretrained: str = "openai"):
+    def __init__(self, device: str = "cpu", model_name: str = "RN50", pretrained: str = "openai", freeze: bool = True):
         super().__init__()
         self.device = device
 
         # Load CLIP model and tokenizer (RN50 variant)
         self.model, _, _ = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
         self.model = self.model.to(device)
-        self.model.eval()
 
         self.tokenizer = open_clip.get_tokenizer(model_name)
+        
+        self.model.eval() if freeze else self.model.train()
+        if freeze:
+            for p in self.model.transformer.parameters():
+                p.requires_grad = False
 
     def forward(self, text: list[str]) -> torch.Tensor:
         """
@@ -251,12 +255,16 @@ class CLIPImageEncoder(nn.Module):
     Pre-trained CLIP image encoder (RN50) used in AudioCLIP.
     """
 
-    def __init__(self, device: str = "cpu", model_name: str = "RN50", pretrained: str = "openai"):
+    def __init__(self, device: str = "cpu", model_name: str = "RN50", pretrained: str = "openai", freeze: bool = True):
         super().__init__()
         self.device = device
         self.model, _, _ = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
         self.visual = self.model.visual  # CLIP's visual encoder
-        self.visual.eval()  # keep frozen by default
+
+        self.visual.eval() if freeze else self.visual.train()
+        if freeze:
+            for p in self.visual.parameters():
+                p.requires_grad = False
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
