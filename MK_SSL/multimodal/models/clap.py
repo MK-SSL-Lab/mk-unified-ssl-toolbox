@@ -133,33 +133,58 @@ class CLAP(nn.Module):
     def mel_spectrogram_transform(
         self,
         audio_input: torch.Tensor,
-        target_len: int = 5 * 44_100,  # 5 s @ 44.1 kHz
+        target_len: int = 5 * 44_100,   # 5 s clip
     ) -> torch.Tensor:
-        # -- reshape to (B, L) --------------------------------------------------
-        if audio_input.dim() == 3 and audio_input.size(1) == 1:
+        """
+        Robust CLAP front-end that is safe under torch.cuda.amp.autocast.
+        Returns (B, 1, 64, T) float-16/32 tensor in [-1, 1], with no NaNs/Infs.
+        """
+        # ------------------------------------------------------------------ #
+        # 0. clean & reshape                                                 #
+        # ------------------------------------------------------------------ #
+        if audio_input.dim() == 3 and audio_input.size(1) == 1:  # (B,1,L) → (B,L)
             audio_input = audio_input.squeeze(1)
+
+        # wipe NaNs/Infs that might be in raw wav (rare but worth it)
+        audio_input = torch.nan_to_num(audio_input, nan=0.0, posinf=0.0, neginf=0.0)
 
         B, L = audio_input.shape
 
-        # -- pad / crop to exactly 5 s ------------------------------------------
+        # ------------------------------------------------------------------ #
+        # 1. pad / crop to exactly 5 s                                       #
+        # ------------------------------------------------------------------ #
         if L < target_len:
             audio_input = F.pad(audio_input, (0, target_len - L))
         elif L > target_len:
             start = (
-                torch.randint(0, L - target_len + 1, (1,)).item()
+                torch.randint(0, L - target_len + 1, (), device=audio_input.device).item()
                 if self.training else (L - target_len) // 2
             )
             audio_input = audio_input[:, start : start + target_len]
 
-        # -- power Mel-spectrogram ----------------------------------------------
-        mel = self.mel_transform(audio_input)          # (B, 64, T)
-        mel = self.amplitude_to_db(mel + 1e-10)        # [-80, 0] dB
+        # ------------------------------------------------------------------ #
+        # 2. Mel-spectrogram and dB conversion **in float32**                #
+        #    (disable autocast so we don’t drop to fp16 here)                #
+        # ------------------------------------------------------------------ #
+        with torch.cuda.amp.autocast(enabled=False):
+            wav32 = audio_input.float()                      # (B,L) fp32
+            mel = self.mel_transform(wav32)                  # (B,64,T) power
 
-        # -- normalise to [-1, 1] ------------------------------------------------
-        mel = (mel + 80.0) / 80.0                      # [0, 1]
-        mel = mel * 2.0 - 1.0                          # [-1, 1]
+            # Floor at 1e-5 (-50 dB) *in fp32* so it never underflows.
+            mel = torch.clamp(mel, min=1e-5)
 
-        return mel.unsqueeze(1)                        # (B, 1, 64, T)
+            mel = self.amplitude_to_db(mel)                 # [-80, 0] dB range fp32
+
+            # ------------------------------------------------------------------ #
+            # 3. scale to [-1,1] and cast back to original dtype (amp chosen)     #
+            # ------------------------------------------------------------------ #
+            mel = (mel + 80.0) / 80.0        # [0,1]
+            mel = mel * 2.0 - 1.0            # [-1,1]
+
+        mel = mel.to(audio_input.dtype)      # back to fp16 if autocast asked for it
+        mel = torch.nan_to_num(mel)          # final safety net
+
+        return mel.unsqueeze(1)              # (B,1,64,T)
 
 
 
