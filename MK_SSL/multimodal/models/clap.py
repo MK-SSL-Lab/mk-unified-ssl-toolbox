@@ -123,7 +123,7 @@ class CLAP(nn.Module):
         # similarity_matrix = self.temperature * torch.matmul(text_proj, audio_proj.T)  # (B, B)
         # similarity_matrix = similarity_matrix.clamp(-100.0, 100.0)
         similarity_matrix = torch.exp(self.temperature) * torch.matmul(text_proj, audio_proj.T)
-        similarity_matrix = similarity_matrix.clamp(-100.0, 100.0)
+        # similarity_matrix = similarity_matrix.clamp(-100.0, 100.0)
 
         return audio_proj, text_proj, similarity_matrix
 
