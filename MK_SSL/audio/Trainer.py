@@ -1154,7 +1154,6 @@ class Trainer:
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     # Forward - returns lists for each masked-clone
                     decoded, target, cls_tok, teacher_avg = self.model(audio)
-                    print(f"[DEBUG] {decoded}, {target}, {cls_tok}, {teacher_avg}")
                     # UFO loss per clone → mean
                     clone_losses = [
                         self.loss(d, t, c, teacher_avg)
@@ -1173,7 +1172,6 @@ class Trainer:
 
                 # Logs
                 running_loss += loss.item()
-                print(f"[DEBUG] {loss},\n{clone_losses},\n{self.loss.__class__.__name__}")
                 pbar.set_postfix({"loss": loss.item()})
                 global_step = epoch * len(train_loader) + batch_idx
                 if self.wandb_logger.is_active:
