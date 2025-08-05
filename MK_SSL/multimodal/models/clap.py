@@ -123,7 +123,7 @@ class CLAP(nn.Module):
         # similarity_matrix = self.temperature * torch.matmul(text_proj, audio_proj.T)  # (B, B)
         # similarity_matrix = similarity_matrix.clamp(-100.0, 100.0)
         similarity_matrix = torch.exp(self.temperature) * torch.matmul(text_proj, audio_proj.T)
-        similarity_matrix = similarity_matrix.clamp(-100.0, 100.0)
+        # similarity_matrix = similarity_matrix.clamp(-100.0, 100.0)
 
         return audio_proj, text_proj, similarity_matrix
 
@@ -133,59 +133,33 @@ class CLAP(nn.Module):
     def mel_spectrogram_transform(
         self,
         audio_input: torch.Tensor,
-        target_len: int = 5 * 44_100,  # 5 s @ 44.1 kHz  → 220 500 samples
+        target_len: int = 5 * 44_100,  # 5 s @ 44.1 kHz
     ) -> torch.Tensor:
-        """
-        Convert raw waveform → log-Mel spectrogram ready for CNN14 / CLAP.
-
-        Processing pipeline (CLAP):
-            • mono 44.1 kHz, 5-second excerpts (pad with zeros or random crop)
-            • Mel-spectrogram: n_fft=1024, hop=320, n_mels=64, f_min=50 Hz,
-              f_max=8 kHz, power scale
-            • 10 · log10 power ⇢ dB, 80 dB dynamic range
-            • Linear rescale to [-1, 1]
-
-        Args
-        ----
-        audio_input : Tensor
-            Shape (B, 1, L) or (B, L) with values in [-1, 1].
-        target_len : int, optional
-            Number of samples the model expects (default: 220 500).
-
-        Returns
-        -------
-        Tensor
-            Log-Mel tensor of shape (B, 1, 64, T) normalised to [-1, 1].
-        """
-        # (B, L)
+        # -- reshape to (B, L) --------------------------------------------------
         if audio_input.dim() == 3 and audio_input.size(1) == 1:
             audio_input = audio_input.squeeze(1)
 
         B, L = audio_input.shape
 
-        # ---- Pad or crop to exactly 5 s ------------------------------------
+        # -- pad / crop to exactly 5 s ------------------------------------------
         if L < target_len:
-            pad = target_len - L
-            audio_input = F.pad(audio_input, (0, pad))
+            audio_input = F.pad(audio_input, (0, target_len - L))
         elif L > target_len:
             start = (
                 torch.randint(0, L - target_len + 1, (1,)).item()
-                if self.training
-                else (L - target_len) // 2
+                if self.training else (L - target_len) // 2
             )
             audio_input = audio_input[:, start : start + target_len]
 
-        # ---- Power Mel-spectrogram ----------------------------------------
-        mel = self.mel_transform(audio_input)  # (B, 64, T)
+        # -- power Mel-spectrogram ----------------------------------------------
+        mel = self.mel_transform(audio_input)          # (B, 64, T)
+        mel = self.amplitude_to_db(mel + 1e-10)        # [-80, 0] dB
 
-        # Numerical floor avoids log(0); 80 dB dynamic range
-        mel = self.amplitude_to_db(mel + 1e-10, top_db=80.0)  # [-80, 0]
+        # -- normalise to [-1, 1] ------------------------------------------------
+        mel = (mel + 80.0) / 80.0                      # [0, 1]
+        mel = mel * 2.0 - 1.0                          # [-1, 1]
 
-        # ---- Normalise to [-1, 1] -----------------------------------------
-        mel = (mel + 80.0) / 80.0          # [0, 1]
-        mel = mel * 2.0 - 1.0              # [-1, 1]
-
-        return mel.unsqueeze(1)             # (B, 1, 64, T)
+        return mel.unsqueeze(1)                        # (B, 1, 64, T)
 
 
 
