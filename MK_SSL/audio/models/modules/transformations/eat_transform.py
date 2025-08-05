@@ -3,7 +3,6 @@ from torch import nn
 import torchaudio.transforms as T
 
 
-
 class LogMelSpectrogramTransform(nn.Module):
     """
     Converts a mono waveform (B, 1, T) to a normalized log-Mel spectrogram.
@@ -22,7 +21,6 @@ class LogMelSpectrogramTransform(nn.Module):
             n_mels=128,
             window_fn=torch.hann_window,
         )
-        self.db = T.AmplitudeToDB()
 
     def forward(self, wav: torch.Tensor) -> torch.Tensor:
         """
@@ -35,15 +33,17 @@ class LogMelSpectrogramTransform(nn.Module):
         if wav.ndim != 3 or wav.size(1) != 1:
             raise ValueError(f"Expected input shape (B, 1, T); got {tuple(wav.shape)}")
 
-        wav = wav.squeeze(1)                            # (B, T)
-        mel = self.mel(wav)                             # (B, 128, T')
-        mel = torch.clamp(mel, min=1e-10)               # prevent log(0)
-
-        logmel = self.db(mel)                           # (B, 128, T')
+        wav = wav.squeeze(1)                           # (B, T)
+        mel = self.mel(wav) + 1e-10                    # (B, 128, T') + epsilon
+        logmel = torch.log10(mel)                      # safer than AmplitudeToDB
+        logmel = torch.clamp(logmel, min=-10, max=10)  # optional: limit range
 
         # normalize per-sample
         mean = logmel.mean(dim=(-2, -1), keepdim=True)
-        std = logmel.std(dim=(-2, -1), keepdim=True) + 1e-5
-        logmel = (logmel - mean) / std
+        std = logmel.std(dim=(-2, -1), keepdim=True)
+        std = torch.where(std == 0, torch.tensor(1e-5, device=std.device), std)
 
-        return logmel.unsqueeze(1)                      # (B, 1, 128, T')
+        logmel = (logmel - mean) / std
+        logmel = torch.nan_to_num(logmel, nan=0.0, posinf=0.0, neginf=0.0)
+
+        return logmel.unsqueeze(1)                     # (B, 1, 128, T')
