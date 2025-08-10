@@ -88,6 +88,12 @@ class EAT(nn.Module):
             teacher_avg:  average of teacher layers, ``(B, P, E)``
         """
         logmel = self.logmel_transform(wav)
+        if torch.isnan(logmel).any():
+            raise ValueError("NaN in logmel_transform output")
+
+        if (logmel.abs() > 1e4).any():
+            raise ValueError("logmel values out of expected range")
+
         patches, (F_g, T_g) = self.feature_extractor(logmel)
 
         T, F = T_g, F_g
@@ -96,6 +102,9 @@ class EAT(nn.Module):
         with torch.no_grad():
             teacher_layers = self.teacher_encoder(patches)
             teacher_avg = torch.stack(teacher_layers).mean(dim=0)
+            if torch.isnan(teacher_avg).any():
+                raise ValueError("NaN in teacher encoder output")
+
 
         bh, bw = self.block_size
         seq_len = T * F
@@ -115,6 +124,9 @@ class EAT(nn.Module):
             cls = self.cls_token.expand(B, -1, -1)
             student_inp = torch.cat([cls, x_vis], dim=1)
             student_out = self.student_encoder(student_inp)
+            if torch.isnan(student_out).any():
+                raise ValueError("NaN in student encoder output")
+
             student_cls = student_out[:, 0]
             student_tok = student_out[:, 1:]
 
