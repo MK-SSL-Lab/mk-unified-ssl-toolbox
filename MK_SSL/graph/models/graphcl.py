@@ -4,7 +4,7 @@ from typing import Optional, Tuple, Union, Any
 
 from MK_SSL.graph.models.modules.heads import GraphProjectionHead
 from MK_SSL.graph.models.modules.backbones import GNNGraphEncoder
-from MK_SSL.graph.models.modules.losses import InfoNCELoss
+from MK_SSL.graph.models.modules.losses import NTXent_loss
 from MK_SSL.graph.models.modules.transformations import GraphCLGraphTransform
 from MK_SSL.graph.models.utils.registry import register_method
 
@@ -131,7 +131,7 @@ class GraphCL(nn.Module):
 register_method(
     name="graphcl",
     model_cls=GraphCL,
-    loss=InfoNCELoss,  # should implement NT-Xent (cosine sim + temperature) on projected z
+    loss=NTXent_loss,  # should implement NT-Xent (cosine sim + temperature) on projected z
     transformation=GraphCLGraphTransform,  # implement NodeDrop / EdgePerturb / AttrMask / Subgraph
     default_params={
         # Paper-aligned augmentation defaults (set inside the transform implementation).
