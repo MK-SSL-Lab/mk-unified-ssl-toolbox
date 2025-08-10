@@ -35,9 +35,6 @@ class ProjectionHead(nn.Module):
         return self.layers(x)
 
 
-import torch.nn as nn
-from typing import List, Tuple, Optional
-
 
 class COLAProjectionHead(ProjectionHead):
     """
