@@ -313,28 +313,15 @@ class Trainer:
         start_epoch=1,
         use_embedding_logger: bool = True,
         logger_loader: Optional[DataLoader] = None,
+        warmup_ratio: float = 0.05,
+        max_grad_norm: float = 1.0,
     ):
         """
         Trains the MAE (Masked Autoencoder) model aligned with the official implementation.
-
-        Args:
-            train_loader: PyTorch DataLoader with training data.
-            optimizer: Optimizer instance.
-            epochs: Number of training epochs.
-            start_epoch: Epoch to resume training from.
-            use_embedding_logger (bool): Whether to enable embedding visualization.
-            logger_loader (Optional[DataLoader]): Labeled image dataloader for visualization only.
         """
         self.model.train()
 
-        # --- Updated patchify function ---
         def patchify(imgs, patch_size):
-            """
-            Args:
-                imgs (Tensor): (B, C, H, W)
-            Returns:
-                patches (Tensor): (B, N, patch_dim)
-            """
             B, C, H, W = imgs.shape
             p = patch_size
             assert H == W and H % p == 0
@@ -344,11 +331,20 @@ class Trainer:
 
         patch_size = self.model.patch_embed.patch_size
 
-        # === Step 0: Log pre-training embeddings ===
+        total_steps = epochs * len(train_loader)
+        warmup_steps = max(1, int(warmup_ratio * total_steps))
+        global_step = (start_epoch - 1) * len(train_loader)
+
+        def lr_schedule(step: int):
+            if step < warmup_steps:
+                return float(step) / float(max(1, warmup_steps))
+            progress = (step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+            return 0.5 * (1.0 + torch.cos(torch.tensor(progress * 3.1415926535))).item()
+
+        base_lr = optimizer.param_groups[0]["lr"]
+
         if use_embedding_logger:
-            assert (
-                logger_loader is not None
-            ), "logger_loader must be provided when use_embedding_logger=True"
+            assert logger_loader is not None
             embedding_log_dir = os.path.join(self.checkpoint_path, "embedding_logs")
             embedding_logger = EmbeddingLogger(
                 log_dir=embedding_log_dir,
@@ -357,11 +353,9 @@ class Trainer:
                 log_interval=1,
             )
             self.logger.info(f"Embedding logger initialized at {embedding_log_dir}")
-
             self.logger.info("[MAE - Step 0] Logging pre-training embeddings...")
             backbone = MAEBackbone(self.model).to(self.device)
             backbone.eval()
-
             all_embeddings, all_labels = [], []
             with torch.no_grad():
                 for images, labels in tqdm(logger_loader, desc="EmbeddingLogger Step 0"):
@@ -370,38 +364,37 @@ class Trainer:
                     embeddings = backbone(images)
                     all_embeddings.append(embeddings)
                     all_labels.append(labels)
-
             embeddings = torch.cat(all_embeddings, dim=0)
             labels = torch.cat(all_labels, dim=0)
             embedding_logger.log_step(step=0, embeddings=embeddings, labels=labels)
             self.logger.info("[MAE - Step 0] Pre-training embeddings logged.")
             self.model.train()
 
-        # === Training Loop ===
-        for epoch in range(start_epoch-1, epochs):
+        for epoch in range(start_epoch - 1, epochs):
             running_loss = 0.0
-            pbar = tqdm(
-                train_loader,
-                desc=f"MAE Training [Epoch {epoch+1}/{epochs}]",
-            )
+            pbar = tqdm(train_loader, desc=f"MAE Training [Epoch {epoch+1}/{epochs}]")
 
             for step, (images, _) in enumerate(pbar):
                 images = images.to(self.device)
 
+                for pg in optimizer.param_groups:
+                    pg["lr"] = base_lr * lr_schedule(global_step)
+
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
-                    target = patchify(images, patch_size)  # (B, N, patch_dim)
-                    pred, mask = self.model(images)       # pred: (B, N, patch_dim), mask: (B, N)
+                    target = patchify(images, patch_size)
+                    pred, mask = self.model(images)
                     loss = self.loss(pred, target, mask)
 
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
                 self.scaler.scale(loss).backward()
+                self.scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
                 self.scaler.step(optimizer)
                 self.scaler.update()
 
                 running_loss += loss.item()
-                pbar.set_postfix({"loss": loss.item()})
-
-                global_step = epoch * len(train_loader) + step
+                pbar.set_postfix({"loss": loss.item(), "lr": optimizer.param_groups[0]["lr"]})
+                global_step += 1
 
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log(
@@ -413,24 +406,22 @@ class Trainer:
                     )
 
             epoch_loss = running_loss / len(train_loader)
+            epoch_step = (epoch + 1) * len(train_loader)
 
-            epoch_step = (epoch + 1) * len(train_loader)        
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
                     {
                         f"{self.method.upper()}/Train/Epoch_Loss": epoch_loss,
                         f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
-                        "epoch": epoch + 1,  
+                        "epoch": epoch + 1,
                     },
                     step=epoch_step,
                 )
 
-            # === Embedding logger eval on external labeled image dataset ===
             if use_embedding_logger:
                 self.logger.info(f"[MAE - Epoch {epoch+1}] Logging embeddings...")
                 backbone = MAEBackbone(self.model).to(self.device)
                 backbone.eval()
-
                 all_embeddings, all_labels = [], []
                 with torch.no_grad():
                     for images, labels in tqdm(logger_loader, desc=f"EmbeddingLogger Epoch {epoch+1}]"):
@@ -439,14 +430,12 @@ class Trainer:
                         embeddings = backbone(images)
                         all_embeddings.append(embeddings)
                         all_labels.append(labels)
-
                 embeddings = torch.cat(all_embeddings, dim=0)
                 labels = torch.cat(all_labels, dim=0)
                 embedding_logger.log_step(step=epoch + 1, embeddings=embeddings, labels=labels)
                 self.logger.info(f"[MAE - Epoch {epoch+1}] Embeddings logged.")
                 self.model.train()
 
-            # === Save Checkpoint ===
             if (epoch + 1) % self.checkpoint_interval == 0:
                 ckpt_path = os.path.join(
                     self.checkpoint_path,
@@ -461,20 +450,14 @@ class Trainer:
                         metadata={"epoch": epoch + 1, "loss": epoch_loss},
                     )
 
-        # === Final animated embedding plot ===
         if use_embedding_logger:
             self.logger.info("Generating final embedding animation...")
             animation_path = embedding_logger.plot_all()
             self.logger.info(f"Embedding animation saved at: {animation_path}")
-
             if self.wandb_logger.is_active:
                 self.wandb_logger.log(
                     {"media/embedding_animation": wandb.Html(animation_path)},
-                    step=(
-                        max(embedding_logger.steps)
-                        if embedding_logger.steps
-                        else epochs
-                    ),
+                    step=(max(embedding_logger.steps) if embedding_logger.steps else epochs),
                 )
                 self.logger.info("Embedding animation logged to Weights & Biases.")
 

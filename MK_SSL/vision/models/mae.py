@@ -11,14 +11,6 @@ from MK_SSL.vision.models.utils.registry import register_method
 class MAE(nn.Module):
     """
     Masked Autoencoder (MAE) following He et al. (2021).
-
-    Attributes:
-        patch_embed (PatchEmbed): Converts image into patch embeddings.
-        mask_ratio (float): Ratio of patches to mask.
-        encoder (nn.Module): Transformer encoder (custom backbone or default MAEEncoder).
-        decoder (MAEDecoder): Lightweight transformer decoder.
-        pos_embed_enc (PosEmbed2D): Sine-cosine positional embeddings for encoder input.
-        pos_embed_dec (PosEmbed2D): Sine-cosine positional embeddings for decoder input.
     """
 
     def __init__(
@@ -37,31 +29,10 @@ class MAE(nn.Module):
         backbone: Optional[nn.Module] = None,
         **kwargs,
     ) -> None:
-        """
-        Initialize the MAE model.
-
-        Args:
-            image_size (int): Input image size (assumes square input).
-            patch_size (int): Patch size for patch embedding.
-            in_chans (int): Number of input channels (e.g., 3 for RGB).
-            embed_dim (int): Encoder embedding dimension (ignored if backbone is provided).
-            depth (int): Number of transformer blocks in encoder (ignored if backbone is provided).
-            num_heads (int): Number of attention heads in encoder (ignored if backbone is provided).
-            decoder_dim (int): Decoder embedding dimension.
-            decoder_depth (int): Number of transformer blocks in decoder.
-            decoder_heads (int): Number of attention heads in decoder.
-            mlp_ratio (float): Expansion ratio in MLP of transformer blocks.
-            mask_ratio (float): Ratio of patches to randomly mask.
-            backbone (Optional[nn.Module]): Custom encoder backbone to replace default MAEEncoder.
-        """
         super().__init__()
         self.patch_embed = PatchEmbed(image_size, patch_size, in_chans, embed_dim)
         self.mask_ratio = mask_ratio
-
-        # Encoder: Either a user-specified backbone or the default MAEEncoder
         self.encoder = backbone or MAEEncoder(embed_dim, depth, num_heads, mlp_ratio)
-
-        # Decoder: Lightweight transformer (all patches + mask tokens)
         self.decoder = MAEDecoder(
             embed_dim,
             decoder_dim,
@@ -71,8 +42,6 @@ class MAE(nn.Module):
             patch_size,
             in_chans,
         )
-
-        # Positional Embeddings
         self.pos_embed_enc = PosEmbed2D(embed_dim, self.patch_embed.grid_size)
         self.pos_embed_dec = PosEmbed2D(decoder_dim, self.patch_embed.grid_size)
         self.decoder.pos_embed = self.pos_embed_dec.pos_embed
@@ -80,58 +49,27 @@ class MAE(nn.Module):
     def random_masking(
         self, x: torch.Tensor, mask_ratio: float
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Apply random masking to patch embeddings.
-
-        Args:
-            x (torch.Tensor): Patch embeddings of shape (B, N, D).
-            mask_ratio (float): Ratio of patches to mask.
-
-        Returns:
-            Tuple:
-                - x_masked (torch.Tensor): Visible (unmasked) tokens.
-                - mask (torch.Tensor): Mask indicator (1=masked, 0=visible).
-                - ids_restore (torch.Tensor): Indices to restore original order.
-        """
         B, N, D = x.shape
         len_keep = int(N * (1 - mask_ratio))
-
-        noise = torch.rand(B, N, device=x.device)  # [0,1) noise per token
+        noise = torch.rand(B, N, device=x.device)
         ids_shuffle = torch.argsort(noise, dim=1)
         ids_restore = torch.argsort(ids_shuffle, dim=1)
-
         ids_keep = ids_shuffle[:, :len_keep]
-        x_masked = torch.gather(
-            x, dim=1, index=ids_keep.unsqueeze(-1).expand(-1, -1, D)
-        )
-
+        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).expand(-1, -1, D))
         mask = torch.ones([B, N], device=x.device)
         mask[:, :len_keep] = 0
         mask = torch.gather(mask, dim=1, index=ids_restore)
         return x_masked, mask, ids_restore
 
     def forward(self, imgs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Forward pass of MAE.
-
-        Args:
-            imgs (torch.Tensor): Input image tensor of shape (B, C, H, W).
-
-        Returns:
-            Tuple:
-                - pred (torch.Tensor): Predicted patches, shape (B, N, patch_dim).
-                - mask (torch.Tensor): Binary mask, shape (B, N).
-        """
         x = self.patch_embed(imgs)
         x = self.pos_embed_enc(x)
-
         x, mask, ids_restore = self.random_masking(x, self.mask_ratio)
         x = self.encoder(x)
         pred = self.decoder(x, ids_restore)
         return pred, mask
 
 
-# ---- Register MAE Method ----
 register_method(
     name="mae",
     model_cls=MAE,
