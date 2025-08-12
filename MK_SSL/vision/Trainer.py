@@ -383,7 +383,6 @@ class Trainer:
             pbar = tqdm(
                 train_loader,
                 desc=f"MAE Training [Epoch {epoch+1}/{epochs}]",
-                leave=False,
             )
 
             for step, (images, _) in enumerate(pbar):
