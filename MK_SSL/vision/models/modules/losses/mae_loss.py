@@ -5,7 +5,7 @@ class MAELoss(nn.Module):
     """
     Mean squared error computed only on masked patches.
     """
-    def __init__(self, normalize_target: bool = False):
+    def __init__(self, normalize_target: bool = True):
         super().__init__()
         self.normalize_target = normalize_target
 
