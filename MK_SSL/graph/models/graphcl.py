@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Union, Any
 
-from MK_SSL.graph.models.modules.heads import GraphProjectionHead
+from MK_SSL.graph.models.modules.heads import GraphCLProjectionHead
 from MK_SSL.graph.models.modules.backbones import GNNGraphEncoder
-from MK_SSL.graph.models.modules.losses import NTXent_loss
+from MK_SSL.graph.models.modules.losses.ntxent_loss import NTXentGraphLoss
 from MK_SSL.graph.models.modules.transformations import GraphCLGraphTransform
 from MK_SSL.graph.models.utils.registry import register_method
 
@@ -13,50 +13,18 @@ class GraphCL(nn.Module):
     """Graph Contrastive Learning (GraphCL).
 
     Based on:
-        You, Y., Chen, T., Sui, Y., Chen, T., Wang, Z., & Shen, Y. (2020).
-        Graph Contrastive Learning with Augmentations. NeurIPS.
+        You et al., "Graph Contrastive Learning with Augmentations", NeurIPS 2020.
 
-    This model consumes **two independently augmented views** of each input graph
-    and learns graph-level embeddings by maximizing agreement between paired views
-    via an NT-Xent (InfoNCE) objective computed on a projection space.
-
-    Workflow:
-        1) For each graph, sample two augmentations (node dropping, edge
-           perturbation, attribute masking, subgraph) to obtain two correlated views.
-        2) Encode each view with a **shared** GNN backbone to produce graph features.
-        3) Project features with a **two-layer MLP** head to the contrastive space.
-        4) Apply InfoNCE (NT-Xent) with in-batch negatives on the projected embeddings.
-
-    Attributes:
-        feature_size: Output dimension of the backbone encoder features.
-        projection_dim: Output dimension of the projection head.
-        projection_num_layers: Number of layers in the projection head
-            (defaults to 2 to match the paper).
-        projection_batch_norm: Whether to apply normalization inside the projection head.
-        backbone: Shared GNN encoder that outputs graph-level features.
-        projection_head: MLP mapping features to the contrastive space.
+    Two independently augmented views per graph → shared encoder → 2-layer MLP head →
+    NT-Xent on projected embeddings.
 
     Args:
-        feature_size: Dimension of the backbone output features. Defaults to 512.
-        backbone: Graph feature extractor. If ``None``, ``GNNGraphEncoder`` is used.
-        projection_dim: Projection head output dimension. Defaults to 128.
-        projection_num_layers: Number of layers in the projection head. Defaults to 2.
-        projection_batch_norm: If ``True``, applies normalization inside the projection head.
-            Defaults to True.
-        **kwargs: Extra keyword arguments forwarded to ``GNNGraphEncoder`` when
-            ``backbone`` is ``None`` (e.g., number of layers, hidden size, pooling).
-
-    Inputs:
-        x0: First augmented graph batch (e.g., PyG ``Batch`` or DGLGraph``).
-        x1: Second augmented graph batch of the same type as ``x0`` (optional).
-
-    Returns:
-        torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
-            If ``x1`` is provided, returns ``(z0, z1)`` where each is shape ``(B, projection_dim)``.
-            Otherwise returns ``z0`` only.
-
-    Raises:
-        ValueError: If ``x0`` is missing or if ``x1`` is provided with an incompatible type.
+        feature_size: Output dimension of the backbone encoder features.
+        backbone: Optional external encoder. If None, uses GNNGraphEncoder.
+        projection_dim: Output projection dimension.
+        projection_num_layers: Number of layers in the projection head (paper: 2).
+        projection_batch_norm: If True, apply norm layers inside the projection head.
+        **kwargs: Forwarded to GNNGraphEncoder when backbone is None (must include in_dim).
     """
 
     def __init__(
@@ -74,13 +42,18 @@ class GraphCL(nn.Module):
         self.projection_num_layers = projection_num_layers
         self.projection_batch_norm = projection_batch_norm
 
-        # Shared GNN encoder (architecture-agnostic as per paper).
-        self.backbone = backbone if backbone is not None else GNNGraphEncoder(
-            out_dim=self.feature_size, **kwargs
-        )
+        # Shared GNN encoder (architecture-agnostic per paper).
+        if backbone is None:
+            if "in_dim" not in kwargs:
+                raise ValueError(
+                    "GNNGraphEncoder requires `in_dim`. Pass it via GraphCL(..., in_dim=..., ...)"
+                )
+            self.backbone = GNNGraphEncoder(out_dim=self.feature_size, **kwargs)
+        else:
+            self.backbone = backbone
 
         # 2-layer MLP projection head by default (paper-aligned).
-        self.projection_head = GraphProjectionHead(
+        self.projection_head = GraphCLProjectionHead(
             input_dim=self.feature_size,
             hidden_dim=self.feature_size,
             output_dim=self.projection_dim,
@@ -88,54 +61,70 @@ class GraphCL(nn.Module):
             batch_norm=self.projection_batch_norm,
         )
 
+    def _encode_view(self, view: Any) -> torch.Tensor:
+        """Encodes a single augmented view and applies the projection head.
+
+        Accepts:
+            - PyG Batch/Data with attributes (x, edge_index, batch)
+            - Tuple (x, edge_index, batch)
+            - Already pooled 2D features (B, D==feature_size)
+
+        Returns:
+            z: Projected embeddings with shape (B, projection_dim).
+        """
+        # PyG Batch/Data path
+        if hasattr(view, "x") and hasattr(view, "edge_index") and hasattr(view, "batch"):
+            h = self.backbone(view.x, view.edge_index, view.batch)
+        # Explicit triplet (x, edge_index, batch)
+        elif isinstance(view, (tuple, list)) and len(view) == 3:
+            x, edge_index, batch = view
+            h = self.backbone(x, edge_index, batch)
+        # Already graph-level features (B, D)
+        elif isinstance(view, torch.Tensor) and view.dim() == 2 and view.size(1) == self.feature_size:
+            h = view
+        else:
+            # Last-resort: attempt calling backbone(view) for custom encoders
+            h = self.backbone(view)
+
+        if h.dim() > 2:
+            h = h.view(h.size(0), -1)
+        z = self.projection_head(h)
+        return z
+
     def forward(
         self,
         x0: Union[torch.Tensor, Any],
         x1: Optional[Union[torch.Tensor, Any]] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """Forward pass for GraphCL.
+        """Forward pass.
 
         Args:
-            x0: First augmented graph batch.
-            x1: Second augmented graph batch. If ``None``, returns a single embedding.
+            x0: First augmented graph batch/view.
+            x1: Second augmented graph batch/view. If None, returns a single embedding.
 
         Returns:
-            Projected embedding(s) suitable for InfoNCE.
-
-        Raises:
-            ValueError: If ``x0`` is None or ``x1`` type mismatches ``x0``.
+            z0 or (z0, z1): Projected embedding(s), shape (B, projection_dim).
         """
         if x0 is None:
             raise ValueError("x0 must be provided for GraphCL.forward")
-        if (x1 is not None) and (type(x1) is not type(x0)):
+        if (x1 is not None) and (type(x1) is not type(x0)) and not (
+            hasattr(x0, "x") and hasattr(x1, "x")
+        ):
             raise ValueError(f"x1 must have the same type as x0 (got {type(x0)} vs {type(x1)})")
 
-        # Encode first view (graph-level representation).
-        h0 = self.backbone(x0)  # expected (B, D)
-        if h0.dim() > 2:
-            h0 = h0.view(h0.size(0), -1)
-        z0 = self.projection_head(h0)
-
+        z0 = self._encode_view(x0)
         if x1 is None:
             return z0
-
-        # Encode second view with the *shared* encoder.
-        h1 = self.backbone(x1)  # expected (B, D)
-        if h1.dim() > 2:
-            h1 = h1.view(h1.size(0), -1)
-        z1 = self.projection_head(h1)
-
+        z1 = self._encode_view(x1)
         return z0, z1
 
 
 register_method(
     name="graphcl",
     model_cls=GraphCL,
-    loss=NTXent_loss,  # should implement NT-Xent (cosine sim + temperature) on projected z
-    transformation=GraphCLGraphTransform,  # implement NodeDrop / EdgePerturb / AttrMask / Subgraph
+    loss=NTXentGraphLoss,               # NT-Xent on projected z
+    transformation=GraphCLGraphTransform,  # NodeDrop / EdgePerturb / AttrMask / Subgraph
     default_params={
-        # Paper-aligned augmentation defaults (set inside the transform implementation).
-        # Listed here for clarity/documentation:
         "augmentation_defaults": {
             "node_drop_ratio": 0.2,
             "edge_perturb_ratio": 0.2,

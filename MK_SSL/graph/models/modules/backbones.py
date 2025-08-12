@@ -4,7 +4,13 @@ from typing import Optional, List, Literal, Union, Tuple
 
 # Optional PyG imports (required for actual execution)
 try:
-    from torch_geometric.nn import GINConv, GCNConv, global_mean_pool, global_add_pool, global_max_pool
+    from torch_geometric.nn import (
+        GINConv,
+        GCNConv,
+        global_mean_pool,
+        global_add_pool,
+        global_max_pool,
+    )
     PYG_AVAILABLE = True
 except Exception:  # pragma: no cover
     GINConv = GCNConv = global_mean_pool = global_add_pool = global_max_pool = None
@@ -16,12 +22,13 @@ class MLP(nn.Module):
     Simple MLP used inside GIN convolutions and as pre/post-encoders.
 
     Args:
-        dims (List[int]): Layer dimensions including input and output (e.g., [in, h, out]).
-        use_norm (bool): If True, applies LayerNorm after each Linear.
-        activation (nn.Module): Non-linearity to apply between Linear and Norm.
-        dropout (float): Dropout probability applied after activation.
-        last_activation (bool): If True, also apply activation (and norm/dropout) after the last layer.
+        dims: Layer dims including input and output (e.g., [in, h, out]).
+        use_norm: If True, applies LayerNorm after each Linear.
+        activation: Non-linearity to insert after Linear/Norm.
+        dropout: Dropout probability after activation.
+        last_activation: If True, also applies activation/norm/dropout after the last layer.
     """
+
     def __init__(
         self,
         dims: List[int],
@@ -33,15 +40,22 @@ class MLP(nn.Module):
         super().__init__()
         layers: List[nn.Module] = []
         L = len(dims) - 1
+
+        def _clone_activation_like(src: nn.Module) -> nn.Module:
+            cls = src.__class__
+            kwargs_ = {}
+            if hasattr(src, "inplace"):
+                kwargs_["inplace"] = bool(getattr(src, "inplace"))
+            return cls(**kwargs_)
+
         for i in range(L):
             in_dim, out_dim = dims[i], dims[i + 1]
             layers.append(nn.Linear(in_dim, out_dim, bias=not use_norm))
             if use_norm:
                 layers.append(nn.LayerNorm(out_dim))
-            # Apply activation/dropout on all hidden layers; optionally also on last
             if i < L - 1 or last_activation:
                 if activation is not None:
-                    layers.append(activation.__class__(**getattr(activation, "__dict__", {})))
+                    layers.append(_clone_activation_like(activation))
                 if dropout > 0.0:
                     layers.append(nn.Dropout(dropout))
         self.net = nn.Sequential(*layers)
@@ -52,37 +66,22 @@ class MLP(nn.Module):
 
 class GNNGraphEncoder(nn.Module):
     """
-    Default GraphCL backbone (paper-aligned): a shared GNN encoder producing graph-level features.
-
-    Paper notes:
-        - The framework does **not** constrain the GNN architecture.
-        - They use standard backbones: GCN for semi-supervised experiments, GIN for
-          unsupervised/transfer settings. This encoder lets you pick either, with GIN as default.
-
-    Workflow:
-        x, edge_index, batch → [GNN stack] → node embeddings → global READOUT (pool) → graph feature h.
+    Default GraphCL backbone: shared GNN encoder producing graph-level features.
 
     Args:
-        in_dim (int):      Node feature dimension.
-        hidden_dim (int):  Hidden size for GNN layers.
-        out_dim (int):     Output feature dimension (graph-level embedding).
-        num_layers (int):  Number of GNN layers (≥ 2 recommended).
-        conv_type (Literal["gin","gcn"]): Convolution type. Defaults to "gin".
-        readout (Literal["mean","sum","max"]): Graph READOUT function. Defaults to "mean".
-        dropout (float):   Dropout after each layer.
-        use_norm (bool):   Apply LayerNorm after each layer output.
-        pre_mlp (Optional[List[int]]): Optional pre-MLP dims (e.g., [in_dim, hidden_dim]).
-        post_mlp (Optional[List[int]]): Optional post-MLP dims (e.g., [hidden_dim, out_dim]).
-        activation (nn.Module): Non-linearity (default: ReLU).
-
-    Inputs:
-        x (Tensor):          Node features of shape (num_nodes, in_dim).
-        edge_index (Tensor): COO graph edges of shape (2, num_edges) [PyG].
-        batch (Tensor):      Graph-id for each node, shape (num_nodes,). Required for READOUT.
-
-    Returns:
-        Tensor: Graph-level embedding h of shape (num_graphs, out_dim).
+        in_dim: Node feature dimension.
+        hidden_dim: Hidden size for GNN layers.
+        out_dim: Output feature dimension (graph-level embedding).
+        num_layers: Number of GNN layers (≥ 1).
+        conv_type: "gin" (default) or "gcn".
+        readout: "mean" (default), "sum", or "max".
+        dropout: Dropout after each layer.
+        use_norm: Apply LayerNorm after each layer output.
+        pre_mlp: Optional pre-MLP dims (e.g., [in_dim, hidden_dim]).
+        post_mlp: Optional post-MLP dims (e.g., [hidden_dim, out_dim]).
+        activation: Non-linearity (default: ReLU(inplace=True)).
     """
+
     def __init__(
         self,
         in_dim: int,
@@ -126,9 +125,8 @@ class GNNGraphEncoder(nn.Module):
 
         # Build GNN layers
         last_dim = conv_in
-        for layer_idx in range(num_layers):
+        for _ in range(num_layers):
             if conv_type == "gin":
-                # GINConv expects an MLP as "nn"
                 mlp = MLP([last_dim, hidden_dim, hidden_dim], use_norm=use_norm, activation=activation, dropout=dropout)
                 conv = GINConv(nn=mlp, train_eps=True)
                 next_dim = hidden_dim
@@ -163,18 +161,8 @@ class GNNGraphEncoder(nn.Module):
         edge_index: torch.Tensor,
         batch: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Forward pass.
-
-        Args:
-            x: Node features, shape (N, in_dim).
-            edge_index: Edge indices (2, E).
-            batch: Node-to-graph indices (N,).
-
-        Returns:
-            Graph-level embedding h, shape (B, out_dim).
-        """
-        x = self.pre(x)  # optional input adaptation
+        """Forward pass."""
+        x = self.pre(x)
 
         for conv, norm in zip(self.convs, self.norms):
             x = conv(x, edge_index)
@@ -183,8 +171,8 @@ class GNNGraphEncoder(nn.Module):
             if self.dropout > 0.0:
                 x = nn.functional.dropout(x, p=self.dropout, training=self.training)
 
-        h = self._pool(x, batch)  # READOUT → graph feature
-        h = self.proj(h)          # final projection to out_dim
+        h = self._pool(x, batch)  # graph feature
+        h = self.proj(h)          # (B, out_dim)
         return h
 
     def embed_nodes(
@@ -192,16 +180,7 @@ class GNNGraphEncoder(nn.Module):
         x: torch.Tensor,
         edge_index: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Node-level embeddings after the last GNN layer (before READOUT).
-
-        Args:
-            x: Node features (N, in_dim).
-            edge_index: Edge indices (2, E).
-
-        Returns:
-            Tensor: Node embeddings (N, hidden_dim).
-        """
+        """Node-level embeddings after last GNN layer (before READOUT)."""
         x = self.pre(x)
         for conv, norm in zip(self.convs, self.norms):
             x = conv(x, edge_index)
