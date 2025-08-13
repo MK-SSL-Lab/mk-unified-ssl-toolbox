@@ -193,7 +193,8 @@ class MAEDecoder(nn.Module):
         mask_tokens = self.mask_token.expand(B, N_total - N, -1)
         x_ = torch.cat([x, mask_tokens], dim=1)
         x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).expand(-1, -1, D))
-        x_ = x_ + self.pos_embed[:, :N_total, :]
+        x_ = x_ + self.pos_embed[:, :N_total, :].to(dtype=x_.dtype, device=x_.device)
+
         for blk in self.blocks:
             x_ = blk(x_)
         x_ = self.norm(x_)
