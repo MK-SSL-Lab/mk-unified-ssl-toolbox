@@ -29,6 +29,14 @@ from MK_SSL.vision.models.modules import MAEBackbone
 from MK_SSL.utils import EvaluateNet
 from MK_SSL.utils import EmbeddingLogger
 
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True  # tolerate truncated images
+
+try:
+    import cv2
+    cv2.setNumThreads(0)  # avoid OpenCV worker thread issues
+except Exception:
+    pass
 
 class Trainer:
     def __init__(
@@ -305,6 +313,24 @@ class Trainer:
             f"W&B Run Name      : {wandb_run_name or 'Auto-generated'}\n"
             "----------------------------------------------------"
         )
+
+
+    @staticmethod
+    def safe_collate(batch):
+        """Drop None samples from a batch to avoid collate crashes."""
+        batch = [b for b in batch if b is not None and b[0] is not None]
+        if len(batch) == 0:
+            raise RuntimeError("Empty batch after filtering — check dataset.")
+        from torch.utils.data.dataloader import default_collate
+        return default_collate(batch)
+
+    @staticmethod
+    def worker_init_fn(worker_id):
+        """Ensure different RNG seed per worker."""
+        import random, torch
+        seed = torch.initial_seed() % 2**32
+        random.seed(seed)
+
 
     def _train_mae(
         self,
@@ -659,9 +685,13 @@ class Trainer:
             batch_size=batch_size,
             shuffle=True,
             drop_last=True,
-            num_workers=self.num_workers,  # Add num_workers for consistency
+            num_workers=self.num_workers,                  # safer for Kaggle
+            pin_memory=False,               # reduce SHM pressure
+            persistent_workers=False,       # restart workers each epoch
+            prefetch_factor=2,               # small prefetch
+            collate_fn=self.safe_collate,
+            worker_init_fn=self.worker_init_fn
         )
-
 
         if self.method == "mae":
             return self._train_mae(
@@ -892,6 +922,19 @@ class Trainer:
             shuffle=True,
             num_workers=self.num_workers,  # Add num_workers
         )
+
+        train_loader_ds = torch.utils.data.DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,  # Add num_workers
+            pin_memory=False,
+            persistent_workers=False,
+            prefetch_factor=2,
+            collate_fn=self.safe_collate,
+            worker_init_fn=self.worker_init_fn
+        )
+
         total_batches_per_eval_epoch = len(
             train_loader_ds
         )  # For global step calculation
