@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import os
 from torch import nn
-from tqdm.auto import tqdm
+from tqdm import tqdm
 from datetime import datetime
 from torch.utils.data import Subset, DataLoader  # Added DataLoader for clarity
 import logging

@@ -2,18 +2,19 @@ import torch
 import torch.nn as nn
 
 class MAELoss(nn.Module):
-    """
-    Mean squared error computed only on masked patches.
-    """
     def __init__(self, normalize_target: bool = True):
         super().__init__()
         self.normalize_target = normalize_target
 
     def forward(self, pred, target, mask):
+        mask = mask.to(pred.dtype)
+
         if self.normalize_target:
-            mean = target.mean(dim=-1, keepdim=True)
-            std = target.std(dim=-1, keepdim=True) + 1e-6
-            target = (target - mean) / std
+            mean = target.float().mean(dim=-1, keepdim=True)
+            std = target.float().std(dim=-1, keepdim=True).clamp_min(1e-4)
+            target = ((target.float() - mean) / std).to(pred.dtype)
+
         loss = (pred - target) ** 2
-        loss = loss.mean(dim=-1)
-        return (loss * mask).sum() / mask.sum()
+        loss = loss.mean(dim=-1)                     # (B, N)
+        denom = mask.sum().clamp_min(1e-6)
+        return (loss * mask).sum() / denom
