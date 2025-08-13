@@ -27,6 +27,7 @@ class MAE(nn.Module):
         mlp_ratio: float = 4.0,
         mask_ratio: float = 0.75,
         backbone: Optional[nn.Module] = None,
+        device: str = "cuda",
         **kwargs,
     ) -> None:
         super().__init__()
@@ -44,7 +45,7 @@ class MAE(nn.Module):
         )
         self.pos_embed_enc = PosEmbed2D(embed_dim, self.patch_embed.grid_size)
         self.pos_embed_dec = PosEmbed2D(decoder_dim, self.patch_embed.grid_size)
-        self.decoder.pos_embed = self.pos_embed_dec.pos_embed.to(self.device)
+        self.decoder.pos_embed = self.pos_embed_dec.pos_embed.to(device)
 
     def random_masking(
         self, x: torch.Tensor, mask_ratio: float
