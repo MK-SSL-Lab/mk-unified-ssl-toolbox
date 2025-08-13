@@ -44,7 +44,7 @@ class MAE(nn.Module):
         )
         self.pos_embed_enc = PosEmbed2D(embed_dim, self.patch_embed.grid_size)
         self.pos_embed_dec = PosEmbed2D(decoder_dim, self.patch_embed.grid_size)
-        self.decoder.pos_embed = self.pos_embed_dec.pos_embed
+        self.decoder.pos_embed = self.pos_embed_dec.pos_embed.to(self.device)
 
     def random_masking(
         self, x: torch.Tensor, mask_ratio: float
