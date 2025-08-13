@@ -7,12 +7,7 @@ from MK_SSL.vision.models.modules.pos_embed import PosEmbed2D
 from MK_SSL.vision.models.modules.losses.mae_loss import MAELoss
 from MK_SSL.vision.models.utils.registry import register_method
 
-
 class MAE(nn.Module):
-    """
-    Masked Autoencoder (MAE) following He et al. (2021).
-    """
-
     def __init__(
         self,
         image_size: int = 224,
@@ -45,21 +40,30 @@ class MAE(nn.Module):
         )
         self.pos_embed_enc = PosEmbed2D(embed_dim, self.patch_embed.grid_size)
         self.pos_embed_dec = PosEmbed2D(decoder_dim, self.patch_embed.grid_size)
-        self.decoder.pos_embed = self.pos_embed_dec.pos_embed.to(device)
+
+        # register decoder fixed pos-embed as buffer inside decoder
+        dec_pos = self.pos_embed_dec.pos_embed
+        self.decoder.register_buffer("pos_embed", dec_pos, persistent=False)
+        self.to(device)
 
     def random_masking(
         self, x: torch.Tensor, mask_ratio: float
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, N, D = x.shape
         len_keep = int(N * (1 - mask_ratio))
+        assert 0 < len_keep < N, f"len_keep={len_keep}, N={N}, mask_ratio={mask_ratio}"
+
         noise = torch.rand(B, N, device=x.device)
         ids_shuffle = torch.argsort(noise, dim=1)
         ids_restore = torch.argsort(ids_shuffle, dim=1)
         ids_keep = ids_shuffle[:, :len_keep]
+
         x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).expand(-1, -1, D))
-        mask = torch.ones([B, N], device=x.device)
+
+        mask = torch.ones([B, N], device=x.device, dtype=x.dtype)
         mask[:, :len_keep] = 0
         mask = torch.gather(mask, dim=1, index=ids_restore)
+
         return x_masked, mask, ids_restore
 
     def forward(self, imgs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -69,7 +73,6 @@ class MAE(nn.Module):
         x = self.encoder(x)
         pred = self.decoder(x, ids_restore)
         return pred, mask
-
 
 register_method(
     name="mae",

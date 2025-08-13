@@ -74,21 +74,18 @@ class Attention(nn.Module):
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads)
         q, k, v = qkv.permute(2, 0, 3, 1, 4)
 
-        try:
-            x = torch.nn.functional.scaled_dot_product_attention(
-                q, k, v, attn_mask=None, dropout_p=self.attn_drop.p if self.training else 0.0, is_causal=False
-            )
-        except Exception:
-            attn = (q @ k.transpose(-2, -1)) * self.scale
-            attn = torch.softmax(attn.float(), dim=-1).to(q.dtype)
-            if self.training and self.attn_drop.p > 0.0:
-                attn = torch.nn.functional.dropout(attn, p=self.attn_drop.p, training=True)
-            x = attn @ v
+        # stable fp32 matmul for scores
+        attn_scores = (q.float() @ k.float().transpose(-2, -1)) * float(self.scale)
+        attn = torch.softmax(attn_scores, dim=-1).to(q.dtype)
+        if self.training and self.attn_drop.p > 0.0:
+            attn = torch.nn.functional.dropout(attn, p=self.attn_drop.p, training=True)
 
+        x = attn @ v
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
+
 
 
 class Block(nn.Module):
@@ -162,8 +159,6 @@ class MAEEncoder(nn.Module):
 
 
 class MAEDecoder(nn.Module):
-    """Lightweight Transformer Decoder for MAE."""
-
     def __init__(
         self,
         embed_dim: int = 768,
@@ -177,23 +172,24 @@ class MAEDecoder(nn.Module):
         super().__init__()
         self.decoder_embed = nn.Linear(embed_dim, decoder_dim, bias=True)
         self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_dim))
-        self.blocks = nn.ModuleList([
-            Block(decoder_dim, num_heads, mlp_ratio)
-            for _ in range(depth)
-        ])
+        self.blocks = nn.ModuleList([Block(decoder_dim, num_heads, mlp_ratio) for _ in range(depth)])
         self.norm = nn.LayerNorm(decoder_dim)
         self.pred = nn.Linear(decoder_dim, patch_size * patch_size * in_chans, bias=True)
+
         nn.init.trunc_normal_(self.mask_token, std=0.02)
-        self.pos_embed: Optional[Tensor] = None
+        # pos_embed will be registered from the MAE top-level; keep placeholder for shape/type
+        self.register_buffer("pos_embed", torch.empty(1, 0, decoder_dim), persistent=False)
 
     def forward(self, x: Tensor, ids_restore: Tensor) -> Tensor:
-        x = self.decoder_embed(x)
+        x = self.decoder_embed(x)              # (B, N_keep, D)
         B, N, D = x.shape
         N_total = ids_restore.shape[1]
-        mask_tokens = self.mask_token.expand(B, N_total - N, -1)
+        mask_tokens = self.mask_token.expand(B, N_total - N, D)
         x_ = torch.cat([x, mask_tokens], dim=1)
         x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).expand(-1, -1, D))
-        x_ = x_ + self.pos_embed[:, :N_total, :]
+
+        pos = self.pos_embed[:, :N_total, :].to(dtype=x_.dtype, device=x_.device)
+        x_ = x_ + pos
 
         for blk in self.blocks:
             x_ = blk(x_)
