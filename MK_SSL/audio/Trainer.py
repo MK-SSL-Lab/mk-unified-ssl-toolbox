@@ -909,7 +909,9 @@ class Trainer:
                     is_mfcc=(iteration == 0),
                     transformer_layer=transformer_layer,
                     device=self.device,
+                    iteration_id=iteration,  # NEW: version KMeans per iteration
                 )
+                
                 np.save(iteration_pseudo_labels_path, pseudo_labels_dict)
                 self.logger.info(f"Saved pseudo-labels for iteration {iteration + 1}.")
 
