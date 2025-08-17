@@ -702,7 +702,8 @@ class Trainer:
 
             for batch_idx, batch in enumerate(pbar):
                 audio = batch["audio"].to(self.device)
-                view0, view1 = self.transformation(audio)
+                lengths = batch['length'].to(self.device)
+                view0, view1 = self.transformation(audio, lengths)
 
                 with torch.cuda.amp.autocast(enabled=self.mixed_precision_training):
                     out0, out1 = self.model(view0, view1)
