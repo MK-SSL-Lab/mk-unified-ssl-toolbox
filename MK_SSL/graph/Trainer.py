@@ -1,5 +1,3 @@
-# MK_SSL/graph/Trainer.py
-
 from __future__ import annotations
 
 import os
