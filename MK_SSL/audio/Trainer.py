@@ -977,7 +977,7 @@ class Trainer:
                     running_loss += loss.item()
                     pbar.set_postfix({"loss": loss.item()})
 
-                    global_step = epoch * len(train_loader_for_training) + batch_idx
+                    global_step = (iteration+1) * epoch * len(train_loader_for_training) + batch_idx
                     if self.wandb_logger.is_active:
                         self.wandb_logger.log(
                             {
@@ -990,7 +990,7 @@ class Trainer:
                 avg_loss = running_loss / max(1, len(train_loader_for_training))
                 self.logger.info(f"[HuBERT Iter {iteration+1} - Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
 
-                epoch_step = (epoch + 1) * len(train_loader_for_training)        
+                epoch_step = (iteration+1) * (epoch + 1) * len(train_loader_for_training)        
                 if self.wandb_logger.is_active:
                     self.wandb_logger.log(
                         {
