@@ -96,6 +96,11 @@ class Wav2Vec2(nn.Module):
             combine_groups=False,
         )
 
+        self.mask_embedding = nn.Parameter(
+            torch.FloatTensor(self.model_config["encoder_embed_dim"]).uniform_()
+        )
+
+
     def forward(
         self,
         waveforms: Tensor,
@@ -156,10 +161,6 @@ class Wav2Vec2(nn.Module):
         """
         B, T, D = hidden_states.size()
 
-        # Time masking (as before)
-        if not hasattr(self, "mask_embedding"):
-            self.mask_embedding = nn.Parameter(torch.FloatTensor(D).uniform_())
-            self.register_parameter("mask_embedding", self.mask_embedding)
 
         time_mask_indices = torch.zeros(B, T, device=hidden_states.device, dtype=torch.bool)
         for b in range(B):
