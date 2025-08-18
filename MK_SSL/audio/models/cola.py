@@ -96,29 +96,52 @@ class COLA(nn.Module):
 
     
 
-    def forward(self, x0: torch.Tensor, x1: Optional[torch.Tensor] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    def forward(
+        self,
+        x0: torch.Tensor,
+        x1: Optional[torch.Tensor] = None,
+        lengths0: Optional[torch.Tensor] = None,
+        lengths1: Optional[torch.Tensor] = None,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
-        Forward pass for COLA.
+        Forward pass for COLA with support for padding masks.
 
         Args:
-            x0 (torch.Tensor): First input audio batch as log-mel spectrograms, shape (B, C, F, T).
-            x1 (torch.Tensor, optional): Second input audio batch for contrastive training. Defaults to None.
+            x0 (torch.Tensor):
+                First audio view as waveform segments, shape (B, 1, T).
+            x1 (torch.Tensor, optional):
+                Second audio view for contrastive training, shape (B, 1, T).
+            lengths0 (torch.Tensor, optional):
+                Original (unpadded) lengths of the raw audio waveforms corresponding
+                to `x0`, shape (B,). Used to mask out padded frames so they do not
+                influence the pooled embeddings. If ``None``, no masking is applied.
+            lengths1 (torch.Tensor, optional):
+                Original (unpadded) lengths of the raw audio waveforms corresponding
+                to `x1`, shape (B,). Used the same way as `lengths0`.
 
         Returns:
-            torch.Tensor or Tuple[torch.Tensor, torch.Tensor]: Projected embeddings.
+            torch.Tensor or Tuple[torch.Tensor, torch.Tensor]:
+                - If only `x0` is provided: embedding tensor of shape (B, projection_dim).
+                - If both `x0` and `x1` are provided: tuple of embeddings
+                `(out0, out1)`, each of shape (B, projection_dim).
+
+        Notes:
+            - The `lengths` arguments refer to the **full original waveform length**
+            before any cropping in `COLAAudioTransform`. The masking logic ensures
+            that padded audio samples (zeros) from dataset preprocessing do not
+            affect the representation.
         """
-        f0 = self.backbone(x0)           # (B, D, 1, 1) if global pooled
-        f0_flat = f0.view(f0.size(0), -1)  # (B, D)
-        out0 = self.projection_head(f0_flat)
+        f0 = self.backbone(x0, lengths=lengths0)
+        out0 = self.projection_head(f0)
 
         if x1 is None:
             return out0
 
-        f1 = self.backbone(x1)
-        f1_flat = f1.view(f1.size(0), -1)
-        out1 = self.projection_head(f1_flat)
+        f1 = self.backbone(x1, lengths=lengths1)
+        out1 = self.projection_head(f1)
 
         return out0, out1
+
 
 
 
