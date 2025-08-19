@@ -2099,11 +2099,11 @@ class Trainer:
 
         classifier.train()
         for epoch in range(epochs):
-            for waveforms, labels in train_loader:
-                waveforms = waveforms.to(self.device)
-                labels = labels.to(self.device)
+            for batch in tqdm(train_loader, desc=f"[EAT Downstream Training] Epoch {epoch+1}"):
+                audio = batch["audio"].to(self.device)
+                labels = batch["label"].to(self.device)
 
-                logits = classifier(waveforms)
+                logits = classifier(audio)
                 loss = criterion(logits, labels)
 
                 optimizer.zero_grad()
@@ -2122,11 +2122,12 @@ class Trainer:
         classifier.eval()
         all_preds, all_labels = [], []
         with torch.no_grad():
-            for waveforms, labels in test_loader:
-                waveforms = waveforms.to(self.device)
-                labels = labels.to(self.device)
+            for batch in tqdm(test_loader, desc="[COLA Downstream Evaluation]"):
 
-                logits = classifier(waveforms)
+                audio = batch["audio"].to(self.device)
+                labels = batch["label"].to(self.device)
+
+                logits = classifier(audio)
                 preds = torch.argmax(logits, dim=1)
 
                 all_preds.append(preds.cpu())
