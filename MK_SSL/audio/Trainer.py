@@ -2076,11 +2076,13 @@ class Trainer:
         **kwargs
     ):
 
-
+        
+        backbone = EATBackbone(self.model).to(self.device)
+        
         feature_size = self.model.embed_dim
 
         classifier = EvaluateNet(
-            backbone=self.model.student_encoder,
+            backbone=backbone,
             feature_size=feature_size,
             num_classes=num_classes,
             is_linear=freeze_backbone,
