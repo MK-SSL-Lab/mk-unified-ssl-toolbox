@@ -18,6 +18,8 @@ from sklearn.metrics import classification_report
 import wandb
 import optuna
 
+from jiwer import wer
+from editdistance import eval as edit_distance
 
 
 
@@ -30,7 +32,7 @@ from MK_SSL.audio.models.modules.cola_backbone import COLABackbone
 from MK_SSL.audio.models.modules.wav2vec2_backbone import Wav2Vec2Backbone
 from MK_SSL.audio.models.modules.hubert_backbone import HuBERTBackbone
 from MK_SSL.audio.models.modules.simclr_backbone import SimCLRBackbone
-from MK_SSL.audio.models.modules.eat_backnone import EATBackbone
+from MK_SSL.audio.models.modules.eat_backbone import EATBackbone
 
 from MK_SSL.audio.models.modules.backbones import ViTAudioEncoder
 
@@ -1666,6 +1668,7 @@ class Trainer:
         self.logger.info(f"Checkpoint loaded from: {checkpoint_path}")
 
 
+
     def _evaluate_wav2vec2(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -1678,55 +1681,52 @@ class Trainer:
         **kwargs
     ):
         """
-        Evaluation for Wav2Vec2 using linear probing or fine-tuning.
-
-        Args:
-            train_dataset (Dataset): Supervised training dataset with (waveform, label) pairs.
-            test_dataset (Dataset): Supervised test dataset for evaluation.
-            num_classes (int): Number of output classes.
-            batch_size (int): Evaluation batch size.
-            lr (float): Learning rate.
-            epochs (int): Max number of epochs.
-            freeze_backbone (bool): Whether to freeze the backbone during evaluation.
+        Evaluation for Wav2Vec2 using CTC (WER/PER).
         """
 
-
-        # === Instantiate backbone and classifier ===
+        # === Backbone & CTC model ===
         backbone = Wav2Vec2Backbone(pretrained_model=self.model)
         feature_size = self.model.model_config["encoder_embed_dim"]
 
         model = EvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
-            num_classes=num_classes,
+            num_classes=num_classes,  # vocab size incl. blank
             is_linear=freeze_backbone,
         ).to(self.device)
 
-        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr)
-        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, model.parameters()), lr=lr
+        )
+        criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-        # ✅ Watch the classifier model
+        # ✅ Watch the model
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(model)
 
         # === Training loop ===
         model.train()
         for epoch in range(epochs):
-            for waveforms, labels in train_loader:
-                waveforms = waveforms.to(self.device)
-                labels = labels.to(self.device)
+            for batch in tqdm(train_loader, desc=f"[Wav2Vec2-CTC Training] Epoch {epoch+1}"):
+                waveforms = batch["audio"].to(self.device)
+                labels = batch["labels"].to(self.device)
+                label_lengths = batch["label_lengths"].to(self.device)
 
-                logits = model(waveforms)
-                loss = criterion(logits, labels)
+                log_probs, input_lengths = model(waveforms)
+
+                # CTC loss expects (T, B, C)
+                loss = criterion(
+                    log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
+                )
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[Wav2Vec2 Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[Wav2Vec2-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -1737,34 +1737,39 @@ class Trainer:
 
         # === Evaluation loop ===
         model.eval()
-        all_preds, all_labels = [], []
-
+        all_refs, all_hyps = [], []
         with torch.no_grad():
-            for waveforms, labels in test_loader:
-                waveforms = waveforms.to(self.device)
-                labels = labels.to(self.device)
+            for batch in tqdm(test_loader, desc="[Wav2Vec2-CTC Evaluation]"):
+                waveforms = batch["audio"].to(self.device)
+                labels = batch["labels"].cpu().tolist()
+                label_lengths = batch["label_lengths"].cpu().tolist()
 
-                logits = model(waveforms)
-                preds = torch.argmax(logits, dim=1)
+                log_probs, input_lengths = model(waveforms)
+                preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
-                all_preds.append(preds.cpu())
-                all_labels.append(labels.cpu())
+                # Greedy CTC decoding
+                for pred_seq, ref_seq in zip(preds, labels):
+                    hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
+                    all_hyps.append(hyp)
+                    all_refs.append(ref_seq)
 
-        all_preds = torch.cat(all_preds)
-        all_labels = torch.cat(all_labels)
 
-        self.logger.info("\n📊 [Wav2Vec2 Evaluation Report]:\n" +
-                         classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
 
-        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+        ref_texts = [" ".join(map(str, r)) for r in all_refs]
+        hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
+
+        wer_score = wer(ref_texts, hyp_texts)
+        per_score = sum(edit_distance(r, h) for r, h in zip(all_refs, all_hyps)) / sum(len(r) for r in all_refs)
+
+        self.logger.info(f"📊 [Wav2Vec2-CTC Evaluation] WER={wer_score:.4f}, PER={per_score:.4f}")
 
         if self.wandb_logger.is_active:
             self.wandb_logger.log({
-                "wav2vec2/test_accuracy": report["accuracy"],
-                "wav2vec2/test_macro_avg_f1": report["macro avg"]["f1-score"],
-                "wav2vec2/test_macro_avg_precision": report["macro avg"]["precision"],
-                "wav2vec2/test_macro_avg_recall": report["macro avg"]["recall"]
+                "wav2vec2/test_wer": wer_score,
+                "wav2vec2/test_per": per_score
             })
+
+
 
 
     def _evaluate_simclr(
@@ -1779,16 +1784,7 @@ class Trainer:
         **kwargs
     ):
         """
-        Evaluation for SimCLR Speech using linear probing or fine-tuning.
-
-        Args:
-            train_dataset (Dataset): Dataset for training the downstream classifier.
-            test_dataset (Dataset): Dataset for evaluation after training.
-            num_classes (int): Number of output classes.
-            batch_size (int): Evaluation batch size.
-            lr (float): Learning rate.
-            epochs (int): Max number of epochs.
-            freeze_backbone (bool): Whether to freeze the backbone during evaluation.
+        Evaluation for SimCLR Speech using CTC (WER/PER).
         """
 
         model = self.model
@@ -1798,12 +1794,14 @@ class Trainer:
         classifier = EvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
-            num_classes=num_classes,
+            num_classes=num_classes,   # vocab size incl. blank
             is_linear=freeze_backbone,
         ).to(self.device)
 
-        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr)
-        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
+        )
+        criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
@@ -1815,16 +1813,23 @@ class Trainer:
         # === Training loop ===
         classifier.train()
         for epoch in range(epochs):
-            for wavs, labels in train_loader:
-                wavs, labels = wavs.to(self.device), labels.to(self.device)
-                logits = classifier(wavs)
-                loss = criterion(logits, labels)
+            for batch in tqdm(train_loader, desc=f"[SimCLR-CTC Training] Epoch {epoch+1}"):
+                wavs = batch["audio"].to(self.device)
+                labels = batch["labels"].to(self.device)
+                label_lengths = batch["label_lengths"].to(self.device)
+
+                log_probs, input_lengths = classifier(wavs)
+
+                # CTC loss expects (T, B, C)
+                loss = criterion(
+                    log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
+                )
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[SimCLR Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[SimCLR-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -1835,31 +1840,37 @@ class Trainer:
 
         # === Evaluation loop ===
         classifier.eval()
-        all_preds, all_labels = [], []
-
+        all_refs, all_hyps = [], []
         with torch.no_grad():
-            for wavs, labels in test_loader:
-                wavs, labels = wavs.to(self.device), labels.to(self.device)
-                logits = classifier(wavs)
-                preds = torch.argmax(logits, dim=1)
-                all_preds.append(preds.cpu())
-                all_labels.append(labels.cpu())
+            for batch in tqdm(test_loader, desc="[SimCLR-CTC Evaluation]"):
+                wavs = batch["audio"].to(self.device)
+                labels = batch["labels"].cpu().tolist()
+                label_lengths = batch["label_lengths"].cpu().tolist()
 
-        all_preds = torch.cat(all_preds)
-        all_labels = torch.cat(all_labels)
+                log_probs, input_lengths = classifier(wavs)
+                preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
-        self.logger.info("\n📊 [SimCLR Speech Evaluation Report]:\n" +
-                         classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
+                # Greedy CTC decoding
+                for pred_seq, ref_seq in zip(preds, labels):
+                    hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
+                    all_hyps.append(hyp)
+                    all_refs.append(ref_seq)
 
-        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+
+        ref_texts = [" ".join(map(str, r)) for r in all_refs]
+        hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
+
+        wer_score = wer(ref_texts, hyp_texts)
+        per_score = sum(edit_distance(r, h) for r, h in zip(all_refs, all_hyps)) / sum(len(r) for r in all_refs)
+
+        self.logger.info(f"📊 [SimCLR-CTC Evaluation] WER={wer_score:.4f}, PER={per_score:.4f}")
 
         if self.wandb_logger.is_active:
             self.wandb_logger.log({
-                "simclr/test_accuracy": report["accuracy"],
-                "simclr/test_macro_avg_f1": report["macro avg"]["f1-score"],
-                "simclr/test_macro_avg_precision": report["macro avg"]["precision"],
-                "simclr/test_macro_avg_recall": report["macro avg"]["recall"]
+                "simclr/test_wer": wer_score,
+                "simclr/test_per": per_score
             })
+
 
 
     def _evaluate_hubert(
@@ -1874,16 +1885,7 @@ class Trainer:
         **kwargs
     ):
         """
-        Evaluation for HuBERT using linear probing or fine-tuning.
-
-        Args:
-            train_dataset (Dataset): Supervised training dataset with (waveform, label) pairs.
-            test_dataset (Dataset): Supervised test dataset for evaluation.
-            num_classes (int): Number of output classes.
-            batch_size (int): Evaluation batch size.
-            lr (float): Learning rate.
-            epochs (int): Max number of epochs.
-            freeze_backbone (bool): Whether to freeze the backbone during evaluation.
+        Evaluation for HuBERT using CTC (WER/PER).
         """
 
         model = self.model
@@ -1894,12 +1896,14 @@ class Trainer:
         classifier = EvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
-            num_classes=num_classes,
+            num_classes=num_classes,   # vocab size incl. blank
             is_linear=freeze_backbone,
         ).to(self.device)
 
-        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr)
-        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
+        )
+        criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
@@ -1911,18 +1915,23 @@ class Trainer:
         # === Training loop ===
         classifier.train()
         for epoch in range(epochs):
-            for waveforms, labels in train_loader:
-                waveforms = waveforms.to(self.device)
-                labels = labels.to(self.device)
+            for batch in tqdm(train_loader, desc=f"[HuBERT-CTC Training] Epoch {epoch+1}"):
+                waveforms = batch["audio"].to(self.device)
+                labels = batch["labels"].to(self.device)
+                label_lengths = batch["label_lengths"].to(self.device)
 
-                logits = classifier(waveforms)
-                loss = criterion(logits, labels)
+                log_probs, input_lengths = classifier(waveforms)
+
+                # CTC loss expects (T, B, C)
+                loss = criterion(
+                    log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
+                )
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[HuBERT Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[HuBERT-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -1933,33 +1942,35 @@ class Trainer:
 
         # === Evaluation loop ===
         classifier.eval()
-        all_preds, all_labels = [], []
-
+        all_refs, all_hyps = [], []
         with torch.no_grad():
-            for waveforms, labels in test_loader:
-                waveforms = waveforms.to(self.device)
-                labels = labels.to(self.device)
+            for batch in tqdm(test_loader, desc="[HuBERT-CTC Evaluation]"):
+                waveforms = batch["audio"].to(self.device)
+                labels = batch["labels"].cpu().tolist()
+                label_lengths = batch["label_lengths"].cpu().tolist()
 
-                logits = classifier(waveforms)
-                preds = torch.argmax(logits, dim=1)
+                log_probs, input_lengths = classifier(waveforms)
+                preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
-                all_preds.append(preds.cpu())
-                all_labels.append(labels.cpu())
+                # Greedy CTC decoding
+                for pred_seq, ref_seq in zip(preds, labels):
+                    hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
+                    all_hyps.append(hyp)
+                    all_refs.append(ref_seq)
 
-        all_preds = torch.cat(all_preds)
-        all_labels = torch.cat(all_labels)
 
-        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+        ref_texts = [" ".join(map(str, r)) for r in all_refs]
+        hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
 
-        self.logger.info("\n📊 [HuBERT Evaluation Report]:\n" +
-                         classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
+        wer_score = wer(ref_texts, hyp_texts)
+        per_score = sum(edit_distance(r, h) for r, h in zip(all_refs, all_hyps)) / sum(len(r) for r in all_refs)
+
+        self.logger.info(f"📊 [HuBERT-CTC Evaluation] WER={wer_score:.4f}, PER={per_score:.4f}")
 
         if self.wandb_logger.is_active:
             self.wandb_logger.log({
-                "hubert/test_accuracy": report["accuracy"],
-                "hubert/test_macro_avg_f1": report["macro avg"]["f1-score"],
-                "hubert/test_macro_avg_precision": report["macro avg"]["precision"],
-                "hubert/test_macro_avg_recall": report["macro avg"]["recall"]
+                "hubert/test_wer": wer_score,
+                "hubert/test_per": per_score
             })
 
 
@@ -1975,16 +1986,7 @@ class Trainer:
         **kwargs
     ):
         """
-        Evaluation for COLA using linear probing or fine-tuning.
-
-        Args:
-            train_dataset (Dataset): Dataset for training the downstream classifier.
-            test_dataset (Dataset): Dataset for evaluation after training.
-            num_classes (int): Number of output classes.
-            batch_size (int): Evaluation batch size.
-            lr (float): Learning rate.
-            epochs (int): Max number of epochs.
-            freeze_backbone (bool): Whether to freeze the backbone during evaluation.
+        Evaluation for COLA using CTC (WER/PER).
         """
 
         backbone = COLABackbone(self.model)
@@ -1993,12 +1995,14 @@ class Trainer:
         classifier = EvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
-            num_classes=num_classes,
+            num_classes=num_classes,   # vocab size incl. blank
             is_linear=freeze_backbone,
         ).to(self.device)
 
-        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr)
-        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
+        )
+        criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
@@ -2010,18 +2014,23 @@ class Trainer:
         # === Training ===
         classifier.train()
         for epoch in range(epochs):
-            for batch in tqdm(train_loader, desc=f"[COLA Downstream Training] Epoch {epoch+1}"):
+            for batch in tqdm(train_loader, desc=f"[COLA-CTC Training] Epoch {epoch+1}"):
                 audio = batch["audio"].to(self.device)
-                labels = batch["label"].to(self.device)
+                labels = batch["labels"].to(self.device)
+                label_lengths = batch["label_lengths"].to(self.device)
 
-                logits = classifier(audio)
-                loss = criterion(logits, labels)
+                log_probs, input_lengths = classifier(audio)
+
+                # CTC expects (T, B, C)
+                loss = criterion(
+                    log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
+                )
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[COLA Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[COLA-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -2032,35 +2041,37 @@ class Trainer:
 
         # === Evaluation ===
         classifier.eval()
-        all_preds, all_labels = [], []
-
+        all_refs, all_hyps = [], []
         with torch.no_grad():
-            for batch in tqdm(test_loader, desc="[COLA Downstream Evaluation]"):
-
+            for batch in tqdm(test_loader, desc="[COLA-CTC Evaluation]"):
                 audio = batch["audio"].to(self.device)
-                labels = batch["label"].to(self.device)
+                labels = batch["labels"].cpu().tolist()
+                label_lengths = batch["label_lengths"].cpu().tolist()
 
-                logits = classifier(audio)
-                preds = torch.argmax(logits, dim=1)
+                log_probs, input_lengths = classifier(audio)
+                preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
-                all_preds.append(preds.cpu())
-                all_labels.append(labels.cpu())
+                # Greedy CTC decoding
+                for pred_seq, ref_seq in zip(preds, labels):
+                    hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
+                    all_hyps.append(hyp)
+                    all_refs.append(ref_seq)
 
-        all_preds = torch.cat(all_preds)
-        all_labels = torch.cat(all_labels)
+        ref_texts = [" ".join(map(str, r)) for r in all_refs]
+        hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
 
-        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+        wer_score = wer(ref_texts, hyp_texts)
+        per_score = sum(edit_distance(r, h) for r, h in zip(all_refs, all_hyps)) / sum(len(r) for r in all_refs)
 
-        self.logger.info("\n📊 [COLA Evaluation Report]:\n" +
-                         classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
+        self.logger.info(f"📊 [COLA-CTC Evaluation] WER={wer_score:.4f}, PER={per_score:.4f}")
 
         if self.wandb_logger.is_active:
             self.wandb_logger.log({
-                "cola/test_accuracy": report["accuracy"],
-                "cola/test_macro_avg_f1": report["macro avg"]["f1-score"],
-                "cola/test_macro_avg_precision": report["macro avg"]["precision"],
-                "cola/test_macro_avg_recall": report["macro avg"]["recall"]
+                "cola/test_wer": wer_score,
+                "cola/test_per": per_score
             })
+
+
 
 
 
@@ -2075,23 +2086,24 @@ class Trainer:
         freeze_backbone: bool = True,
         **kwargs
     ):
+        """
+        Evaluation for EAT using CTC (WER/PER).
+        """
 
-        
         backbone = EATBackbone(self.model).to(self.device)
-        
         feature_size = self.model.embed_dim
 
         classifier = EvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
-            num_classes=num_classes,
+            num_classes=num_classes,   # vocab size incl. blank
             is_linear=freeze_backbone,
         ).to(self.device)
 
         optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
         )
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
@@ -2099,20 +2111,26 @@ class Trainer:
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
 
+        # === Training ===
         classifier.train()
         for epoch in range(epochs):
-            for batch in tqdm(train_loader, desc=f"[EAT Downstream Training] Epoch {epoch+1}"):
+            for batch in tqdm(train_loader, desc=f"[EAT-CTC Training] Epoch {epoch+1}"):
                 audio = batch["audio"].to(self.device)
-                labels = batch["label"].to(self.device)
+                labels = batch["labels"].to(self.device)
+                label_lengths = batch["label_lengths"].to(self.device)
 
-                logits = classifier(audio)
-                loss = criterion(logits, labels)
+                log_probs, input_lengths = classifier(audio)
+
+                # CTC expects (T, B, C)
+                loss = criterion(
+                    log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
+                )
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-            self.logger.info(f"[EAT Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[EAT-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -2121,37 +2139,37 @@ class Trainer:
                     "eat/lr": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
 
+        # === Evaluation ===
         classifier.eval()
-        all_preds, all_labels = [], []
+        all_refs, all_hyps = [], []
         with torch.no_grad():
-            for batch in tqdm(test_loader, desc="[COLA Downstream Evaluation]"):
-
+            for batch in tqdm(test_loader, desc="[EAT-CTC Evaluation]"):
                 audio = batch["audio"].to(self.device)
-                labels = batch["label"].to(self.device)
+                labels = batch["labels"].cpu().tolist()
+                label_lengths = batch["label_lengths"].cpu().tolist()
 
-                logits = classifier(audio)
-                preds = torch.argmax(logits, dim=1)
+                log_probs, input_lengths = classifier(audio)
+                preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
-                all_preds.append(preds.cpu())
-                all_labels.append(labels.cpu())
+                # Greedy CTC decoding
+                for pred_seq, ref_seq in zip(preds, labels):
+                    hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
+                    all_hyps.append(hyp)
+                    all_refs.append(ref_seq)
 
-        all_preds = torch.cat(all_preds)
-        all_labels = torch.cat(all_labels)
+        ref_texts = [" ".join(map(str, r)) for r in all_refs]
+        hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
 
-        from sklearn.metrics import classification_report
-        self.logger.info("\n📊 [EAT Evaluation Report]:\n" +
-                         classification_report(all_labels.numpy(), all_preds.numpy(), digits=4))
+        wer_score = wer(ref_texts, hyp_texts)
+        per_score = sum(edit_distance(r, h) for r, h in zip(all_refs, all_hyps)) / sum(len(r) for r in all_refs)
 
-        report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True)
+        self.logger.info(f"📊 [EAT-CTC Evaluation] WER={wer_score:.4f}, PER={per_score:.4f}")
 
         if self.wandb_logger.is_active:
             self.wandb_logger.log({
-                "eat/test_accuracy": report["accuracy"],
-                "eat/test_macro_avg_f1": report["macro avg"]["f1-score"],
-                "eat/test_macro_avg_precision": report["macro avg"]["precision"],
-                "eat/test_macro_avg_recall": report["macro avg"]["recall"]
+                "eat/test_wer": wer_score,
+                "eat/test_per": per_score
             })
-
 
 
 
@@ -2168,7 +2186,16 @@ class Trainer:
         **kwargs
     ):
         """
-        Evaluate the current model using the correct evaluation method.
+        Evaluate the current model using CTC (WER/PER) for the specified SSL method.
+
+        Args:
+            train_dataset (Dataset): Training dataset with audio + labels.
+            test_dataset (Dataset): Test dataset with audio + labels.
+            num_classes (int): Vocabulary size (including blank).
+            batch_size (int): Batch size.
+            lr (float): Learning rate.
+            epochs (int): Number of training epochs.
+            freeze_backbone (bool): Whether to freeze the backbone.
         """
         if not self.wandb_logger.is_active:
             self.wandb_logger.init_run('Evaluation')
@@ -2193,6 +2220,7 @@ class Trainer:
         if self.wandb_logger.is_active:
             self.wandb_logger.log({f"{self.method}/status": "evaluation_complete"})
             self.wandb_logger.finish_run()
+
 
     def _reload_latest_checkpoint(self) -> int:
         """
