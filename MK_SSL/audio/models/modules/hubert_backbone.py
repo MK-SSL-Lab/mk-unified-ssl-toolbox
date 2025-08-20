@@ -46,4 +46,4 @@ class HuBERTBackbone(nn.Module):
         x = self.norm(x)
         x = self.dropout(x)
         x = self.encoder(x)
-        return x.mean(dim=1)  # mean pooling → (B, embed_dim)
+        return x

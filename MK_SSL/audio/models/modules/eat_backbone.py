@@ -54,6 +54,6 @@ class EATBackbone(nn.Module):
             layer_outputs = self.teacher_encoder(patches)    # List[L] of (B, P, E)
 
         # 4. Average across layers, then across patches → (B, E)
-        reps = torch.stack(layer_outputs).mean(dim=0).mean(dim=1)
+        reps = torch.stack(layer_outputs).mean(dim=0)
 
         return reps
