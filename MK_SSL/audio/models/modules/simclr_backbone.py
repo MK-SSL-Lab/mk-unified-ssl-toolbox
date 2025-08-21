@@ -28,6 +28,7 @@ class SimCLRBackbone(nn.Module):
     def forward(
         self,
         waveforms: Tensor,
+        lengths: Optional[Tensor] = None
     ) -> Tensor:
         """
         Args:

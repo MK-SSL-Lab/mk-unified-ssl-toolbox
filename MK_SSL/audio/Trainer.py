@@ -20,6 +20,7 @@ import optuna
 
 from jiwer import wer
 from editdistance import eval as edit_distance
+from torch.nn.utils.rnn import pad_sequence
 
 
 
@@ -1700,8 +1701,23 @@ class Trainer:
         )
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=self.collate_ctc,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
+
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=self.collate_ctc,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
 
         # ✅ Watch the model
         if self.wandb_logger.is_active:
@@ -1714,8 +1730,9 @@ class Trainer:
                 waveforms = batch["audio"].to(self.device)
                 labels = batch["labels"].to(self.device)
                 label_lengths = batch["label_lengths"].to(self.device)
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = model(waveforms)
+                log_probs, input_lengths = model(waveforms, audio_lengths)
 
                 # CTC loss expects (T, B, C)
                 loss = criterion(
@@ -1803,8 +1820,23 @@ class Trainer:
         )
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=self.collate_ctc,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
+
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=self.collate_ctc,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
 
         # ✅ Watch the classifier model
         if self.wandb_logger.is_active:
@@ -1846,8 +1878,9 @@ class Trainer:
                 wavs = batch["audio"].to(self.device)
                 labels = batch["labels"].cpu().tolist()
                 label_lengths = batch["label_lengths"].cpu().tolist()
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(wavs)
+                log_probs, input_lengths = classifier(wavs, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
@@ -1905,8 +1938,23 @@ class Trainer:
         )
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=self.collate_ctc,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
+
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=self.collate_ctc,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
 
         # ✅ Watch the classifier model
         if self.wandb_logger.is_active:
@@ -1948,8 +1996,10 @@ class Trainer:
                 waveforms = batch["audio"].to(self.device)
                 labels = batch["labels"].cpu().tolist()
                 label_lengths = batch["label_lengths"].cpu().tolist()
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(waveforms)
+
+                log_probs, input_lengths = classifier(waveforms, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
@@ -2004,8 +2054,23 @@ class Trainer:
         )
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=self.collate_ctc,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
+
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=self.collate_ctc,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
 
         # ✅ Watch the classifier model
         if self.wandb_logger.is_active:
@@ -2047,8 +2112,9 @@ class Trainer:
                 audio = batch["audio"].to(self.device)
                 labels = batch["labels"].cpu().tolist()
                 label_lengths = batch["label_lengths"].cpu().tolist()
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(audio)
+                log_probs, input_lengths = classifier(audio, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
@@ -2105,8 +2171,23 @@ class Trainer:
         )
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=self.collate_ctc,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
+
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=self.collate_ctc,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
 
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
@@ -2118,8 +2199,9 @@ class Trainer:
                 audio = batch["audio"].to(self.device)
                 labels = batch["labels"].to(self.device)
                 label_lengths = batch["label_lengths"].to(self.device)
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(audio)
+                log_probs, input_lengths = classifier(audio, audio_lengths)
 
                 # CTC expects (T, B, C)
                 loss = criterion(
@@ -2220,6 +2302,36 @@ class Trainer:
         if self.wandb_logger.is_active:
             self.wandb_logger.log({f"{self.method}/status": "evaluation_complete"})
             self.wandb_logger.finish_run()
+
+
+    def collate_ctc(batch):
+        """
+        Collate function for CTC evaluation.
+        Handles variable-length audio and labels.
+        """
+
+        # Remove Nones if present
+        batch = [b for b in batch if b is not None]
+        if len(batch) == 0:
+            return None
+
+        # --- Audio ---
+        audios = [b["audio"].squeeze(0).t() for b in batch]   # (T, 1) → (T,)
+        audio_lengths = torch.tensor([a.size(0) for a in audios], dtype=torch.long)
+        padded_audios = pad_sequence(audios, batch_first=True)  # (B, max_T)
+        padded_audios = padded_audios.unsqueeze(1)              # (B, 1, max_T)
+
+        # --- Labels ---
+        labels = [b["labels"] for b in batch]
+        label_lengths = torch.tensor([len(l) for l in labels], dtype=torch.long)
+        flat_labels = torch.cat(labels, dim=0)                  # (total_labels,)
+
+        return {
+            "audio": padded_audios,        # (B, 1, max_T)
+            "audio_lengths": audio_lengths, # (B,)
+            "labels": flat_labels,         # (total_labels,)
+            "label_lengths": label_lengths # (B,)
+        }
 
 
     def _reload_latest_checkpoint(self) -> int:
