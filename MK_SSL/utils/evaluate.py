@@ -34,7 +34,6 @@ class EvaluateNet(nn.Module):
         # Frame-level projection → vocab
         self.fc = nn.Linear(feature_size, num_classes, bias=True)
 
-class EvaluateNet(nn.Module):
     def forward(self, x: Tensor, lengths: Tensor = None):
         """
         Args:
