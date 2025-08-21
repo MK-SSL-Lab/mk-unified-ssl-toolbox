@@ -1760,17 +1760,21 @@ class Trainer:
                 waveforms = batch["audio"].to(self.device)
                 labels = batch["labels"].cpu().tolist()
                 label_lengths = batch["label_lengths"].cpu().tolist()
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = model(waveforms)
+                log_probs, input_lengths = model(waveforms, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
-                for pred_seq, ref_seq in zip(preds, labels):
+                for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
-                    all_refs.append(ref_seq)
 
-
+                    # ✅ ensure refs are lists sliced to correct length
+                    if isinstance(ref_seq, list):
+                        all_refs.append(ref_seq[:ref_len])
+                    else:
+                        all_refs.append([ref_seq])
 
         ref_texts = [" ".join(map(str, r)) for r in all_refs]
         hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
@@ -1849,8 +1853,9 @@ class Trainer:
                 wavs = batch["audio"].to(self.device)
                 labels = batch["labels"].to(self.device)
                 label_lengths = batch["label_lengths"].to(self.device)
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(wavs)
+                log_probs, input_lengths = classifier(wavs, audio_lengths)
 
                 # CTC loss expects (T, B, C)
                 loss = criterion(
@@ -1884,11 +1889,15 @@ class Trainer:
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
-                for pred_seq, ref_seq in zip(preds, labels):
+                for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
-                    all_refs.append(ref_seq)
 
+                    # ✅ ensure refs are lists sliced to correct length
+                    if isinstance(ref_seq, list):
+                        all_refs.append(ref_seq[:ref_len])
+                    else:
+                        all_refs.append([ref_seq])
 
         ref_texts = [" ".join(map(str, r)) for r in all_refs]
         hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
@@ -1903,6 +1912,7 @@ class Trainer:
                 "simclr/test_wer": wer_score,
                 "simclr/test_per": per_score
             })
+
 
 
 
@@ -1967,8 +1977,9 @@ class Trainer:
                 waveforms = batch["audio"].to(self.device)
                 labels = batch["labels"].to(self.device)
                 label_lengths = batch["label_lengths"].to(self.device)
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(waveforms)
+                log_probs, input_lengths = classifier(waveforms, audio_lengths)
 
                 # CTC loss expects (T, B, C)
                 loss = criterion(
@@ -1998,16 +2009,19 @@ class Trainer:
                 label_lengths = batch["label_lengths"].cpu().tolist()
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-
                 log_probs, input_lengths = classifier(waveforms, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
-                for pred_seq, ref_seq in zip(preds, labels):
+                for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
-                    all_refs.append(ref_seq)
 
+                    # ✅ ensure refs are lists of correct length
+                    if isinstance(ref_seq, list):
+                        all_refs.append(ref_seq[:ref_len])
+                    else:
+                        all_refs.append([ref_seq])
 
         ref_texts = [" ".join(map(str, r)) for r in all_refs]
         hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
@@ -2083,8 +2097,9 @@ class Trainer:
                 audio = batch["audio"].to(self.device)
                 labels = batch["labels"].to(self.device)
                 label_lengths = batch["label_lengths"].to(self.device)
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(audio)
+                log_probs, input_lengths = classifier(audio, audio_lengths)
 
                 # CTC expects (T, B, C)
                 loss = criterion(
@@ -2118,10 +2133,15 @@ class Trainer:
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
-                for pred_seq, ref_seq in zip(preds, labels):
+                for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
-                    all_refs.append(ref_seq)
+
+                    # ✅ ensure refs are always lists sliced to true length
+                    if isinstance(ref_seq, list):
+                        all_refs.append(ref_seq[:ref_len])
+                    else:
+                        all_refs.append([ref_seq])
 
         ref_texts = [" ".join(map(str, r)) for r in all_refs]
         hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
@@ -2136,6 +2156,7 @@ class Trainer:
                 "cola/test_wer": wer_score,
                 "cola/test_per": per_score
             })
+
 
 
 
@@ -2229,15 +2250,22 @@ class Trainer:
                 audio = batch["audio"].to(self.device)
                 labels = batch["labels"].cpu().tolist()
                 label_lengths = batch["label_lengths"].cpu().tolist()
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(audio)
+                # pass audio_lengths here as in training
+                log_probs, input_lengths = classifier(audio, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
-                for pred_seq, ref_seq in zip(preds, labels):
+                for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
-                    all_refs.append(ref_seq)
+
+                    # ensure refs are always lists sliced to true length
+                    if isinstance(ref_seq, list):
+                        all_refs.append(ref_seq[:ref_len])
+                    else:
+                        all_refs.append([ref_seq])
 
         ref_texts = [" ".join(map(str, r)) for r in all_refs]
         hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
