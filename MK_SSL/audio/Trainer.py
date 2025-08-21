@@ -1696,9 +1696,14 @@ class Trainer:
             is_linear=freeze_backbone,
         ).to(self.device)
 
-        optimizer = torch.optim.Adam(
-            filter(lambda p: p.requires_grad, model.parameters()), lr=lr
+        optimizer = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, model.parameters()),
+            lr=lr,                      # e.g. 1e-3 for frozen backbone head training
+            betas=(0.9, 0.98),          # smoother than default (0.9, 0.999)
+            eps=1e-8,                   # safe default
+            weight_decay=1e-4           # small decay to help generalization
         )
+
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
         train_loader = DataLoader(
@@ -1741,6 +1746,8 @@ class Trainer:
 
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+
                 optimizer.step()
 
             self.logger.info(f"[Wav2Vec2-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
@@ -1815,9 +1822,14 @@ class Trainer:
             is_linear=freeze_backbone,
         ).to(self.device)
 
-        optimizer = torch.optim.Adam(
-            filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
+        optimizer = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, classifier.parameters()),
+            lr=lr,                      # e.g. 1e-3 for frozen backbone head training
+            betas=(0.9, 0.98),          # smoother than default (0.9, 0.999)
+            eps=1e-8,                   # safe default
+            weight_decay=1e-4           # small decay to help generalization
         )
+
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
         train_loader = DataLoader(
@@ -1859,6 +1871,8 @@ class Trainer:
 
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
+
                 optimizer.step()
 
             self.logger.info(f"[SimCLR-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
@@ -1933,9 +1947,14 @@ class Trainer:
             is_linear=freeze_backbone,
         ).to(self.device)
 
-        optimizer = torch.optim.Adam(
-            filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
+        optimizer = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, classifier.parameters()),
+            lr=lr,                      # e.g. 1e-3 for frozen backbone head training
+            betas=(0.9, 0.98),          # smoother than default (0.9, 0.999)
+            eps=1e-8,                   # safe default
+            weight_decay=1e-4           # small decay to help generalization
         )
+
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
         train_loader = DataLoader(
@@ -1977,6 +1996,8 @@ class Trainer:
 
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
+
                 optimizer.step()
 
             self.logger.info(f"[HuBERT-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
@@ -2049,9 +2070,14 @@ class Trainer:
             is_linear=freeze_backbone,
         ).to(self.device)
 
-        optimizer = torch.optim.Adam(
-            filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
+        optimizer = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, classifier.parameters()),
+            lr=lr,                      # e.g. 1e-3 for frozen backbone head training
+            betas=(0.9, 0.98),          # smoother than default (0.9, 0.999)
+            eps=1e-8,                   # safe default
+            weight_decay=1e-4           # small decay to help generalization
         )
+
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
         train_loader = DataLoader(
@@ -2093,6 +2119,8 @@ class Trainer:
 
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
+
                 optimizer.step()
 
             self.logger.info(f"[COLA-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
@@ -2166,9 +2194,14 @@ class Trainer:
             is_linear=freeze_backbone,
         ).to(self.device)
 
-        optimizer = torch.optim.Adam(
-            filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
+        optimizer = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, classifier.parameters()),
+            lr=lr,                      # e.g. 1e-3 for frozen backbone head training
+            betas=(0.9, 0.98),          # smoother than default (0.9, 0.999)
+            eps=1e-8,                   # safe default
+            weight_decay=1e-4           # small decay to help generalization
         )
+
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
         train_loader = DataLoader(
@@ -2210,6 +2243,7 @@ class Trainer:
 
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
                 optimizer.step()
 
             self.logger.info(f"[EAT-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
