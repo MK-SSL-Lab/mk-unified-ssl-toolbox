@@ -1733,7 +1733,7 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[Wav2Vec2-CTC Training] Epoch {epoch+1}"):
                 waveforms = batch["audio"].to(self.device)
-                labels = batch["labels"].to(self.device)       # 👈 FIXED
+                labels = batch["flat_labels"].to(self.device)       # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
@@ -1866,7 +1866,7 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[SimCLR-CTC Training] Epoch {epoch+1}"):
                 wavs = batch["audio"].to(self.device)
-                labels = batch["labels"].to(self.device)       # 👈 FIXED
+                labels = batch["flat_labels"].to(self.device)       # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
@@ -1998,7 +1998,7 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[HuBERT-CTC Training] Epoch {epoch+1}"):
                 waveforms = batch["audio"].to(self.device)
-                labels = batch["labels"].to(self.device)       # 👈 FIXED
+                labels = batch["flat_labels"].to(self.device)       # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
@@ -2128,7 +2128,7 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[COLA-CTC Training] Epoch {epoch+1}"):
                 audio = batch["audio"].to(self.device)
-                labels = batch["labels"].to(self.device)       # 👈 FIXED
+                labels = batch["flat_labels"].to(self.device)       # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
@@ -2414,31 +2414,43 @@ class Trainer:
 
 
 
+
     def collate_ctc(self, batch):
+        """
+        Collate function for CTC training/evaluation.
+
+        Returns:
+            {
+                "audio":         FloatTensor (B, 1, T_max)  - zero-padded waveforms
+                "audio_lengths": LongTensor  (B,)           - valid lengths in raw samples
+                "labels":        LongTensor  (B, L_max)     - +1 shifted, 0 is CTC blank/pad
+                "flat_labels":   LongTensor  (sum(L_b),)    - concatenated labels for CTCLoss
+                "label_lengths": LongTensor  (B,)           - valid label lengths (pre-pad)
+            }
+        """
         batch = [b for b in batch if b is not None]
         if len(batch) == 0:
             return None
 
-        # Audio padding
-        audios = [b["audio"].squeeze(0).t() for b in batch]
+        # ---- Audio padding (keep lengths in *samples* for accurate out_lengths) ----
+        audios = [b["audio"].squeeze(0) for b in batch]  # (T,) per item
         audio_lengths = torch.tensor([a.size(0) for a in audios], dtype=torch.long)
-        padded_audios = pad_sequence(audios, batch_first=True).unsqueeze(1)
+        padded_audios = pad_sequence(audios, batch_first=True).unsqueeze(1).contiguous()  # (B,1,T_max)
 
-        # Label padding
-        labels = []
-        for b in batch:
-            # Shift all labels by +1 so 0 can be reserved for CTC blank
-            labels.append(b["labels"] + 1)
-
+        # ---- Label padding (shift by +1 so 0 is reserved for CTC blank/pad) ----
+        labels = [b["labels"] + 1 for b in batch]  # each is (L_b,)
         label_lengths = torch.tensor([len(l) for l in labels], dtype=torch.long)
-        flat_labels = torch.cat(labels, dim=0)
+        padded_labels = pad_sequence(labels, batch_first=True, padding_value=0)          # (B,L_max)
+        flat_labels = torch.cat(labels, dim=0)                                           # (sum L_b,)
 
         return {
             "audio": padded_audios,
             "audio_lengths": audio_lengths,
-            "labels": flat_labels,
+            "labels": padded_labels,
+            "flat_labels": flat_labels,   # used by CTCLoss with (T,B,C) logits
             "label_lengths": label_lengths,
         }
+
 
 
 
