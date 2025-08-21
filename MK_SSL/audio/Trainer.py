@@ -2304,7 +2304,7 @@ class Trainer:
             self.wandb_logger.finish_run()
 
 
-    def collate_ctc(batch):
+    def collate_ctc(self, batch):
         """
         Collate function for CTC evaluation.
         Handles variable-length audio and labels.
