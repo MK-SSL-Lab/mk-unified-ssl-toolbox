@@ -1733,7 +1733,7 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[Wav2Vec2-CTC Training] Epoch {epoch+1}"):
                 waveforms = batch["audio"].to(self.device)
-                labels = batch["flat_labels"].to(self.device)       # 👈 FIXED
+                labels = batch["labels"].to(self.device)       # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
@@ -1781,7 +1781,6 @@ class Trainer:
 
                 # Greedy CTC decoding
                 for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
-                    ref_seq = ref_seq[:ref_len]   # cut off padding
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
@@ -1867,7 +1866,7 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[SimCLR-CTC Training] Epoch {epoch+1}"):
                 wavs = batch["audio"].to(self.device)
-                labels = batch["flat_labels"].to(self.device)       # 👈 FIXED
+                labels = batch["labels"].to(self.device)       # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
@@ -1915,7 +1914,6 @@ class Trainer:
 
                 # Greedy CTC decoding
                 for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
-                    ref_seq = ref_seq[:ref_len]   # cut off padding
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
@@ -2000,7 +1998,7 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[HuBERT-CTC Training] Epoch {epoch+1}"):
                 waveforms = batch["audio"].to(self.device)
-                labels = batch["flat_labels"].to(self.device)       # 👈 FIXED
+                labels = batch["labels"].to(self.device)       # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
@@ -2048,7 +2046,6 @@ class Trainer:
 
                 # Greedy CTC decoding
                 for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
-                    ref_seq = ref_seq[:ref_len]   # cut off padding
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
@@ -2131,7 +2128,7 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[COLA-CTC Training] Epoch {epoch+1}"):
                 audio = batch["audio"].to(self.device)
-                labels = batch["flat_labels"].to(self.device)       # 👈 FIXED
+                labels = batch["labels"].to(self.device)       # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
@@ -2179,7 +2176,6 @@ class Trainer:
 
                 # Greedy CTC decoding
                 for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
-                    ref_seq = ref_seq[:ref_len]   # cut off padding
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
@@ -2263,7 +2259,7 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[EAT-CTC Training] Epoch {epoch+1}"):
                 audio = batch["audio"].to(self.device)
-                labels = batch["flat_labels"].to(self.device)   # 👈 FIXED
+                labels = batch["labels"].to(self.device)
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
@@ -2311,7 +2307,6 @@ class Trainer:
                 # Greedy CTC decoding
 
                 for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
-                    ref_seq = ref_seq[:ref_len]   # cut off padding
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
@@ -2401,14 +2396,12 @@ class Trainer:
             labels.append(b["labels"] + 1)
 
         label_lengths = torch.tensor([len(l) for l in labels], dtype=torch.long)
-        padded_labels = pad_sequence(labels, batch_first=True, padding_value=0)
         flat_labels = torch.cat(labels, dim=0)
 
         return {
             "audio": padded_audios,
             "audio_lengths": audio_lengths,
-            "labels": padded_labels,
-            "flat_labels": flat_labels,   # 👈 important: use this in CTC
+            "labels": flat_labels,
             "label_lengths": label_lengths,
         }
 
