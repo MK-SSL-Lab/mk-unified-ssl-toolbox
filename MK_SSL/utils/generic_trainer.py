@@ -98,9 +98,7 @@ class GenericSSLTrainer:
         sig = inspect.signature(self.loss_fn)
         filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
         return self.loss_fn(**filtered)
-
+    
     def _build_views(self, batch):
-        if self.build_views_fn:
-            return self.build_views_fn(batch)
         return [batch, batch], [None, None]
     
