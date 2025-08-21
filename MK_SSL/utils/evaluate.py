@@ -44,13 +44,20 @@ class EvaluateNet(nn.Module):
             log_probs (Tensor): (B, T, num_classes) log-probs.
             out_lengths (Tensor): Lengths of predicted sequences.
         """
-        feats = self.backbone(x, lengths)  # expect (B, T, E)
+        feats = self.backbone(x, lengths)   # (B, T_out, E)
 
-        logits = self.fc(feats)            # (B, T, num_classes)
+        logits = self.fc(feats)             # (B, T_out, num_classes)
         log_probs = nn.functional.log_softmax(logits, dim=-1)
 
-        out_lengths = torch.full(
-            size=(logits.size(0),), fill_value=logits.size(1), dtype=torch.long
-        )
+        if lengths is not None:
+            # adjust lengths for backbone’s time reduction
+            stride = getattr(self.backbone, "downsample_ratio", 1)
+            out_lengths = torch.div(lengths, stride, rounding_mode="floor")
+        else:
+            out_lengths = torch.full(
+                size=(logits.size(0),), fill_value=logits.size(1), dtype=torch.long
+            )
 
         return log_probs, out_lengths
+
+
