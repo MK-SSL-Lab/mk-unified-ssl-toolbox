@@ -34,26 +34,20 @@ class EvaluateNet(nn.Module):
         # Frame-level projection → vocab
         self.fc = nn.Linear(feature_size, num_classes, bias=True)
 
+class EvaluateNet(nn.Module):
     def forward(self, x: Tensor, lengths: Tensor = None):
         """
         Args:
             x (Tensor): Input waveforms (B, 1, T).
-            lengths (Tensor, optional): Original audio lengths.
+            lengths (Tensor, optional): Original audio lengths in samples (B,).
 
         Returns:
-            log_probs (Tensor): (B, T, num_classes) log-probs.
-            out_lengths (Tensor): Lengths of predicted sequences.
+            log_probs (Tensor): (B, T_out, num_classes) log-probs.
+            out_lengths (Tensor): (B,) valid lengths of predicted sequences.
         """
-        feats = self.backbone(x, lengths)   # (B, T_out, E)
-
-        logits = self.fc(feats)             # (B, T_out, num_classes)
+        feats, out_lengths = self.backbone(x, lengths)   # (B, T_out, E), (B,)
+        logits = self.fc(feats)                          # (B, T_out, C)
         log_probs = nn.functional.log_softmax(logits, dim=-1)
-
-
-        out_lengths = torch.full(
-            size=(logits.size(0),), fill_value=logits.size(1), dtype=torch.long
-        )
-
         return log_probs, out_lengths
 
 

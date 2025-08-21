@@ -2256,12 +2256,16 @@ class Trainer:
 
         # === Training ===
         classifier.train()
+        if freeze_backbone:
+            # Keep backbone deterministic even while classifier is in train mode
+            classifier.backbone.eval()
+
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[EAT-CTC Training] Epoch {epoch+1}"):
-                audio = batch["audio"].to(self.device)
-                labels = batch["labels"].to(self.device)
-                label_lengths = batch["label_lengths"].to(self.device)
-                audio_lengths = batch["audio_lengths"].to(self.device)
+                audio = batch["audio"].to(self.device)                    # (B, 1, T_pad)
+                labels = batch["flat_labels"].to(self.device)             # 1..C-1 (0 is blank)
+                label_lengths = batch["label_lengths"].to(self.device)    # (B,)
+                audio_lengths = batch["audio_lengths"].to(self.device)    # (B,)
 
                 log_probs, output_lengths = classifier(audio, audio_lengths)
 
@@ -2274,7 +2278,7 @@ class Trainer:
                     self.logger.error("❌ NaN loss detected!")
                     self.logger.error(f"log_probs: {log_probs.shape}, "
                                     f"labels: {labels.shape}, "
-                                    f"input_lengths: {audio_lengths}, "
+                                    f"input_lengths: {output_lengths}, "
                                     f"label_lengths: {label_lengths}")
                     continue
 
@@ -2294,31 +2298,62 @@ class Trainer:
 
         # === Evaluation ===
         classifier.eval()
-        all_refs, all_hyps = [], []
+        all_refs_tokens, all_hyps_tokens = [], []
+
+        # Use a single shared mapping (train/test share it thanks to the canonical vocab)
+        idx2label = getattr(train_dataset, "idx2label", None)
+        if idx2label is None:
+            raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
+
         with torch.no_grad():
             for batch in tqdm(test_loader, desc="[EAT-CTC Evaluation]"):
                 audio = batch["audio"].to(self.device)
-                labels = batch["labels"].cpu().tolist()
+                audio_lengths = batch["audio_lengths"].to(self.device)
+
+                # Padded labels come in with +1 shift (0 is blank padding)
+                labels_padded = batch["labels"].cpu().tolist()
                 label_lengths = batch["label_lengths"].cpu().tolist()
 
-                log_probs, output_lengths = classifier(audio)
+                log_probs, out_lengths = classifier(audio, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
+                out_lengths = out_lengths.cpu().tolist()
 
-                # Greedy CTC decoding
+                # Greedy CTC decoding with collapse + blank removal, and proper trimming
+                for pred_seq, ref_seq, ref_len, out_len in zip(preds, labels_padded, label_lengths, out_lengths):
+                    # Trim to the valid model output length
+                    pred_seq = pred_seq[:out_len]
 
-                for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
-                    hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
-                    all_hyps.append(hyp)
-                    all_refs.append(ref_seq)
+                    # Collapse repeats & remove blanks (0)
+                    hyp_ids = []
+                    prev = None
+                    for p in pred_seq:
+                        if p == 0:
+                            prev = p
+                            continue
+                        if p != prev:
+                            hyp_ids.append(p)
+                        prev = p
 
+                    # Convert to phoneme tokens (subtract 1 to undo the +1 shift)
+                    hyp_tokens = [idx2label[p - 1] for p in hyp_ids]  # p >= 1
+                    ref_ids = ref_seq[:ref_len]                      # already +1 shifted, no padding inside length
+                    ref_tokens = [idx2label[r - 1] for r in ref_ids]
 
-        ref_texts = [" ".join(map(str, r)) for r in all_refs]
-        hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
+                    all_hyps_tokens.append(hyp_tokens)
+                    all_refs_tokens.append(ref_tokens)
+
+        # Stringify for WER (token-level over phones)
+        ref_texts = [" ".join(r) for r in all_refs_tokens]
+        hyp_texts = [" ".join(h) for h in all_hyps_tokens]
 
         wer_score = wer(ref_texts, hyp_texts)
-        per_score = sum(edit_distance(r, h) for r, h in zip(all_refs, all_hyps)) / sum(len(r) for r in all_refs)
 
-        self.logger.info(f"📊 [EAT-CTC Evaluation] WER={wer_score:.4f}, PER={per_score:.4f}")
+        # True PER on phone sequences
+        per_numer = sum(edit_distance(r, h) for r, h in zip(all_refs_tokens, all_hyps_tokens))
+        per_denom = sum(len(r) for r in all_refs_tokens) if all_refs_tokens else 1
+        per_score = per_numer / per_denom
+
+        self.logger.info(f"📊 [EAT-CTC Evaluation] WER(tokens)={wer_score:.4f}, PER={per_score:.4f}")
 
         if self.wandb_logger.is_active:
             self.wandb_logger.log({
