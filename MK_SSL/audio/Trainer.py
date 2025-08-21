@@ -1689,7 +1689,7 @@ class Trainer:
         backbone = Wav2Vec2Backbone(pretrained_model=self.model)
         feature_size = self.model.model_config["encoder_embed_dim"]
 
-        model = EvaluateNet(
+        classifier = EvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
             num_classes=num_classes,  # vocab size incl. blank
@@ -1697,11 +1697,11 @@ class Trainer:
         ).to(self.device)
 
         optimizer = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, model.parameters()),
-            lr=lr,                      # e.g. 1e-3 for frozen backbone head training
-            betas=(0.9, 0.98),          # smoother than default (0.9, 0.999)
-            eps=1e-8,                   # safe default
-            weight_decay=1e-4           # small decay to help generalization
+            filter(lambda p: p.requires_grad, classifier.parameters()),
+            lr=lr,
+            betas=(0.9, 0.98),
+            eps=1e-8,
+            weight_decay=1e-4
         )
 
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
@@ -1724,30 +1724,37 @@ class Trainer:
             pin_memory=True,
         )
 
-        # ✅ Watch the model
+        # ✅ Watch the classifier model
         if self.wandb_logger.is_active:
-            self.wandb_logger.watch_model(model)
+            self.wandb_logger.watch_model(classifier)
 
         # === Training loop ===
-        model.train()
+        classifier.train()
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[Wav2Vec2-CTC Training] Epoch {epoch+1}"):
                 waveforms = batch["audio"].to(self.device)
-                labels = batch["labels"].to(self.device)
+                labels = batch["flat_labels"].to(self.device)       # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = model(waveforms, audio_lengths)
+                log_probs, input_lengths = classifier(waveforms, audio_lengths)
 
                 # CTC loss expects (T, B, C)
                 loss = criterion(
                     log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
                 )
 
+                if torch.isnan(loss):
+                    self.logger.error("❌ NaN loss detected!")
+                    self.logger.error(f"log_probs: {log_probs.shape}, "
+                                    f"labels: {labels.shape}, "
+                                    f"input_lengths: {input_lengths}, "
+                                    f"label_lengths: {label_lengths}")
+                    continue
+
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-
+                torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
                 optimizer.step()
 
             self.logger.info(f"[Wav2Vec2-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
@@ -1760,15 +1767,16 @@ class Trainer:
                 }, step=epoch + 1)
 
         # === Evaluation loop ===
-        model.eval()
+        classifier.eval()
         all_refs, all_hyps = [], []
         with torch.no_grad():
             for batch in tqdm(test_loader, desc="[Wav2Vec2-CTC Evaluation]"):
                 waveforms = batch["audio"].to(self.device)
                 labels = batch["labels"].cpu().tolist()
                 label_lengths = batch["label_lengths"].cpu().tolist()
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = model(waveforms)
+                log_probs, input_lengths = classifier(waveforms, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
@@ -1776,8 +1784,6 @@ class Trainer:
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
-
-
 
         ref_texts = [" ".join(map(str, r)) for r in all_refs]
         hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
@@ -1792,6 +1798,7 @@ class Trainer:
                 "wav2vec2/test_wer": wer_score,
                 "wav2vec2/test_per": per_score
             })
+
 
 
 
@@ -1824,10 +1831,10 @@ class Trainer:
 
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, classifier.parameters()),
-            lr=lr,                      # e.g. 1e-3 for frozen backbone head training
-            betas=(0.9, 0.98),          # smoother than default (0.9, 0.999)
-            eps=1e-8,                   # safe default
-            weight_decay=1e-4           # small decay to help generalization
+            lr=lr,
+            betas=(0.9, 0.98),
+            eps=1e-8,
+            weight_decay=1e-4
         )
 
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
@@ -1859,20 +1866,28 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[SimCLR-CTC Training] Epoch {epoch+1}"):
                 wavs = batch["audio"].to(self.device)
-                labels = batch["labels"].to(self.device)
+                labels = batch["flat_labels"].to(self.device)       # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(wavs)
+                log_probs, input_lengths = classifier(wavs, audio_lengths)
 
                 # CTC loss expects (T, B, C)
                 loss = criterion(
                     log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
                 )
 
+                if torch.isnan(loss):
+                    self.logger.error("❌ NaN loss detected!")
+                    self.logger.error(f"log_probs: {log_probs.shape}, "
+                                    f"labels: {labels.shape}, "
+                                    f"input_lengths: {input_lengths}, "
+                                    f"label_lengths: {label_lengths}")
+                    continue
+
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
-
                 optimizer.step()
 
             self.logger.info(f"[SimCLR-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
@@ -1902,7 +1917,6 @@ class Trainer:
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
-
 
         ref_texts = [" ".join(map(str, r)) for r in all_refs]
         hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
@@ -1949,10 +1963,10 @@ class Trainer:
 
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, classifier.parameters()),
-            lr=lr,                      # e.g. 1e-3 for frozen backbone head training
-            betas=(0.9, 0.98),          # smoother than default (0.9, 0.999)
-            eps=1e-8,                   # safe default
-            weight_decay=1e-4           # small decay to help generalization
+            lr=lr,
+            betas=(0.9, 0.98),
+            eps=1e-8,
+            weight_decay=1e-4
         )
 
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
@@ -1984,20 +1998,28 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[HuBERT-CTC Training] Epoch {epoch+1}"):
                 waveforms = batch["audio"].to(self.device)
-                labels = batch["labels"].to(self.device)
+                labels = batch["flat_labels"].to(self.device)       # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(waveforms)
+                log_probs, input_lengths = classifier(waveforms, audio_lengths)
 
                 # CTC loss expects (T, B, C)
                 loss = criterion(
                     log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
                 )
 
+                if torch.isnan(loss):
+                    self.logger.error("❌ NaN loss detected!")
+                    self.logger.error(f"log_probs: {log_probs.shape}, "
+                                    f"labels: {labels.shape}, "
+                                    f"input_lengths: {input_lengths}, "
+                                    f"label_lengths: {label_lengths}")
+                    continue
+
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
-
                 optimizer.step()
 
             self.logger.info(f"[HuBERT-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
@@ -2019,7 +2041,6 @@ class Trainer:
                 label_lengths = batch["label_lengths"].cpu().tolist()
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-
                 log_probs, input_lengths = classifier(waveforms, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
@@ -2028,7 +2049,6 @@ class Trainer:
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
-
 
         ref_texts = [" ".join(map(str, r)) for r in all_refs]
         hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
@@ -2043,6 +2063,7 @@ class Trainer:
                 "hubert/test_wer": wer_score,
                 "hubert/test_per": per_score
             })
+
 
 
     def _evaluate_cola(
@@ -2072,10 +2093,10 @@ class Trainer:
 
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, classifier.parameters()),
-            lr=lr,                      # e.g. 1e-3 for frozen backbone head training
-            betas=(0.9, 0.98),          # smoother than default (0.9, 0.999)
-            eps=1e-8,                   # safe default
-            weight_decay=1e-4           # small decay to help generalization
+            lr=lr,
+            betas=(0.9, 0.98),
+            eps=1e-8,
+            weight_decay=1e-4
         )
 
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
@@ -2107,20 +2128,28 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[COLA-CTC Training] Epoch {epoch+1}"):
                 audio = batch["audio"].to(self.device)
-                labels = batch["labels"].to(self.device)
+                labels = batch["flat_labels"].to(self.device)       # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
+                audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(audio)
+                log_probs, input_lengths = classifier(audio, audio_lengths)
 
                 # CTC expects (T, B, C)
                 loss = criterion(
                     log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
                 )
 
+                if torch.isnan(loss):
+                    self.logger.error("❌ NaN loss detected!")
+                    self.logger.error(f"log_probs: {log_probs.shape}, "
+                                    f"labels: {labels.shape}, "
+                                    f"input_lengths: {input_lengths}, "
+                                    f"label_lengths: {label_lengths}")
+                    continue
+
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
-
                 optimizer.step()
 
             self.logger.info(f"[COLA-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
@@ -2196,10 +2225,10 @@ class Trainer:
 
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, classifier.parameters()),
-            lr=lr,                      # e.g. 1e-3 for frozen backbone head training
-            betas=(0.9, 0.98),          # smoother than default (0.9, 0.999)
-            eps=1e-8,                   # safe default
-            weight_decay=1e-4           # small decay to help generalization
+            lr=lr,
+            betas=(0.9, 0.98),
+            eps=1e-8,
+            weight_decay=1e-4
         )
 
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
@@ -2230,7 +2259,7 @@ class Trainer:
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[EAT-CTC Training] Epoch {epoch+1}"):
                 audio = batch["audio"].to(self.device)
-                labels = batch["labels"].to(self.device)
+                labels = batch["flat_labels"].to(self.device)   # 👈 FIXED
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
@@ -2240,6 +2269,14 @@ class Trainer:
                 loss = criterion(
                     log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
                 )
+
+                if torch.isnan(loss):
+                    self.logger.error("❌ NaN loss detected!")
+                    self.logger.error(f"log_probs: {log_probs.shape}, "
+                                    f"labels: {labels.shape}, "
+                                    f"input_lengths: {input_lengths}, "
+                                    f"label_lengths: {label_lengths}")
+                    continue
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -2286,6 +2323,7 @@ class Trainer:
                 "eat/test_wer": wer_score,
                 "eat/test_per": per_score
             })
+
 
 
 
@@ -2363,7 +2401,7 @@ class Trainer:
             "audio": padded_audios,
             "audio_lengths": audio_lengths,
             "labels": padded_labels,
-            "flat_labels": flat_labels,
+            "flat_labels": flat_labels,   # 👈 important: use this in CTC
             "label_lengths": label_lengths,
         }
 
