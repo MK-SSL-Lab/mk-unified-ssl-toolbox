@@ -65,7 +65,7 @@ class LoRAArguments:
     target_modules: Optional[list[str]] = None
     lora_dropout: float = 0.1
     bias: str = "none"
-    task_type: str = "TOKEN_CLS"
+    task_type: str = "FEATURE_EXTRACTION"
 
     def to_peft_config(self) -> LoraConfig:
         """
