@@ -1780,7 +1780,8 @@ class Trainer:
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
-                for pred_seq, ref_seq in zip(preds, labels):
+                for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
+                    ref_seq = ref_seq[:ref_len]   # cut off padding
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
@@ -1913,7 +1914,8 @@ class Trainer:
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
-                for pred_seq, ref_seq in zip(preds, labels):
+                for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
+                    ref_seq = ref_seq[:ref_len]   # cut off padding
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
@@ -2045,7 +2047,8 @@ class Trainer:
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
-                for pred_seq, ref_seq in zip(preds, labels):
+                for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
+                    ref_seq = ref_seq[:ref_len]   # cut off padding
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
@@ -2175,7 +2178,8 @@ class Trainer:
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
-                for pred_seq, ref_seq in zip(preds, labels):
+                for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
+                    ref_seq = ref_seq[:ref_len]   # cut off padding
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
@@ -2305,10 +2309,13 @@ class Trainer:
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
-                for pred_seq, ref_seq in zip(preds, labels):
+
+                for pred_seq, ref_seq, ref_len in zip(preds, labels, label_lengths):
+                    ref_seq = ref_seq[:ref_len]   # cut off padding
                     hyp = [p for i, p in enumerate(pred_seq) if p != 0 and (i == 0 or p != pred_seq[i-1])]
                     all_hyps.append(hyp)
                     all_refs.append(ref_seq)
+
 
         ref_texts = [" ".join(map(str, r)) for r in all_refs]
         hyp_texts = [" ".join(map(str, h)) for h in all_hyps]
