@@ -1737,18 +1737,18 @@ class Trainer:
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(waveforms, audio_lengths)
+                log_probs, output_lengths = classifier(waveforms, audio_lengths)
 
                 # CTC loss expects (T, B, C)
                 loss = criterion(
-                    log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
+                    log_probs.permute(1, 0, 2), labels, output_lengths, label_lengths
                 )
 
                 if torch.isnan(loss):
                     self.logger.error("❌ NaN loss detected!")
                     self.logger.error(f"log_probs: {log_probs.shape}, "
                                     f"labels: {labels.shape}, "
-                                    f"input_lengths: {input_lengths}, "
+                                    f"input_lengths: {audio_lengths}, "
                                     f"label_lengths: {label_lengths}")
                     continue
 
@@ -1776,7 +1776,7 @@ class Trainer:
                 label_lengths = batch["label_lengths"].cpu().tolist()
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(waveforms, audio_lengths)
+                log_probs, output_lengths = classifier(waveforms, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
@@ -1871,18 +1871,18 @@ class Trainer:
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(wavs, audio_lengths)
+                log_probs, output_lengths = classifier(wavs, audio_lengths)
 
                 # CTC loss expects (T, B, C)
                 loss = criterion(
-                    log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
+                    log_probs.permute(1, 0, 2), labels, output_lengths, label_lengths
                 )
 
                 if torch.isnan(loss):
                     self.logger.error("❌ NaN loss detected!")
                     self.logger.error(f"log_probs: {log_probs.shape}, "
                                     f"labels: {labels.shape}, "
-                                    f"input_lengths: {input_lengths}, "
+                                    f"input_lengths: {audio_lengths}, "
                                     f"label_lengths: {label_lengths}")
                     continue
 
@@ -1910,7 +1910,7 @@ class Trainer:
                 label_lengths = batch["label_lengths"].cpu().tolist()
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(wavs, audio_lengths)
+                log_probs, output_lengths = classifier(wavs, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
@@ -2004,18 +2004,18 @@ class Trainer:
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(waveforms, audio_lengths)
+                log_probs, output_lengths = classifier(waveforms, audio_lengths)
 
                 # CTC loss expects (T, B, C)
                 loss = criterion(
-                    log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
+                    log_probs.permute(1, 0, 2), labels, output_lengths, label_lengths
                 )
 
                 if torch.isnan(loss):
                     self.logger.error("❌ NaN loss detected!")
                     self.logger.error(f"log_probs: {log_probs.shape}, "
                                     f"labels: {labels.shape}, "
-                                    f"input_lengths: {input_lengths}, "
+                                    f"input_lengths: {audio_lengths}, "
                                     f"label_lengths: {label_lengths}")
                     continue
 
@@ -2043,7 +2043,7 @@ class Trainer:
                 label_lengths = batch["label_lengths"].cpu().tolist()
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(waveforms, audio_lengths)
+                log_probs, output_lengths = classifier(waveforms, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
@@ -2135,18 +2135,18 @@ class Trainer:
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(audio, audio_lengths)
+                log_probs, output_lengths = classifier(audio, audio_lengths)
 
                 # CTC expects (T, B, C)
                 loss = criterion(
-                    log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
+                    log_probs.permute(1, 0, 2), labels, output_lengths, label_lengths
                 )
 
                 if torch.isnan(loss):
                     self.logger.error("❌ NaN loss detected!")
                     self.logger.error(f"log_probs: {log_probs.shape}, "
                                     f"labels: {labels.shape}, "
-                                    f"input_lengths: {input_lengths}, "
+                                    f"input_lengths: {audio_lengths}, "
                                     f"label_lengths: {label_lengths}")
                     continue
 
@@ -2174,7 +2174,7 @@ class Trainer:
                 label_lengths = batch["label_lengths"].cpu().tolist()
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(audio, audio_lengths)
+                log_probs, output_lengths = classifier(audio, audio_lengths)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
@@ -2267,18 +2267,18 @@ class Trainer:
                 label_lengths = batch["label_lengths"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                log_probs, input_lengths = classifier(audio, audio_lengths)
+                log_probs, output_lengths = classifier(audio, audio_lengths)
 
                 # CTC expects (T, B, C)
                 loss = criterion(
-                    log_probs.permute(1, 0, 2), labels, input_lengths, label_lengths
+                    log_probs.permute(1, 0, 2), labels, output_lengths, label_lengths
                 )
 
                 if torch.isnan(loss):
                     self.logger.error("❌ NaN loss detected!")
                     self.logger.error(f"log_probs: {log_probs.shape}, "
                                     f"labels: {labels.shape}, "
-                                    f"input_lengths: {input_lengths}, "
+                                    f"input_lengths: {audio_lengths}, "
                                     f"label_lengths: {label_lengths}")
                     continue
 
@@ -2305,7 +2305,7 @@ class Trainer:
                 labels = batch["labels"].cpu().tolist()
                 label_lengths = batch["label_lengths"].cpu().tolist()
 
-                log_probs, input_lengths = classifier(audio)
+                log_probs, output_lengths = classifier(audio)
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
 
                 # Greedy CTC decoding
