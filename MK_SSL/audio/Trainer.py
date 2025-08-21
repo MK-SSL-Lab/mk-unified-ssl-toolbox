@@ -2304,17 +2304,23 @@ class Trainer:
             self.wandb_logger.finish_run()
 
 
+
     def collate_ctc(self, batch):
         batch = [b for b in batch if b is not None]
         if len(batch) == 0:
             return None
 
+        # Audio padding
         audios = [b["audio"].squeeze(0).t() for b in batch]
         audio_lengths = torch.tensor([a.size(0) for a in audios], dtype=torch.long)
-        padded_audios = pad_sequence(audios, batch_first=True)
-        padded_audios = padded_audios.unsqueeze(1)
+        padded_audios = pad_sequence(audios, batch_first=True).unsqueeze(1)
 
-        labels = [b["labels"] for b in batch]
+        # Label padding
+        labels = []
+        for b in batch:
+            # Shift all labels by +1 so 0 can be reserved for CTC blank
+            labels.append(b["labels"] + 1)
+
         label_lengths = torch.tensor([len(l) for l in labels], dtype=torch.long)
         padded_labels = pad_sequence(labels, batch_first=True, padding_value=0)
         flat_labels = torch.cat(labels, dim=0)
@@ -2324,8 +2330,9 @@ class Trainer:
             "audio_lengths": audio_lengths,
             "labels": padded_labels,
             "flat_labels": flat_labels,
-            "label_lengths": label_lengths
+            "label_lengths": label_lengths,
         }
+
 
 
     def _reload_latest_checkpoint(self) -> int:
