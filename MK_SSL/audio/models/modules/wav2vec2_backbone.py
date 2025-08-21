@@ -42,4 +42,4 @@ class Wav2Vec2Backbone(nn.Module):
         z, lengths = self.feature_extractor(waveforms, lengths)
         z = self.feature_proj(z)
         context = self.encoder(z, lengths)
-        return context.mean(dim=1)
+        return context

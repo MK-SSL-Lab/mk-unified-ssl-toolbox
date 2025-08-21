@@ -198,20 +198,7 @@ class EfficientNetAudioEncoder(nn.Module):
     """Encoder backbone for COLA (Contrastive Learning of Audio).
 
     Converts raw waveform to a 1280-D latent vector using EfficientNet-B0
-    applied to log-mel spectrograms.
-
-    Args:
-        sample_rate (int, optional): Input audio sampling rate. Defaults to 16 kHz.
-        n_mels (int, optional): Number of mel filter-bank bins. Defaults to 64.
-        mel_win_len (int, optional): STFT window length in milliseconds. Defaults to 25.
-        mel_hop_len (int, optional): STFT hop length in milliseconds. Defaults to 10.
-        f_min (int, optional): Minimum mel frequency (Hz). Defaults to 60.
-        f_max (int, optional): Maximum mel frequency (Hz). Defaults to 7800.
-
-    Shape:
-        * **Input** : `(B, 1, T)` — raw waveform in the range **[-1, 1]**.
-        * **Output**: `(B, 1280)` — latent embedding after global max-pooling.
-
+    applied to log-mel spectrograms, with padding masked out.
     """
 
     def __init__(
@@ -233,13 +220,14 @@ class EfficientNetAudioEncoder(nn.Module):
             n_mels=n_mels,
             f_min=f_min,
             f_max=f_max,
-            power=2.0,  # magnitude-squared (as in the paper)
+            power=2.0,
         )
         self.log1p = torch.log1p
+        self.sample_rate = sample_rate
+        self.hop_len = int(sample_rate * mel_hop_len / 1_000)
 
         # --- EfficientNet-B0 backbone ---
         eff = efficientnet_b0(weights=None)  # torchvision ≥ 0.15
-        # Replace first conv to accept 1 channel (copy weights’ mean)
         old_conv = eff.features[0][0]
         new_conv = nn.Conv2d(
             1,
@@ -252,24 +240,40 @@ class EfficientNetAudioEncoder(nn.Module):
         with torch.no_grad():
             new_conv.weight[:] = old_conv.weight.mean(dim=1, keepdim=True)
         eff.features[0][0] = new_conv
-        self.encoder = eff.features  # drop classifier
+        self.encoder = eff.features
 
+        # we will implement our own masked pooling
         self.pool = nn.AdaptiveMaxPool2d((1, 1))
 
-    def forward(self, wave: torch.Tensor) -> torch.Tensor:  # (B, 1, T)
-        """Forward pass.
-
-        Args:
-            wave (torch.Tensor): Raw audio, shape `(B, 1, T)`.
-
-        Returns:
-            torch.Tensor: Latent embedding of shape `(B, 1280)`.
-        """
+    def forward(
+        self,
+        wave: torch.Tensor,        # (B, 1, T)
+        lengths: Optional[torch.Tensor] = None  # (B,)
+    ) -> torch.Tensor:
+        """Forward pass with masking support."""
         mel = self.mel(wave.squeeze(1))          # (B, n_mels, time)
         mel = self.log1p(mel).unsqueeze(1)       # (B, 1, n_mels, time)
         feats = self.encoder(mel)                # (B, C, H, W)
-        pooled = self.pool(feats).flatten(1)     # (B, C)
+
+        if lengths is not None:
+            # compute number of frames before padding for each example
+            num_frames = torch.div(lengths, self.hop_len, rounding_mode="floor") + 1
+            max_frames = feats.size(-1)
+
+            mask = torch.arange(max_frames, device=feats.device).expand(len(num_frames), max_frames)
+            mask = mask < num_frames.unsqueeze(1)           # (B, W)
+            mask = mask.unsqueeze(1).unsqueeze(2)           # (B,1,1,W)
+
+            # set padded positions to -inf so max pooling ignores them
+            feats = feats.masked_fill(~mask, float("-inf"))
+
+            pooled = torch.amax(feats, dim=(-2, -1))        # (B, C)
+        else:
+            # fall back to standard pooling
+            pooled = self.pool(feats).flatten(1)            # (B, C)
+
         return pooled
+
     
 
 

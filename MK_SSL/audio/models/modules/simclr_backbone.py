@@ -40,4 +40,4 @@ class SimCLRBackbone(nn.Module):
         x = self.fbank(waveforms)  # (B, T, 80)
         x = self.input_proj(x)  # (B, T, embed_dim)
         x = self.backbone(x)  # (B, T, embed_dim)
-        return x.mean(dim=1)  # mean pooling → (B, embed_dim)
+        return x

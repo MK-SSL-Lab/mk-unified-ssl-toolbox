@@ -7,14 +7,17 @@ class COLAAudioTransform:
     def __init__(self, segment_ms: int = 960, sample_rate: int = 16000):
         self.segment_len = int(segment_ms / 1000 * sample_rate)
 
-    def _transform_single(self, waveform: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _transform_single(self, waveform: torch.Tensor, orig_len: int) -> Tuple[torch.Tensor, torch.Tensor, int, int]:
         """
         Apply COLA transform to a single waveform [1, L].
+
+        Returns:
+            seg1, seg2: cropped waveform segments [1, segment_len]
+            len1, len2: original unpadded length (same for both segments)
         """
         if waveform.dim() != 2 or waveform.shape[0] != 1:
             raise ValueError(
-                f"Expected waveform shape [1, L], but got {tuple(waveform.shape)}. "
-                "Please ensure the dataset returns audio in [channels, time] format."
+                f"Expected waveform shape [1, L], but got {tuple(waveform.shape)}."
             )
 
         total_len = waveform.size(1)
@@ -28,24 +31,38 @@ class COLAAudioTransform:
 
         seg1 = waveform[:, offset1:offset1 + self.segment_len]
         seg2 = waveform[:, offset2:offset2 + self.segment_len]
-        return seg1, seg2
+        return seg1, seg2, orig_len, orig_len
 
-    def __call__(self, batch_waveform: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __call__(self, batch_waveform: torch.Tensor, batch_lengths: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Apply COLA transform to a batch [B, 1, L] or a single waveform [1, L].
+        Apply COLA transform to a batch.
+
+        Args:
+            batch_waveform (Tensor): shape [B, 1, L]
+            batch_lengths (Tensor): original unpadded lengths [B]
+
         Returns:
-            Tuple of (view0, view1) with shape [B, 1, segment_len] if input is batch.
+            segs0, segs1: tensors of shape [B, 1, segment_len]
+            lens0, lens1: tensors of shape [B,], each = original length
         """
         if batch_waveform.dim() == 2:  # Single sample [1, L]
-            return self._transform_single(batch_waveform)
+            s0, s1, l0, l1 = self._transform_single(batch_waveform, int(batch_lengths))
+            return s0.unsqueeze(0), s1.unsqueeze(0), torch.tensor([l0]), torch.tensor([l1])
 
         elif batch_waveform.dim() == 3:  # Batch [B, 1, L]
-            segs0, segs1 = [], []
-            for waveform in batch_waveform:  # Each waveform is [1, L]
-                s0, s1 = self._transform_single(waveform)
+            segs0, segs1, lens0, lens1 = [], [], [], []
+            for waveform, orig_len in zip(batch_waveform, batch_lengths):
+                s0, s1, l0, l1 = self._transform_single(waveform, int(orig_len))
                 segs0.append(s0)
                 segs1.append(s1)
-            return torch.stack(segs0), torch.stack(segs1)
+                lens0.append(l0)
+                lens1.append(l1)
+            return (
+                torch.stack(segs0),
+                torch.stack(segs1),
+                torch.tensor(lens0, dtype=torch.long),
+                torch.tensor(lens1, dtype=torch.long),
+            )
 
         else:
             raise ValueError(
