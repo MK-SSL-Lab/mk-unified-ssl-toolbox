@@ -2496,7 +2496,7 @@ class Trainer:
 
         # === AMP setup ===
         use_amp = (self.device.type == "cuda")
-        scaler = GradScaler()
+        scaler = GradScaler('cuda', enabled=use_amp)
 
         # === Training ===
         classifier.train()
