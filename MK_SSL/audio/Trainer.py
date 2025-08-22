@@ -21,7 +21,7 @@ import optuna
 from jiwer import wer
 from editdistance import eval as edit_distance
 from torch.nn.utils.rnn import pad_sequence
-from torch.amp import autocast, GradScaler
+from torch.cuda.amp import autocast, GradScaler
 
 
 
@@ -2496,7 +2496,7 @@ class Trainer:
 
         # === AMP setup ===
         use_amp = (self.device.type == "cuda")
-        scaler = GradScaler('cuda', enabled=use_amp)
+        scaler = GradScaler(enabled=use_amp)
 
         # === Training ===
         classifier.train()
