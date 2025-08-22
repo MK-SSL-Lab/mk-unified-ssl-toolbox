@@ -2512,6 +2512,9 @@ class Trainer:
         idx2label = getattr(train_dataset, "idx2label", None)
         if idx2label is None:
             raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
+        # Optional safety check if both datasets expose label2idx:
+        if hasattr(test_dataset, "label2idx") and hasattr(train_dataset, "label2idx"):
+            assert test_dataset.label2idx == train_dataset.label2idx, "Train/Test vocab mismatch!"
 
         with torch.no_grad():
             for batch in tqdm(test_loader, desc="[EAT-CTC Evaluation]"):
@@ -2545,30 +2548,40 @@ class Trainer:
                         prev = p
 
                     # Convert to phoneme tokens (subtract 1 to undo the +1 shift)
-                    hyp_tokens = [idx2label[p - 1] for p in hyp_ids]  # p >= 1
-                    ref_ids = ref_seq[:ref_len]                       # already +1 shifted, no padding inside length
+                    hyp_tokens = [idx2label[p - 1] for p in hyp_ids]   # p >= 1
+                    ref_ids = ref_seq[:ref_len]                        # already +1 shifted, no padding inside length
                     ref_tokens = [idx2label[r - 1] for r in ref_ids]
 
                     all_hyps_tokens.append(hyp_tokens)
                     all_refs_tokens.append(ref_tokens)
 
-        # Stringify for WER (token-level over phones)
-        ref_texts = [" ".join(r) for r in all_refs_tokens]
-        hyp_texts = [" ".join(h) for h in all_hyps_tokens]
+        # -------- DROP sil + closures before scoring (changes start here) --------
+        DROP_TOKENS = {"sil", "tcl", "kcl", "pcl", "dcl", "gcl", "bcl"}
+
+        def _filter(tokens):
+            return [t for t in tokens if t not in DROP_TOKENS]
+
+        refs_filt = [_filter(r) for r in all_refs_tokens]
+        hyps_filt = [_filter(h) for h in all_hyps_tokens]
+
+        # Stringify for jiwer-style WER computed over phones (post-filter)
+        ref_texts = [" ".join(r) for r in refs_filt]
+        hyp_texts = [" ".join(h) for h in hyps_filt]
 
         wer_score = wer(ref_texts, hyp_texts)
 
-        # True PER on phone sequences
-        per_numer = sum(edit_distance(r, h) for r, h in zip(all_refs_tokens, all_hyps_tokens))
-        per_denom = sum(len(r) for r in all_refs_tokens) if all_refs_tokens else 1
+        # True PER on phone sequences (post-filter)
+        per_numer = sum(edit_distance(r, h) for r, h in zip(refs_filt, hyps_filt))
+        per_denom = sum(len(r) for r in refs_filt) if refs_filt else 1
         per_score = per_numer / per_denom
+        # -------- changes end --------
 
-        self.logger.info(f"📊 [EAT-CTC Evaluation] WER(tokens)={wer_score:.4f}, PER={per_score:.4f}")
+        self.logger.info(f"📊 [EAT-CTC Evaluation] WER(phones,no_sil)={wer_score:.4f}, PER(no_sil)={per_score:.4f}")
 
         if self.wandb_logger.is_active:
             self.wandb_logger.log({
-                "eat/test_wer": wer_score,
-                "eat/test_per": per_score
+                "eat/test_wer_no_sil": wer_score,
+                "eat/test_per_no_sil": per_score
             })
 
 
