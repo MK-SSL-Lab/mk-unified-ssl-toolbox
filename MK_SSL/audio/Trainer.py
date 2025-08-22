@@ -2437,7 +2437,6 @@ class Trainer:
 
 
 
-
     def _evaluate_eat(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -2448,14 +2447,14 @@ class Trainer:
         epochs: int = 10,
         freeze_backbone: bool = True,   # kept for API compat; staged freezing overrides this
         *,
-        stage_freeze_epochs: int = 3,   # <-- freeze backbone for these first epochs, then unfreeze
-        backbone_lr_mult: float = 0.01, # <-- backbone LR = lr * backbone_lr_mult (discriminative LR)
-        warmup_ratio: float = 0.1,      # <-- % of total steps for linear warmup
+        stage_freeze_epochs: int = 3,   # freeze backbone for these first epochs, then unfreeze
+        backbone_lr_mult: float = 0.01, # backbone LR = lr * backbone_lr_mult (fixed; no schedulers)
         **kwargs
     ):
         """
         Evaluation for EAT using CTC (WER/PER) with mixed precision (AMP).
-        Adds: discriminative LRs, warmup+cosine scheduler, staged finetune (freeze→unfreeze).
+        Simplified: fixed learning rates (no warmup / cosine schedulers),
+        optional staged finetune (freeze → unfreeze) retained.
         """
 
         # --- Build model ---
@@ -2496,7 +2495,7 @@ class Trainer:
         use_amp = (self.device.type == "cuda")
         scaler = GradScaler(enabled=use_amp)
 
-        # === Param groups: discriminative learning rates ===
+        # === Param groups: fixed discriminative LRs ===
         backbone_params, head_params = [], []
         for name, p in classifier.named_parameters():
             if not p.requires_grad:
@@ -2508,15 +2507,15 @@ class Trainer:
 
         optimizer = torch.optim.AdamW(
             [
-                {"params": head_params, "lr": lr},                         # head LR
-                {"params": backbone_params, "lr": lr * backbone_lr_mult},  # backbone LR (smaller)
+                {"params": head_params, "lr": lr},                         # head LR (fixed)
+                {"params": backbone_params, "lr": lr * backbone_lr_mult},  # backbone LR (fixed)
             ],
             betas=(0.9, 0.98),
             eps=1e-8,
             weight_decay=1e-4
         )
 
-        # === Staged finetune: freeze backbone for initial epochs ===
+        # === Staged finetune: freeze backbone for initial epochs (no LR changes) ===
         stage_freeze_epochs = max(0, min(stage_freeze_epochs, epochs))
         def _set_backbone_requires_grad(enabled: bool):
             for p in classifier.backbone.parameters():
@@ -2525,7 +2524,7 @@ class Trainer:
         # Initially freeze if stage_freeze_epochs > 0
         _set_backbone_requires_grad(stage_freeze_epochs == 0)
 
-        # (Rebuild optimizer param groups to honor requires_grad state cleanly)
+        # Rebuild optimizer to honor requires_grad state cleanly
         def _rebuild_optimizer():
             nonlocal optimizer
             bb_params, hd_params = [], []
@@ -2544,39 +2543,19 @@ class Trainer:
         if stage_freeze_epochs > 0:
             _rebuild_optimizer()
 
-        # === Per-step scheduler: linear warmup -> cosine decay ===
-        steps_per_epoch = max(1, len(train_loader))
-        total_steps = max(1, epochs * steps_per_epoch)
-        warmup_steps = int(warmup_ratio * total_steps)
-
-        import math
-        def lr_scale(step: int):
-            # step is 0-based after optimizer.step(); we’ll call scheduler.step() each iteration.
-            if step < warmup_steps:
-                return max(1e-8, float(step + 1) / max(1, warmup_steps))
-            # cosine from 1 -> 0
-            progress = (step - warmup_steps) / max(1, (total_steps - warmup_steps))
-            return 0.5 * (1.0 + math.cos(math.pi * progress))
-
-        # Two schedulers tied to each param group (both use same scale factor)
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lr_scale, lr_scale])
-
-        # === Training ===
-        global_step = 0
+        # === Training (no scheduler/step LR logic) ===
         classifier.train()
-
         if stage_freeze_epochs > 0:
             classifier.backbone.eval()
 
         for epoch in range(epochs):
-            # Unfreeze at boundary
+            # Unfreeze at boundary (LRs remain the same)
             if epoch == stage_freeze_epochs:
                 self.logger.info(f"[EAT-CTC] Unfreezing backbone at epoch {epoch+1}/{epochs}")
                 _set_backbone_requires_grad(True)
-                _rebuild_optimizer()  # re-create optimizer with now-trainable backbone params
-                scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lr_scale, lr_scale])
+                _rebuild_optimizer()
                 classifier.train()
-                classifier.backbone.train()  # now train-time behavior for backbone
+                classifier.backbone.train()
 
             running_loss, num_batches = 0.0, 0
 
@@ -2588,7 +2567,6 @@ class Trainer:
 
                 with autocast(enabled=use_amp):
                     log_probs, output_lengths = classifier(audio, audio_lengths)
-                    # compute loss in fp32 for stability
                     loss = criterion(
                         log_probs.float().permute(1, 0, 2),  # (T, B, C)
                         labels,
@@ -2612,15 +2590,12 @@ class Trainer:
                 scaler.step(optimizer)
                 scaler.update()
 
-                # step scheduler AFTER optimizer.step()
-                scheduler.step()
-                global_step += 1
-
                 running_loss += float(loss.detach().item())
                 num_batches += 1
 
             avg_train_loss = running_loss / max(1, num_batches)
-            # Current LRs from param groups
+
+            # Fixed LRs (still useful to log)
             lr_head = optimizer.param_groups[0]["lr"]
             lr_backbone = optimizer.param_groups[1]["lr"] if len(optimizer.param_groups) > 1 else lr_head
 
@@ -2639,7 +2614,6 @@ class Trainer:
         classifier.eval()
         all_refs_tokens, all_hyps_tokens = [], []
 
-        # Shared vocab mapping
         idx2label = getattr(train_dataset, "idx2label", None)
         if idx2label is None:
             raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
@@ -2651,16 +2625,14 @@ class Trainer:
                 audio = batch["audio"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                flat_labels = batch["flat_labels"].cpu().tolist()            # concatenated (+1 shift)
-                label_lengths = batch["label_lengths"].cpu().tolist()        # per-utt lengths
+                flat_labels = batch["flat_labels"].cpu().tolist()
+                label_lengths = batch["label_lengths"].cpu().tolist()
                 refs_ids = []
                 offset = 0
                 for L in label_lengths:
-                    refs_ids.append(flat_labels[offset:offset + L])          # exact slice per utterance
+                    refs_ids.append(flat_labels[offset:offset + L])
                     offset += L
-                # -------------------------------------------------------------------
 
-                # Inference
                 with autocast(enabled=(self.device.type == "cuda")):
                     log_probs, out_lengths = classifier(audio, audio_lengths)
 
@@ -2680,15 +2652,13 @@ class Trainer:
                             hyp_ids.append(p)
                         prev = p
 
-                    # Undo +1 shift when mapping to tokens
                     hyp_tokens = [idx2label[p - 1] for p in hyp_ids]   # p >= 1
-                    ref_tokens = [idx2label[r - 1] for r in ref_ids]  
+                    ref_tokens = [idx2label[r - 1] for r in ref_ids]
 
                     all_hyps_tokens.append(hyp_tokens)
                     all_refs_tokens.append(ref_tokens)
 
         # -------- DROP sil + closures before scoring --------
-        # DROP_TOKENS = {"sil", "tcl", "kcl", "pcl", "dcl", "gcl", "bcl"}
         DROP_TOKENS = {}
         def _filter(tokens):
             return [t for t in tokens if t not in DROP_TOKENS]
@@ -2696,13 +2666,11 @@ class Trainer:
         refs_filt = [_filter(r) for r in all_refs_tokens]
         hyps_filt = [_filter(h) for h in all_hyps_tokens]
 
-        # Stringify for WER over phones (post-filter)
         ref_texts = [" ".join(r) for r in refs_filt]
         hyp_texts = [" ".join(h) for h in hyps_filt]
 
         wer_score = wer(ref_texts, hyp_texts)
 
-        # PER over phone sequences (post-filter)
         per_numer = sum(edit_distance(r, h) for r, h in zip(refs_filt, hyps_filt))
         per_denom = sum(len(r) for r in refs_filt) if refs_filt else 1
         per_score = per_numer / per_denom
@@ -2716,7 +2684,6 @@ class Trainer:
             })
 
         torch.save(classifier.state_dict(), 'EAT_Classifier.pth')
-
 
 
 
