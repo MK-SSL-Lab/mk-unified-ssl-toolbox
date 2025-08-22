@@ -2446,13 +2446,19 @@ class Trainer:
         batch_size: int = 64,
         lr: float = 1e-3,
         epochs: int = 10,
-        freeze_backbone: bool = True,
+        freeze_backbone: bool = True,   # kept for API compat; staged freezing overrides this
+        *,
+        stage_freeze_epochs: int = 3,   # <-- freeze backbone for these first epochs, then unfreeze
+        backbone_lr_mult: float = 0.01, # <-- backbone LR = lr * backbone_lr_mult (discriminative LR)
+        warmup_ratio: float = 0.1,      # <-- % of total steps for linear warmup
         **kwargs
     ):
         """
         Evaluation for EAT using CTC (WER/PER) with mixed precision (AMP).
+        Adds: discriminative LRs, warmup+cosine scheduler, staged finetune (freeze→unfreeze).
         """
 
+        # --- Build model ---
         backbone = EATBackbone(self.model).to(self.device)
         feature_size = self.model.embed_dim
 
@@ -2460,19 +2466,12 @@ class Trainer:
             backbone=backbone,
             feature_size=feature_size,
             num_classes=num_classes,   # vocab size incl. blank
-            is_linear=freeze_backbone,
+            is_linear=freeze_backbone, # unchanged: architecture flag
         ).to(self.device)
-
-        optimizer = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, classifier.parameters()),
-            lr=lr,
-            betas=(0.9, 0.98),
-            eps=1e-8,
-            weight_decay=1e-4
-        )
 
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
+        # --- Data ---
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
@@ -2481,7 +2480,6 @@ class Trainer:
             num_workers=self.num_workers,
             pin_memory=True,
         )
-
         test_loader = DataLoader(
             test_dataset,
             batch_size=batch_size,
@@ -2498,28 +2496,105 @@ class Trainer:
         use_amp = (self.device.type == "cuda")
         scaler = GradScaler(enabled=use_amp)
 
+        # === Param groups: discriminative learning rates ===
+        backbone_params, head_params = [], []
+        for name, p in classifier.named_parameters():
+            if not p.requires_grad:
+                continue
+            if name.startswith("backbone"):
+                backbone_params.append(p)
+            else:
+                head_params.append(p)
+
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": head_params, "lr": lr},                         # head LR
+                {"params": backbone_params, "lr": lr * backbone_lr_mult},  # backbone LR (smaller)
+            ],
+            betas=(0.9, 0.98),
+            eps=1e-8,
+            weight_decay=1e-4
+        )
+
+        # === Staged finetune: freeze backbone for initial epochs ===
+        stage_freeze_epochs = max(0, min(stage_freeze_epochs, epochs))
+        def _set_backbone_requires_grad(enabled: bool):
+            for p in classifier.backbone.parameters():
+                p.requires_grad = enabled
+
+        # Initially freeze if stage_freeze_epochs > 0
+        _set_backbone_requires_grad(stage_freeze_epochs == 0)
+
+        # (Rebuild optimizer param groups to honor requires_grad state cleanly)
+        def _rebuild_optimizer():
+            nonlocal optimizer
+            bb_params, hd_params = [], []
+            for n, p in classifier.named_parameters():
+                if not p.requires_grad:
+                    continue
+                (bb_params if n.startswith("backbone") else hd_params).append(p)
+            optimizer = torch.optim.AdamW(
+                [
+                    {"params": hd_params, "lr": lr},
+                    {"params": bb_params, "lr": lr * backbone_lr_mult},
+                ],
+                betas=(0.9, 0.98), eps=1e-8, weight_decay=1e-4
+            )
+
+        if stage_freeze_epochs > 0:
+            _rebuild_optimizer()
+
+        # === Per-step scheduler: linear warmup -> cosine decay ===
+        steps_per_epoch = max(1, len(train_loader))
+        total_steps = max(1, epochs * steps_per_epoch)
+        warmup_steps = int(warmup_ratio * total_steps)
+
+        import math
+        def lr_scale(step: int):
+            # step is 0-based after optimizer.step(); we’ll call scheduler.step() each iteration.
+            if step < warmup_steps:
+                return max(1e-8, float(step + 1) / max(1, warmup_steps))
+            # cosine from 1 -> 0
+            progress = (step - warmup_steps) / max(1, (total_steps - warmup_steps))
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+        # Two schedulers tied to each param group (both use same scale factor)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lr_scale, lr_scale])
+
         # === Training ===
+        global_step = 0
         classifier.train()
-        if freeze_backbone:
-            # Keep backbone deterministic even while classifier is in train mode
+
+        if stage_freeze_epochs > 0:
             classifier.backbone.eval()
 
         for epoch in range(epochs):
+            # Unfreeze at boundary
+            if epoch == stage_freeze_epochs:
+                self.logger.info(f"[EAT-CTC] Unfreezing backbone at epoch {epoch+1}/{epochs}")
+                _set_backbone_requires_grad(True)
+                _rebuild_optimizer()  # re-create optimizer with now-trainable backbone params
+                scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lr_scale, lr_scale])
+                classifier.train()
+                classifier.backbone.train()  # now train-time behavior for backbone
+
+            running_loss, num_batches = 0.0, 0
+
             for batch in tqdm(train_loader, desc=f"[EAT-CTC Training] Epoch {epoch+1}"):
                 audio = batch["audio"].to(self.device)                    # (B, 1, T_pad)
                 labels = batch["flat_labels"].to(self.device)             # 1..C-1 (0 is blank)
                 label_lengths = batch["label_lengths"].to(self.device)    # (B,)
                 audio_lengths = batch["audio_lengths"].to(self.device)    # (B,)
 
-                # Forward under autocast; compute loss in fp32 for stability
                 with autocast(enabled=use_amp):
                     log_probs, output_lengths = classifier(audio, audio_lengths)
-                loss = criterion(
-                    log_probs.float().permute(1, 0, 2),  # CTC expects (T, B, C)
-                    labels,
-                    output_lengths,
-                    label_lengths
-                )
+                    # compute loss in fp32 for stability
+                    loss = criterion(
+                        log_probs.float().permute(1, 0, 2),  # (T, B, C)
+                        labels,
+                        output_lengths,
+                        label_lengths
+                    )
 
                 if torch.isnan(loss):
                     self.logger.error("❌ NaN loss detected!")
@@ -2527,35 +2602,47 @@ class Trainer:
                                     f"labels: {labels.shape}, "
                                     f"input_lengths: {output_lengths}, "
                                     f"label_lengths: {label_lengths}")
+                    optimizer.zero_grad(set_to_none=True)
                     continue
 
                 optimizer.zero_grad(set_to_none=True)
-
-                # Scale → backward; unscale before clipping; step + update
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
                 scaler.step(optimizer)
                 scaler.update()
 
-            self.logger.info(f"[EAT-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
+                # step scheduler AFTER optimizer.step()
+                scheduler.step()
+                global_step += 1
+
+                running_loss += float(loss.detach().item())
+                num_batches += 1
+
+            avg_train_loss = running_loss / max(1, num_batches)
+            # Current LRs from param groups
+            lr_head = optimizer.param_groups[0]["lr"]
+            lr_backbone = optimizer.param_groups[1]["lr"] if len(optimizer.param_groups) > 1 else lr_head
+
+            self.logger.info(f"[EAT-CTC Train] Epoch {epoch+1}/{epochs} - "
+                            f"avg_loss: {avg_train_loss:.4f} | lr_head={lr_head:.5g} lr_backbone={lr_backbone:.5g}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
-                    "eat/train_loss": loss.item(),
+                    "eat/train_loss": avg_train_loss,
                     "eat/epoch": epoch + 1,
-                    "eat/lr": optimizer.param_groups[0]["lr"]
+                    "eat/lr_head": lr_head,
+                    "eat/lr_backbone": lr_backbone
                 }, step=epoch + 1)
 
         # === Evaluation ===
         classifier.eval()
         all_refs_tokens, all_hyps_tokens = [], []
 
-        # Use a single shared mapping (train/test share it thanks to the canonical vocab)
+        # Shared vocab mapping
         idx2label = getattr(train_dataset, "idx2label", None)
         if idx2label is None:
             raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
-        # Optional safety check if both datasets expose label2idx:
         if hasattr(test_dataset, "label2idx") and hasattr(train_dataset, "label2idx"):
             assert test_dataset.label2idx == train_dataset.label2idx, "Train/Test vocab mismatch!"
 
@@ -2564,22 +2651,25 @@ class Trainer:
                 audio = batch["audio"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                # Padded labels come in with +1 shift (0 is blank padding)
-                labels_padded = batch["labels"].cpu().tolist()
-                label_lengths = batch["label_lengths"].cpu().tolist()
+                flat_labels = batch["flat_labels"].cpu().tolist()            # concatenated (+1 shift)
+                label_lengths = batch["label_lengths"].cpu().tolist()        # per-utt lengths
+                refs_ids = []
+                offset = 0
+                for L in label_lengths:
+                    refs_ids.append(flat_labels[offset:offset + L])          # exact slice per utterance
+                    offset += L
+                # -------------------------------------------------------------------
 
-                # Inference under autocast (no scaler needed)
-                with autocast(enabled=use_amp):
+                # Inference
+                with autocast(enabled=(self.device.type == "cuda")):
                     log_probs, out_lengths = classifier(audio, audio_lengths)
 
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
                 out_lengths = out_lengths.cpu().tolist()
 
-                # Greedy CTC decoding with collapse + blank removal, and proper trimming
-                for pred_seq, ref_seq, ref_len, out_len in zip(preds, labels_padded, label_lengths, out_lengths):
-                    pred_seq = pred_seq[:out_len]  # Trim to valid model output length
+                for pred_seq, ref_ids, out_len in zip(preds, refs_ids, out_lengths):
+                    pred_seq = pred_seq[:out_len]
 
-                    # Collapse repeats & remove blanks (0)
                     hyp_ids = []
                     prev = None
                     for p in pred_seq:
@@ -2590,34 +2680,32 @@ class Trainer:
                             hyp_ids.append(p)
                         prev = p
 
-                    # Convert to phoneme tokens (subtract 1 to undo the +1 shift)
+                    # Undo +1 shift when mapping to tokens
                     hyp_tokens = [idx2label[p - 1] for p in hyp_ids]   # p >= 1
-                    ref_ids = ref_seq[:ref_len]                        # already +1 shifted, no padding inside length
-                    ref_tokens = [idx2label[r - 1] for r in ref_ids]
+                    ref_tokens = [idx2label[r - 1] for r in ref_ids]  
 
                     all_hyps_tokens.append(hyp_tokens)
                     all_refs_tokens.append(ref_tokens)
 
-        # -------- DROP sil + closures before scoring (changes start here) --------
-        DROP_TOKENS = {"sil", "tcl", "kcl", "pcl", "dcl", "gcl", "bcl"}
-
+        # -------- DROP sil + closures before scoring --------
+        # DROP_TOKENS = {"sil", "tcl", "kcl", "pcl", "dcl", "gcl", "bcl"}
+        DROP_TOKENS = {}
         def _filter(tokens):
             return [t for t in tokens if t not in DROP_TOKENS]
 
         refs_filt = [_filter(r) for r in all_refs_tokens]
         hyps_filt = [_filter(h) for h in all_hyps_tokens]
 
-        # Stringify for jiwer-style WER computed over phones (post-filter)
+        # Stringify for WER over phones (post-filter)
         ref_texts = [" ".join(r) for r in refs_filt]
         hyp_texts = [" ".join(h) for h in hyps_filt]
 
         wer_score = wer(ref_texts, hyp_texts)
 
-        # True PER on phone sequences (post-filter)
+        # PER over phone sequences (post-filter)
         per_numer = sum(edit_distance(r, h) for r, h in zip(refs_filt, hyps_filt))
         per_denom = sum(len(r) for r in refs_filt) if refs_filt else 1
         per_score = per_numer / per_denom
-        # -------- changes end --------
 
         self.logger.info(f"📊 [EAT-CTC Evaluation] WER(phones,no_sil)={wer_score:.4f}, PER(no_sil)={per_score:.4f}")
 
@@ -2626,8 +2714,9 @@ class Trainer:
                 "eat/test_wer_no_sil": wer_score,
                 "eat/test_per_no_sil": per_score
             })
+
         torch.save(classifier.state_dict(), 'EAT_Classifier.pth')
-        
+
 
 
 
