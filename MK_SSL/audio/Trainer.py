@@ -2626,7 +2626,7 @@ class Trainer:
                 "eat/test_wer_no_sil": wer_score,
                 "eat/test_per_no_sil": per_score
             })
-        torch.save(self.classifier.state_dict(), 'EAT_Classifier.pth')
+        torch.save(classifier.state_dict(), 'EAT_Classifier.pth')
         
 
 
