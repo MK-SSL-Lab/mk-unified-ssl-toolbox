@@ -21,7 +21,7 @@ import optuna
 from jiwer import wer
 from editdistance import eval as edit_distance
 from torch.nn.utils.rnn import pad_sequence
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 
 
 
@@ -2496,7 +2496,7 @@ class Trainer:
 
         # === AMP setup ===
         use_amp = (self.device.type == "cuda")
-        scaler = GradScaler(enabled=use_amp)
+        scaler = GradScaler()
 
         # === Training ===
         classifier.train()
@@ -2626,8 +2626,8 @@ class Trainer:
                 "eat/test_wer_no_sil": wer_score,
                 "eat/test_per_no_sil": per_score
             })
-        torch.save(self.model.state_dict(), 'EAT_Classifier.pth')
-
+        torch.save(classifier.state_dict(), 'EAT_Classifier.pth')
+        
 
 
 
