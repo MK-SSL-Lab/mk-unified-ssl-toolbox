@@ -1922,7 +1922,6 @@ class Trainer:
 
 
 
-
     def _evaluate_simclr(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -1931,13 +1930,19 @@ class Trainer:
         batch_size: int = 64,
         lr: float = 1e-3,
         epochs: int = 10,
-        freeze_backbone: bool = True,
+        freeze_backbone: bool = True,   # kept for API compat; staged freezing overrides this
+        *,
+        stage_freeze_epochs: int = 3,   # freeze backbone for these first epochs, then unfreeze
+        backbone_lr_mult: float = 0.01, # backbone LR = lr * backbone_lr_mult (fixed; no schedulers)
         **kwargs
     ):
         """
         Evaluation for SimCLR Speech using CTC (WER/PER) with mixed precision (AMP).
+        Simplified to match EAT eval: fixed LRs (no schedulers), staged finetune (freeze→unfreeze),
+        param groups (head/backbone), NaN guard, grad clip, logging/W&B, decode from flat labels.
         """
 
+        # --- Build model ---
         model = self.model
         backbone = SimCLRBackbone(model)
         feature_size = model.backbone.embed_dim
@@ -1946,19 +1951,12 @@ class Trainer:
             backbone=backbone,
             feature_size=feature_size,
             num_classes=num_classes,   # vocab size incl. blank
-            is_linear=freeze_backbone,
+            is_linear=freeze_backbone, # unchanged: architecture flag
         ).to(self.device)
-
-        optimizer = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, classifier.parameters()),
-            lr=lr,
-            betas=(0.9, 0.98),
-            eps=1e-8,
-            weight_decay=1e-4
-        )
 
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
+        # --- Data ---
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
@@ -1967,7 +1965,6 @@ class Trainer:
             num_workers=self.num_workers,
             pin_memory=True,
         )
-
         test_loader = DataLoader(
             test_dataset,
             batch_size=batch_size,
@@ -1984,62 +1981,126 @@ class Trainer:
         use_amp = (self.device.type == "cuda")
         scaler = GradScaler(enabled=use_amp)
 
-        # === Training loop ===
+        # === Param groups: fixed discriminative LRs ===
+        backbone_params, head_params = [], []
+        for name, p in classifier.named_parameters():
+            if not p.requires_grad:
+                continue
+            if name.startswith("backbone"):
+                backbone_params.append(p)
+            else:
+                head_params.append(p)
+
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": head_params, "lr": lr},                         # head LR (fixed)
+                {"params": backbone_params, "lr": lr * backbone_lr_mult},  # backbone LR (fixed)
+            ],
+            betas=(0.9, 0.98),
+            eps=1e-8,
+            weight_decay=1e-4
+        )
+
+        # === Staged finetune: freeze backbone for initial epochs (no LR changes) ===
+        stage_freeze_epochs = max(0, min(stage_freeze_epochs, epochs))
+
+        def _set_backbone_requires_grad(enabled: bool):
+            for p in classifier.backbone.parameters():
+                p.requires_grad = enabled
+
+        # Initially freeze if stage_freeze_epochs > 0
+        _set_backbone_requires_grad(stage_freeze_epochs == 0)
+
+        # Rebuild optimizer to honor requires_grad state cleanly
+        def _rebuild_optimizer():
+            nonlocal optimizer
+            bb_params, hd_params = [], []
+            for n, p in classifier.named_parameters():
+                if not p.requires_grad:
+                    continue
+                (bb_params if n.startswith("backbone") else hd_params).append(p)
+            optimizer = torch.optim.AdamW(
+                [
+                    {"params": hd_params, "lr": lr},
+                    {"params": bb_params, "lr": lr * backbone_lr_mult},
+                ],
+                betas=(0.9, 0.98), eps=1e-8, weight_decay=1e-4
+            )
+
+        if stage_freeze_epochs > 0:
+            _rebuild_optimizer()
+
+        # === Training (no scheduler/step LR logic) ===
         classifier.train()
-        if freeze_backbone:
-            # Keep backbone deterministic even while classifier is in train mode
+        if stage_freeze_epochs > 0:
             classifier.backbone.eval()
 
         for epoch in range(epochs):
-            for batch in tqdm(train_loader, desc=f"[SimCLR-CTC Training] Epoch {epoch+1}"):
-                wavs = batch["audio"].to(self.device)
-                labels = batch["flat_labels"].to(self.device)       # 1..C-1 (0 is blank)
-                label_lengths = batch["label_lengths"].to(self.device)
-                audio_lengths = batch["audio_lengths"].to(self.device)
+            # Unfreeze at boundary (LRs remain the same)
+            if epoch == stage_freeze_epochs:
+                self.logger.info(f"[SimCLR-CTC] Unfreezing backbone at epoch {epoch+1}/{epochs}")
+                _set_backbone_requires_grad(True)
+                _rebuild_optimizer()
+                classifier.train()
+                classifier.backbone.train()
 
-                # Forward under autocast
+            running_loss, num_batches = 0.0, 0
+
+            for batch in tqdm(train_loader, desc=f"[SimCLR-CTC Training] Epoch {epoch+1}"):
+                wavs = batch["audio"].to(self.device)                       # (B, 1, T_pad)
+                labels = batch["flat_labels"].to(self.device)               # 1..C-1 (0 is blank)
+                label_lengths = batch["label_lengths"].to(self.device)      # (B,)
+                audio_lengths = batch["audio_lengths"].to(self.device)      # (B,)
+
                 with autocast(enabled=use_amp):
                     log_probs, output_lengths = classifier(wavs, audio_lengths)
-
-                # Compute CTC loss in fp32; CTC expects (T, B, C)
-                loss = criterion(
-                    log_probs.float().permute(1, 0, 2),
-                    labels,
-                    output_lengths,
-                    label_lengths
-                )
+                    loss = criterion(
+                        log_probs.float().permute(1, 0, 2),  # (T, B, C)
+                        labels,
+                        output_lengths,
+                        label_lengths
+                    )
 
                 if torch.isnan(loss):
                     self.logger.error("❌ NaN loss detected!")
                     self.logger.error(f"log_probs: {log_probs.shape}, "
                                     f"labels: {labels.shape}, "
-                                    f"input_lengths: {audio_lengths}, "
+                                    f"input_lengths: {output_lengths}, "
                                     f"label_lengths: {label_lengths}")
+                    optimizer.zero_grad(set_to_none=True)
                     continue
 
                 optimizer.zero_grad(set_to_none=True)
-
-                # AMP backward/step
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
                 scaler.step(optimizer)
                 scaler.update()
 
-            self.logger.info(f"[SimCLR-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
+                running_loss += float(loss.detach().item())
+                num_batches += 1
+
+            avg_train_loss = running_loss / max(1, num_batches)
+
+            # Fixed LRs (still useful to log)
+            lr_head = optimizer.param_groups[0]["lr"]
+            lr_backbone = optimizer.param_groups[1]["lr"] if len(optimizer.param_groups) > 1 else lr_head
+
+            self.logger.info(f"[SimCLR-CTC Train] Epoch {epoch+1}/{epochs} - "
+                            f"avg_loss: {avg_train_loss:.4f} | lr_head={lr_head:.5g} lr_backbone={lr_backbone:.5g}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
-                    "simclr/train_loss": loss.item(),
+                    "simclr/train_loss": avg_train_loss,
                     "simclr/epoch": epoch + 1,
-                    "simclr/lr": optimizer.param_groups[0]["lr"]
+                    "simclr/lr_head": lr_head,
+                    "simclr/lr_backbone": lr_backbone
                 }, step=epoch + 1)
 
-        # === Evaluation loop ===
+        # === Evaluation ===
         classifier.eval()
         all_refs_tokens, all_hyps_tokens = [], []
 
-        # Shared decoding map (0..C-2 → token). Predictions/refs use +1 shift; 0 is blank/pad.
         idx2label = getattr(train_dataset, "idx2label", None)
         if idx2label is None:
             raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
@@ -2051,22 +2112,23 @@ class Trainer:
                 wavs = batch["audio"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                # Padded labels (+1 shift; 0 is blank/pad) with true lengths
-                labels_padded = batch["labels"].cpu().tolist()
+                flat_labels = batch["flat_labels"].cpu().tolist()
                 label_lengths = batch["label_lengths"].cpu().tolist()
+                refs_ids = []
+                offset = 0
+                for L in label_lengths:
+                    refs_ids.append(flat_labels[offset:offset + L])
+                    offset += L
 
-                # Inference under autocast (no scaler/backprop)
-                with autocast(enabled=use_amp):
+                with autocast(enabled=(self.device.type == "cuda")):
                     log_probs, out_lengths = classifier(wavs, audio_lengths)
 
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
                 out_lengths = out_lengths.cpu().tolist()
 
-                # Greedy CTC decoding with proper trimming/collapse
-                for pred_seq, ref_seq, ref_len, out_len in zip(preds, labels_padded, label_lengths, out_lengths):
-                    pred_seq = pred_seq[:out_len]  # Trim predictions to valid output length
+                for pred_seq, ref_ids, out_len in zip(preds, refs_ids, out_lengths):
+                    pred_seq = pred_seq[:out_len]
 
-                    # Collapse repeats & remove blanks (blank_id=0)
                     hyp_ids = []
                     prev = None
                     for p in pred_seq:
@@ -2077,33 +2139,28 @@ class Trainer:
                             hyp_ids.append(p)
                         prev = p
 
-                    # Map ids→tokens by undoing the +1 shift (ids are >= 1 here)
-                    hyp_tokens = [idx2label[p - 1] for p in hyp_ids]
-                    ref_ids = ref_seq[:ref_len]  # slice removes right padding zeros
+                    hyp_tokens = [idx2label[p - 1] for p in hyp_ids]   # p >= 1
                     ref_tokens = [idx2label[r - 1] for r in ref_ids]
 
                     all_hyps_tokens.append(hyp_tokens)
                     all_refs_tokens.append(ref_tokens)
 
         # -------- DROP sil + closures before scoring --------
-        DROP_TOKENS = {"sil", "tcl", "kcl", "pcl", "dcl", "gcl", "bcl"}
-
+        DROP_TOKENS = {}
         def _filter(tokens):
             return [t for t in tokens if t not in DROP_TOKENS]
 
         refs_filt = [_filter(r) for r in all_refs_tokens]
         hyps_filt = [_filter(h) for h in all_hyps_tokens]
 
-        # Token-level WER (phones, post-filter)
         ref_texts = [" ".join(r) for r in refs_filt]
         hyp_texts = [" ".join(h) for h in hyps_filt]
+
         wer_score = wer(ref_texts, hyp_texts)
 
-        # True PER (post-filter)
         per_numer = sum(edit_distance(r, h) for r, h in zip(refs_filt, hyps_filt))
         per_denom = sum(len(r) for r in refs_filt) if refs_filt else 1
         per_score = per_numer / per_denom
-        # ----------------------------------------------------
 
         self.logger.info(f"📊 [SimCLR-CTC Evaluation] WER(phones,no_sil)={wer_score:.4f}, PER(no_sil)={per_score:.4f}")
 
@@ -2112,6 +2169,8 @@ class Trainer:
                 "simclr/test_wer_no_sil": wer_score,
                 "simclr/test_per_no_sil": per_score
             })
+
+        torch.save(classifier.state_dict(), 'SimCLR_Classifier.pth')
 
 
 
