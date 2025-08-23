@@ -2433,15 +2433,6 @@ class Trainer:
             })
 
 
-
-
-
-
-
-
-
-
-
     def _evaluate_eat(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -2463,7 +2454,6 @@ class Trainer:
             text = text.lower().strip()
             text = " ".join(text.split())  # collapse whitespace
             return text
-
 
         def tokens_to_text(tokens):
             # tokens: list[str] of characters, including SPACE token " "
@@ -2519,7 +2509,8 @@ class Trainer:
             classifier.backbone.eval()
 
         for epoch in range(epochs):
-            for batch in tqdm(train_loader, desc=f"[EAT-CTC Training] Epoch {epoch+1}"):
+            pbar = tqdm(train_loader, desc=f"[EAT-CTC Training] Epoch {epoch+1}")
+            for batch in pbar:
                 if batch is None:
                     continue
                 audio = batch["audio"].to(self.device)                    # (B, 1, T_pad)
@@ -2551,6 +2542,9 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
                 scaler.step(optimizer)
                 scaler.update()
+
+                # 🔹 NEW: update tqdm postfix with batch loss
+                pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
             self.logger.info(f"[EAT-CTC Train] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
@@ -2624,7 +2618,6 @@ class Trainer:
             self.wandb_logger.log({"eat/test_wer": wer_score})
 
         torch.save(classifier.state_dict(), "EAT_Classifier.pth")
-
 
 
 
@@ -2776,5 +2769,16 @@ class Trainer:
         """
         if hasattr(self, "writer"):
             self.writer.close()
+
+
+
+
+
+
+
+
+
+
+
 
 
