@@ -2,38 +2,58 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+
 class EvaluateNet(nn.Module):
     """
     EvaluateNet: CTC-based evaluation on top of a pre-trained backbone.
     """
 
-    def __init__(self, backbone: nn.Module, feature_size: int, num_classes: int, is_linear: bool):
+    def __init__(
+        self,
+        backbone: nn.Module,
+        feature_size: int,
+        num_classes: int,
+        is_linear: bool,
+    ):
+        """
+        Args:
+            backbone (nn.Module): Backbone to extract features.
+            feature_size (int): Size of feature embeddings.
+            num_classes (int): Vocabulary size (including blank).
+            is_linear (bool): Whether to freeze backbone parameters.
+        """
         super().__init__()
         self.backbone = backbone
 
         for param in self.backbone.parameters():
             param.requires_grad = not is_linear
+
         if is_linear:
             self.backbone.eval()
 
+        # Frame-level projection → vocab
         self.fc = nn.Linear(feature_size, num_classes, bias=True)
 
     def forward(self, x: Tensor, lengths: Tensor = None):
         """
         Args:
-            x:       (B, 1, T_pad) padded waveforms
-            lengths: (B,) valid lengths in **samples**
+            x (Tensor): Input waveforms (B, 1, T).
+            lengths (Tensor, optional): Original audio lengths.
 
         Returns:
-            log_probs:   (B, P_max, num_classes)
-            out_lengths: (B,) valid frame counts after patching (for CTC)
+            log_probs (Tensor): (B, T, num_classes) log-probs.
+            out_lengths (Tensor): Lengths of predicted sequences.
         """
-        feats, out_lengths = self.backbone(x, lengths)  # feats: (B,P_max,E), out_lengths: (B,)
-        logits = self.fc(feats)                         # (B,P_max,C)
+        feats = self.backbone(x, lengths)   # (B, T_out, E)
+
+        logits = self.fc(feats)             # (B, T_out, num_classes)
         log_probs = nn.functional.log_softmax(logits, dim=-1)
 
-        # Safety: make sure lengths don't exceed time dim
-        T_max = logits.size(1)
-        out_lengths = out_lengths.clamp(min=0, max=T_max)
+
+        out_lengths = torch.full(
+            size=(logits.size(0),), fill_value=logits.size(1), dtype=torch.long
+        )
 
         return log_probs, out_lengths
+
+
