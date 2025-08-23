@@ -2438,6 +2438,10 @@ class Trainer:
 
 
 
+
+
+
+
     def _evaluate_eat(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -2450,8 +2454,20 @@ class Trainer:
         **kwargs
     ):
         """
-        Evaluation for EAT using CTC (WER/PER) with mixed precision (AMP).
+        Evaluation for EAT using CTC with mixed precision (AMP).
+        Computes TRUE WER on words (character CTC with explicit SPACE token).
         """
+
+        def normalize_sentence(text: str) -> str:
+            # simple normalization aligned with dataset’s preprocessing
+            text = text.lower().strip()
+            text = " ".join(text.split())  # collapse whitespace
+            return text
+
+
+        def tokens_to_text(tokens):
+            # tokens: list[str] of characters, including SPACE token " "
+            return "".join(tokens)
 
         backbone = EATBackbone(self.model).to(self.device)
         feature_size = self.model.embed_dim
@@ -2459,7 +2475,7 @@ class Trainer:
         classifier = EvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
-            num_classes=num_classes,   # vocab size incl. blank
+            num_classes=num_classes,   # vocab size incl. blank (blank=0)
             is_linear=freeze_backbone,
         ).to(self.device)
 
@@ -2477,7 +2493,7 @@ class Trainer:
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            collate_fn=self.collate_ctc,
+            collate_fn=self.collate_ctc,   # unchanged
             num_workers=self.num_workers,
             pin_memory=True,
         )
@@ -2486,7 +2502,7 @@ class Trainer:
             test_dataset,
             batch_size=batch_size,
             shuffle=False,
-            collate_fn=self.collate_ctc,
+            collate_fn=self.collate_ctc,   # unchanged
             num_workers=self.num_workers,
             pin_memory=True,
         )
@@ -2494,28 +2510,28 @@ class Trainer:
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
 
-        # === AMP setup ===
         use_amp = (self.device.type == "cuda")
         scaler = GradScaler(enabled=use_amp)
 
         # === Training ===
         classifier.train()
         if freeze_backbone:
-            # Keep backbone deterministic even while classifier is in train mode
             classifier.backbone.eval()
 
         for epoch in range(epochs):
             for batch in tqdm(train_loader, desc=f"[EAT-CTC Training] Epoch {epoch+1}"):
+                if batch is None:
+                    continue
                 audio = batch["audio"].to(self.device)                    # (B, 1, T_pad)
-                labels = batch["flat_labels"].to(self.device)             # 1..C-1 (0 is blank)
+                labels = batch["flat_labels"].to(self.device)             # values 1..C (0 is blank)
                 label_lengths = batch["label_lengths"].to(self.device)    # (B,)
                 audio_lengths = batch["audio_lengths"].to(self.device)    # (B,)
 
-                # Forward under autocast; compute loss in fp32 for stability
                 with autocast(enabled=use_amp):
                     log_probs, output_lengths = classifier(audio, audio_lengths)
+
                 loss = criterion(
-                    log_probs.float().permute(1, 0, 2),  # CTC expects (T, B, C)
+                    log_probs.float().permute(1, 0, 2),  # (T, B, C)
                     labels,
                     output_lengths,
                     label_lengths
@@ -2524,21 +2540,19 @@ class Trainer:
                 if torch.isnan(loss):
                     self.logger.error("❌ NaN loss detected!")
                     self.logger.error(f"log_probs: {log_probs.shape}, "
-                                    f"labels: {labels.shape}, "
-                                    f"input_lengths: {output_lengths}, "
-                                    f"label_lengths: {label_lengths}")
+                                      f"labels: {labels.shape}, "
+                                      f"input_lengths: {output_lengths}, "
+                                      f"label_lengths: {label_lengths}")
                     continue
 
                 optimizer.zero_grad(set_to_none=True)
-
-                # Scale → backward; unscale before clipping; step + update
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
                 scaler.step(optimizer)
                 scaler.update()
 
-            self.logger.info(f"[EAT-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
+            self.logger.info(f"[EAT-CTC Train] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
 
             if self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -2549,85 +2563,68 @@ class Trainer:
 
         # === Evaluation ===
         classifier.eval()
-        all_refs_tokens, all_hyps_tokens = [], []
 
-        # Use a single shared mapping (train/test share it thanks to the canonical vocab)
+        # Shared vocab (train & test must match)
         idx2label = getattr(train_dataset, "idx2label", None)
         if idx2label is None:
             raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
-        # Optional safety check if both datasets expose label2idx:
         if hasattr(test_dataset, "label2idx") and hasattr(train_dataset, "label2idx"):
             assert test_dataset.label2idx == train_dataset.label2idx, "Train/Test vocab mismatch!"
 
+        ref_sentences, hyp_sentences = [], []
+
         with torch.no_grad():
             for batch in tqdm(test_loader, desc="[EAT-CTC Evaluation]"):
+                if batch is None:
+                    continue
                 audio = batch["audio"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                # Padded labels come in with +1 shift (0 is blank padding)
+                # (optional) get reference labels (for audit)
                 labels_padded = batch["labels"].cpu().tolist()
                 label_lengths = batch["label_lengths"].cpu().tolist()
 
-                # Inference under autocast (no scaler needed)
                 with autocast(enabled=use_amp):
                     log_probs, out_lengths = classifier(audio, audio_lengths)
 
                 preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
                 out_lengths = out_lengths.cpu().tolist()
 
-                # Greedy CTC decoding with collapse + blank removal, and proper trimming
                 for pred_seq, ref_seq, ref_len, out_len in zip(preds, labels_padded, label_lengths, out_lengths):
-                    pred_seq = pred_seq[:out_len]  # Trim to valid model output length
-
-                    # Collapse repeats & remove blanks (0)
+                    # --- Greedy CTC collapse for hypothesis ---
+                    pred_seq = pred_seq[:out_len]
                     hyp_ids = []
                     prev = None
                     for p in pred_seq:
-                        if p == 0:
+                        if p == 0:         # blank
                             prev = p
                             continue
-                        if p != prev:
+                        if p != prev:       # collapse repeats
                             hyp_ids.append(p)
                         prev = p
 
-                    # Convert to phoneme tokens (subtract 1 to undo the +1 shift)
-                    hyp_tokens = [idx2label[p - 1] for p in hyp_ids]   # p >= 1
-                    ref_ids = ref_seq[:ref_len]                        # already +1 shifted, no padding inside length
-                    ref_tokens = [idx2label[r - 1] for r in ref_ids]
+                    # map ids → characters (subtract 1 to undo +1 shift in collate)
+                    hyp_chars = [idx2label[p - 1] for p in hyp_ids]      # p >= 1
+                    ref_ids = ref_seq[:ref_len]                          # already +1 shifted
+                    ref_chars = [idx2label[r - 1] for r in ref_ids]
 
-                    all_hyps_tokens.append(hyp_tokens)
-                    all_refs_tokens.append(ref_tokens)
+                    # chars → sentence
+                    hyp_text = normalize_sentence(tokens_to_text(hyp_chars))
+                    ref_text = normalize_sentence(tokens_to_text(ref_chars))
 
-        # -------- DROP sil + closures before scoring (changes start here) --------
-        DROP_TOKENS = {"sil", "tcl", "kcl", "pcl", "dcl", "gcl", "bcl"}
+                    hyp_sentences.append(hyp_text)
+                    ref_sentences.append(ref_text)
 
-        def _filter(tokens):
-            return [t for t in tokens if t not in DROP_TOKENS]
+        # TRUE word-level WER (jiwer splits on whitespace)
+        wer_score = wer(ref_sentences, hyp_sentences)
 
-        refs_filt = [_filter(r) for r in all_refs_tokens]
-        hyps_filt = [_filter(h) for h in all_hyps_tokens]
-
-        # Stringify for jiwer-style WER computed over phones (post-filter)
-        ref_texts = [" ".join(r) for r in refs_filt]
-        hyp_texts = [" ".join(h) for h in hyps_filt]
-
-        wer_score = wer(ref_texts, hyp_texts)
-
-        # True PER on phone sequences (post-filter)
-        per_numer = sum(edit_distance(r, h) for r, h in zip(refs_filt, hyps_filt))
-        per_denom = sum(len(r) for r in refs_filt) if refs_filt else 1
-        per_score = per_numer / per_denom
-        # -------- changes end --------
-
-        self.logger.info(f"📊 [EAT-CTC Evaluation] WER(phones,no_sil)={wer_score:.4f}, PER(no_sil)={per_score:.4f}")
+        self.logger.info(f"📊 [EAT-CTC Evaluation] WER(words)={wer_score:.4f}")
 
         if self.wandb_logger.is_active:
-            self.wandb_logger.log({
-                "eat/test_wer_no_sil": wer_score,
-                "eat/test_per_no_sil": per_score
-            })
-        torch.save(classifier.state_dict(), 'EAT_Classifier.pth')
-        
+            self.wandb_logger.log({"eat/test_wer": wer_score})
+
+        torch.save(classifier.state_dict(), "EAT_Classifier.pth")
+
 
 
 
