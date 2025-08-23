@@ -37,7 +37,7 @@ from MK_SSL.utils import optimize_hyperparameters
 from MK_SSL.graph.models.utils.registry import get_method
 
 
-class d:
+class Trainer:
     """
     Trainer for Graph SSL (GraphCL), mirroring the Audio Trainer style.
 
