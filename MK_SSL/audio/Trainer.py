@@ -1714,55 +1714,6 @@ class Trainer:
                 p.requires_grad = False
 
 
-
-        # ---- QUICK SELF-TEST (safe to delete) -------------------------------------
-        ENABLE_SELFTEST = kwargs.get("selftest", True)
-        if ENABLE_SELFTEST:
-            try:
-                # 1) num_classes invariant: blank=0, real tokens=1..A (A=len(idx2label))
-                idx2label = getattr(train_dataset, "idx2label", None)
-                if idx2label is not None:
-                    assert num_classes == len(idx2label) + 1, \
-                        f"num_classes ({num_classes}) must equal len(idx2label)+1 ({len(idx2label)+1})"
-
-                # 2) CTC greedy decode sanity (blank removal + collapse repeats)
-                #    sequence has blanks and repeats; expected collapsed = [1,2,2]
-                _pred = [0, 1, 1, 2, 0, 2, 2, 0]
-                _out = []
-                _prev = None
-                for p in _pred:
-                    if p == 0:      # blank
-                        _prev = p
-                        continue
-                    if p != _prev:  # collapse repeats
-                        _out.append(p)
-                    _prev = p
-                assert _out == [1, 2, 2], f"CTC collapse failed, got {_out}"
-
-                # 3) Classifier output shape & log-prob check on a tiny fake batch
-                classifier.eval()
-                with torch.no_grad(), autocast(enabled=(self.device.type == "cuda")):
-                    _B, _T = 1, 16000
-                    _fake_audio = torch.zeros(_B, 1, _T, device=self.device)
-                    _fake_len = torch.tensor([_T], dtype=torch.long, device=self.device)
-                    _logp, _outlens = classifier(_fake_audio, _fake_len)  # (B, T', C), (B,)
-                    assert _logp.dim() == 3 and _logp.size(-1) == num_classes, \
-                        f"log_probs shape {tuple(_logp.shape)} bad (C={num_classes})"
-                    assert (_outlens <= _logp.size(1)).all(), \
-                        f"output_lengths {_outlens.tolist()} exceed logits T={_logp.size(1)}"
-                    # log-softmax check: logsumexp over classes ~= 0
-                    _lse = _logp.float().logsumexp(dim=-1).abs().mean().item()
-                    assert _lse < 1e-3, f"log_probs not log-softmax? mean|logsumexp|={_lse:.4e}"
-                classifier.train()
-                self.logger.info("✅ CTC self-test passed.")
-            except AssertionError as e:
-                self.logger.error(f"❌ CTC self-test failed: {e}")
-                raise
-        # ----------------------------------------------------------------------------
-
-
-
-
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, classifier.parameters()),
             lr=lr,
@@ -1813,6 +1764,11 @@ class Trainer:
                 with autocast(enabled=use_amp):
                     log_probs, output_lengths = classifier(waveforms, audio_lengths)
 
+########
+                assert output_lengths.shape[0] == waveforms.size(0)
+                assert (output_lengths > 0).all()
+                assert output_lengths.max().item() <= log_probs.size(1)  # time dim of logits
+#######
                 loss = criterion(
                     log_probs.float().permute(1, 0, 2),  # (T,B,C)
                     labels,

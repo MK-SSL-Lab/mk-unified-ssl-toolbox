@@ -38,22 +38,27 @@ class EvaluateNet(nn.Module):
         """
         Args:
             x (Tensor): Input waveforms (B, 1, T).
-            lengths (Tensor, optional): Original audio lengths.
+            lengths (Tensor, optional): Raw audio lengths (samples).
 
         Returns:
-            log_probs (Tensor): (B, T, num_classes) log-probs.
-            out_lengths (Tensor): Lengths of predicted sequences.
+            log_probs (Tensor): (B, T_out, num_classes)
+            out_lengths (Tensor): (B,)
         """
-        feats = self.backbone(x, lengths)   # (B, T_out, E)
+        feats_out = self.backbone(x, lengths)          # either Tensor or (Tensor, t_lengths)
 
-        logits = self.fc(feats)             # (B, T_out, num_classes)
+        if isinstance(feats_out, tuple):
+            feats, out_lengths = feats_out             # (B, T_out, E), (B,)
+        else:
+            feats = feats_out                          # (B, T_out, E)
+            out_lengths = torch.full(
+                size=(feats.size(0),),
+                fill_value=feats.size(1),
+                dtype=torch.long,
+                device=feats.device,
+            )
+
+        logits = self.fc(feats)                        # (B, T_out, C)
         log_probs = nn.functional.log_softmax(logits, dim=-1)
-
-
-        out_lengths = torch.full(
-            size=(logits.size(0),), fill_value=logits.size(1), dtype=torch.long
-        )
-
         return log_probs, out_lengths
 
 
