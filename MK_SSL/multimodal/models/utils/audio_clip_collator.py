@@ -63,7 +63,8 @@ class AudioMultimodalCollator:
         if "text" in batch[0]:
             batch_dict["text"] = batch_dict["text"]
         if "image" in batch[0]:
-            batch_dict["image"] = batch_dict["image"]
+            images = [item["image"] for item in batch]           # list of [3,H,W] tensors
+            batch_dict["image"] = torch.stack(images, dim=0)     # [B,3,H,W]
 
         # --- Optional: collate labels if present ---
         if "label" in batch[0]:
