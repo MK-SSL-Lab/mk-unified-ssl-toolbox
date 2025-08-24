@@ -1718,27 +1718,37 @@ class Trainer:
         def _hyp_to_text_lexfree(hyp, decoder_tokens: list[str]) -> str:
             """
             Convert a lexicon-free hypothesis to normalized text.
-            Hypothesis may expose `.tokens` (indices) or `.tokens` as str.
-            Replace '|' back to real space, strip blanks.
+            Robust to tokens being List[int], torch.Tensor 1D, or List[Tensor]/List[str].
             """
             toks = getattr(hyp, "tokens", None)
             if toks is None:
-                # Fallback: some builds expose `hyp.words` even lexicon-free; join and normalize.
+                # Fallback: some builds expose `hyp.words`; join and normalize.
                 words = getattr(hyp, "words", None)
                 if words is None:
                     return ""
                 return normalize_sentence(" ".join(words))
 
-            # Map indices -> string tokens if ints were returned
-            if len(toks) > 0 and isinstance(toks[0], int):
+            # ---- Normalize tokens to a Python List[int] or List[str] ----
+            # Case: a single 1D tensor of indices
+            if torch.is_tensor(toks):
+                toks = toks.detach().cpu().tolist()
+
+            # Case: list of 0-d tensors -> to Python ints
+            if isinstance(toks, list) and len(toks) > 0 and torch.is_tensor(toks[0]):
+                toks = [int(t.item()) for t in toks]
+
+            # Case: indices -> map through decoder_tokens
+            if isinstance(toks, list) and len(toks) > 0 and isinstance(toks[0], int):
                 syms = [decoder_tokens[i] for i in toks]
             else:
+                # Assume already string tokens
                 syms = list(toks)
 
-            # Remove blanks, turn '|' into space
-            syms = [s for s in syms if s != "_"]
+            # Remove blanks, map '|' back to real spaces
+            syms = [s for s in syms if s is not None and s != "_"]
             text = "".join(" " if s == "|" else s for s in syms)
             return normalize_sentence(text)
+
 
         def _try_load_nemo_lm(device: torch.device):
             """
@@ -1949,7 +1959,15 @@ class Trainer:
                             # Rescore N-best with NeMo LM
                             texts = [_hyp_to_text_lexfree(h, decoder_tokens) for h in hyps]
                             # Acoustic scores from decoder (higher is better)
-                            am_scores = [float(getattr(h, "score", 0.0)) for h in hyps]
+                            am_scores = []
+                            for h in hyps:
+                                s = getattr(h, "score", 0.0)
+                                if torch.is_tensor(s):
+                                    s = float(s.item())
+                                else:
+                                    s = float(s)
+                                am_scores.append(s)
+
                             lm_scores = lm_scorer(texts)
                             combined = [am + lm_alpha * lm for am, lm in zip(am_scores, lm_scores)]
                             best_idx = int(torch.tensor(combined).argmax().item())
