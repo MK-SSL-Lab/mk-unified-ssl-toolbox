@@ -22,7 +22,7 @@ from MK_SSL.vision.models.modules.losses.nt_xent import NT_Xent
 
 from MK_SSL.multimodal.models.utils.registry import get_method
 from MK_SSL.multimodal.models.utils.clap_audio_text_collate import AudioTextCollator
-from MK_SSL.multimodal.models.utils.normal_audio_collate import normal_audio_collate
+
 
 # from MK_SSL.multimodal.models.modules.clap_backbone import CLAPAudioBackbone
 # from MK_SSL.multimodal.models.modules.clap_backbone import CLAPTextBackbone
