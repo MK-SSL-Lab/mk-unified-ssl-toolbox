@@ -1669,7 +1669,6 @@ class Trainer:
         )
         self.logger.info(f"Checkpoint loaded from: {checkpoint_path}")
 
-
     def _evaluate_wav2vec2(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -1684,6 +1683,8 @@ class Trainer:
         """
         Evaluation for Wav2Vec2 using CTC with mixed precision (AMP).
         Uses TorchAudio CTC beam search decoder + KenLM 4-gram (OpenSLR-11).
+        Downloads the official LibriSpeech lexicon and filters it to ONLY words
+        that (1) are representable by our tokens and (2) exist in the LM vocabulary.
         Computes TRUE WER on words.
         """
 
@@ -1808,80 +1809,99 @@ class Trainer:
             decoder_tokens = ["_"] + [("|" if t == " " else t) for t in idx2label]
         assert len(decoder_tokens) == num_classes, "Decoder tokens must match model output classes"
 
-        # --- Prepare LM & build a CHARACTER lexicon from the LM 1-gram vocabulary ---
-        # IMPORTANT: We must ensure every lexicon word exists in the LM's own dictionary,
-        # otherwise torchaudio will raise "Unknown entry in dictionary".
+        # --- Download official LM + lexicon, and FILTER the lexicon ---
         from torchaudio.models.decoder import ctc_decoder
         import os, gzip, shutil, urllib.request, re
 
-        def _ensure_lm_and_char_lexicon(cache_dir: str = "decoder_assets"):
+        def _download(url: str, dst: str):
+            if not os.path.exists(dst):
+                urllib.request.urlretrieve(url, dst)
+            return dst
+
+        def _ensure_lm_and_filtered_lexicon(cache_dir: str = "decoder_assets"):
             """
-            Downloads the 4-gram ARPA from OpenSLR-11 and constructs a CHAR lexicon
-            using ONLY words that appear in the LM's 1-gram vocabulary and are
-            spellable by our character tokens (a-z and apostrophe).
-            Returns (lexicon_path, lm_arpa_path).
+            Downloads from OpenSLR-11:
+            - 4-gram.arpa.gz  -> 4-gram.arpa
+            - librispeech-lexicon.txt (OFFICIAL)
+            Filters the official lexicon to include ONLY words that:
+            (1) are spellable with our tokens (a-z and apostrophe), and
+            (2) exist in the LM's 1-gram vocabulary.
+            Produces a CHARACTER lexicon (word -> sequence of characters + '|').
+            Returns (filtered_char_lexicon_path, lm_arpa_path).
             """
             os.makedirs(cache_dir, exist_ok=True)
             base = "https://www.openslr.org/resources/11"
+
             lm_gz = os.path.join(cache_dir, "4-gram.arpa.gz")
             lm_arpa = os.path.join(cache_dir, "4-gram.arpa")
-            char_lexicon = os.path.join(cache_dir, "lexicon_chars_from_lm.txt")
+            official_lex = os.path.join(cache_dir, "librispeech-lexicon.txt")
+            char_lex = os.path.join(cache_dir, "lexicon_chars.filtered.txt")
 
-            # Get LM (download + decompress if needed)
+            _download(f"{base}/librispeech-lexicon.txt", official_lex)
             if not os.path.exists(lm_arpa):
-                if not os.path.exists(lm_gz):
-                    urllib.request.urlretrieve(f"{base}/4-gram.arpa.gz", lm_gz)
+                _download(f"{base}/4-gram.arpa.gz", lm_gz)
                 with gzip.open(lm_gz, "rb") as fin, open(lm_arpa, "wb") as fout:
                     shutil.copyfileobj(fin, fout)
 
-            # Parse LM 1-gram vocabulary
-            if not os.path.exists(char_lexicon):
-                lm_vocab = set()
-                in_unigram = False
-                with open(lm_arpa, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
+            # Build LM 1-gram vocabulary (lowercased)
+            lm_vocab = set()
+            in_unigram = False
+            with open(lm_arpa, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("\\1-grams:"):
+                        in_unigram = True
+                        continue
+                    if in_unigram and line.startswith("\\2-grams:"):
+                        break
+                    if in_unigram:
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            lm_vocab.add(parts[1].lower())
+
+            # Allowed character set (exclude '_' and '|' which are special)
+            allowed_chars = set(t for t in decoder_tokens if t not in {"_", "|"})
+            # Filter the OFFICIAL lexicon by allowed chars + LM vocab, and emit char spellings
+            if not os.path.exists(char_lex):
+                kept, skipped = 0, 0
+                seen = set()
+                with open(official_lex, "r", encoding="utf-8", errors="ignore") as fin, \
+                    open(char_lex, "w", encoding="utf-8") as fout:
+                    for line in fin:
                         line = line.strip()
                         if not line:
                             continue
-                        if line.startswith("\\1-grams:"):
-                            in_unigram = True
-                            continue
-                        if in_unigram and line.startswith("\\2-grams:"):
-                            break
-                        if in_unigram:
-                            # Typical 1-gram line: "<logprob>\tWORD\t<backoff>"
-                            parts = line.split()
-                            if len(parts) >= 2:
-                                w = parts[1]
-                                lm_vocab.add(w.lower())
+                        # official format: WORD PRON1 [PRON2 ...]  (phones — we ignore phones)
+                        word = line.split()[0].lower()
+                        if word in seen:
+                            continue  # multiple pronunciations -> dedupe
+                        seen.add(word)
 
-                # Allowed characters per our dataset tokens (excluding '_' and '|')
-                allowed_chars = set(t for t in decoder_tokens if t not in {"_", "|"})
-                # Build character lexicon: keep only words BOTH in LM and spellable in our charset
-                kept, skipped = 0, 0
-                with open(char_lexicon, "w", encoding="utf-8") as fout:
-                    for w in lm_vocab:
-                        if re.fullmatch(r"[a-z']+", w) and all(ch in allowed_chars for ch in w):
-                            spelling = " ".join(list(w) + ["|"])  # append '|' to mark word boundary
-                            fout.write(f"{w} {spelling}\n")
+                        # must be in LM vocab and spellable by our charset
+                        if word in lm_vocab and re.fullmatch(r"[a-z']+", word) and all(ch in allowed_chars for ch in word):
+                            spelling = " ".join(list(word) + ["|"])  # character sequence + word boundary
+                            fout.write(f"{word} {spelling}\n")
                             kept += 1
                         else:
                             skipped += 1
-                self.logger.info(f"[CTC-Decoder] Built LM-aligned char lexicon: kept={kept}, skipped={skipped}")
+                self.logger.info(f"[CTC-Decoder] Filtered official lexicon: kept={kept}, skipped={skipped}")
 
-            return char_lexicon, lm_arpa
+            return char_lex, lm_arpa
 
-        # Try to build LM-aligned lexicon; if it fails (e.g., no internet), fall back
+        # Try to build filtered lexicon; if it fails (e.g., no internet), fall back
         try:
-            lexicon_path, lm_path = _ensure_lm_and_char_lexicon()
+            lexicon_path, lm_path = _ensure_lm_and_filtered_lexicon()
         except Exception as e:
             self.logger.warning(f"OpenSLR LM/lexicon setup failed: {e}. "
                                 f"Falling back to lexicon-free decoding (no LM).")
             lexicon_path, lm_path = None, None
 
         # Create the decoder (use '_' as blank; '|' for space/silence).
-        # Note: Do NOT pass lm_dict. We filter lexicon words to the LM's vocabulary,
-        # so using the LM's own dictionary avoids 'Unknown entry in dictionary' errors.
+        # We DO NOT pass lm_dict: by filtering the lexicon to words in the LM,
+        # the decoder's internal LM dictionary and our lexicon stay consistent,
+        # avoiding the "Unknown entry in dictionary" errors.
         decoder = ctc_decoder(
             lexicon=lexicon_path,
             tokens=decoder_tokens,
