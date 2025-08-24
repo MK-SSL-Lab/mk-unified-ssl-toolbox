@@ -61,9 +61,9 @@ class AudioMultimodalCollator:
         # --- PASSTHROUGH: return 'text' and/or 'image' exactly as they are (lists) ---
         # If a key exists in any item, return a list aligned with the batch order.
         if "text" in batch[0]:
-            batch_dict["text"] = [item["text"] for item in batch]
+            batch_dict["text"] = batch_dict["text"]
         if "image" in batch[0]:
-            batch_dict["image"] = [item["image"] for item in batch]
+            batch_dict["image"] = batch_dict["image"]
 
         # --- Optional: collate labels if present ---
         if "label" in batch[0]:
