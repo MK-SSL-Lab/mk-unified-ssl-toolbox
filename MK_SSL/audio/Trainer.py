@@ -1670,7 +1670,6 @@ class Trainer:
         self.logger.info(f"Checkpoint loaded from: {checkpoint_path}")
 
 
-
     def _evaluate_wav2vec2(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -1684,7 +1683,7 @@ class Trainer:
     ):
         """
         Evaluation for Wav2Vec2 using CTC with mixed precision (AMP).
-        Switched to TorchAudio CTC beam search decoder with KenLM (LibriSpeech 4-gram).
+        Uses TorchAudio CTC beam search decoder + KenLM 4-gram (OpenSLR-11).
         Computes TRUE WER on words.
         """
 
@@ -1716,29 +1715,17 @@ class Trainer:
 
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, classifier.parameters()),
-            lr=lr,
-            betas=(0.9, 0.98),
-            eps=1e-8,
-            weight_decay=1e-4
+            lr=lr, betas=(0.9, 0.98), eps=1e-8, weight_decay=1e-4
         )
-
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
         train_loader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            collate_fn=self.collate_ctc,   # same collate as EAT
-            num_workers=self.num_workers,
-            pin_memory=True,
+            train_dataset, batch_size=batch_size, shuffle=True,
+            collate_fn=self.collate_ctc, num_workers=self.num_workers, pin_memory=True,
         )
         test_loader = DataLoader(
-            test_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            collate_fn=self.collate_ctc,   # same collate as EAT
-            num_workers=self.num_workers,
-            pin_memory=True,
+            test_dataset, batch_size=batch_size, shuffle=False,
+            collate_fn=self.collate_ctc, num_workers=self.num_workers, pin_memory=True,
         )
 
         if self.wandb_logger.is_active:
@@ -1748,7 +1735,7 @@ class Trainer:
         use_amp = (self.device.type == "cuda")
         scaler = GradScaler(enabled=use_amp)
 
-        # === Training (matches EAT) ===
+        # === Training ===
         classifier.train()
         for epoch in range(epochs):
             running, seen = 0.0, 0
@@ -1766,13 +1753,11 @@ class Trainer:
 
                 assert output_lengths.shape[0] == waveforms.size(0)
                 assert (output_lengths > 0).all()
-                assert output_lengths.max().item() <= log_probs.size(1)  # time dim of logits
+                assert output_lengths.max().item() <= log_probs.size(1)
 
                 loss = criterion(
                     log_probs.float().permute(1, 0, 2),  # (T,B,C)
-                    labels,
-                    output_lengths,
-                    label_lengths
+                    labels, output_lengths, label_lengths
                 )
 
                 if torch.isnan(loss):
@@ -1790,7 +1775,6 @@ class Trainer:
                 scaler.step(optimizer)
                 scaler.update()
 
-                # progress
                 bs = waveforms.size(0)
                 running += loss.item() * bs
                 seen += bs
@@ -1805,10 +1789,10 @@ class Trainer:
                     "wav2vec2/lr": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
 
-        # === Evaluation with TorchAudio CTC beam search + KenLM ===
+        # === Evaluation: TorchAudio CTC beam search + KenLM ===
         classifier.eval()
 
-        # Shared vocab checks (same as EAT)
+        # Shared vocab checks
         idx2label = getattr(train_dataset, "idx2label", None)
         if idx2label is None:
             raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
@@ -1821,56 +1805,83 @@ class Trainer:
         if hasattr(train_dataset, "get_decoder_tokens"):
             decoder_tokens = train_dataset.get_decoder_tokens()
         else:
-            # Fallback construction if dataset lacks the helper
             decoder_tokens = ["_"] + [("|" if t == " " else t) for t in idx2label]
         assert len(decoder_tokens) == num_classes, "Decoder tokens must match model output classes"
 
-        # --- Prepare LM & lexicon from OpenSLR 11 and instantiate decoder ---
+        # --- Prepare LM & build a CHARACTER lexicon from OpenSLR-11 vocabulary ---
+        # NOTE: The OpenSLR "librispeech-lexicon.txt" is a phone lexicon (not char-level),
+        # which is incompatible with our character tokens and caused the 'Unknown entry: Z'
+        # error. We instead construct a char lexicon from 'librispeech-vocab.txt'.
         from torchaudio.models.decoder import ctc_decoder
-        import os, gzip, shutil, urllib.request
+        import os, gzip, shutil, urllib.request, re
 
-        def _ensure_openslr_decoder_assets(cache_dir: str = "decoder_assets"):
+        def _download(url: str, dst: str):
+            if not os.path.exists(dst):
+                urllib.request.urlretrieve(url, dst)
+            return dst
+
+        def _ensure_openslr_assets(cache_dir: str = "decoder_assets"):
             """
-            Downloads LM/lexicon from OpenSLR 11 if missing:
-                - 4-gram.arpa.gz  -> decompressed to 4-gram.arpa
-                - librispeech-lexicon.txt
-            Returns (lexicon_path, lm_arpa_path).
+            Downloads the LM (4-gram ARPA) and vocab from OpenSLR-11 and
+            builds a character lexicon compatible with our tokens.
+            Returns: (lexicon_path, lm_arpa_path, vocab_path)
             """
             os.makedirs(cache_dir, exist_ok=True)
-            lexicon_path = os.path.join(cache_dir, "librispeech-lexicon.txt")
+            base = "https://www.openslr.org/resources/11"
+
+            vocab_path = os.path.join(cache_dir, "librispeech-vocab.txt")
             lm_gz = os.path.join(cache_dir, "4-gram.arpa.gz")
             lm_arpa = os.path.join(cache_dir, "4-gram.arpa")
+            char_lexicon = os.path.join(cache_dir, "lexicon_chars.txt")
 
-            if not os.path.exists(lexicon_path):
-                urllib.request.urlretrieve(
-                    "https://www.openslr.org/resources/11/librispeech-lexicon.txt", lexicon_path
-                )  # OpenSLR-11 lexicon
+            _download(f"{base}/librispeech-vocab.txt", vocab_path)
             if not os.path.exists(lm_arpa):
-                if not os.path.exists(lm_gz):
-                    urllib.request.urlretrieve(
-                        "https://www.openslr.org/resources/11/4-gram.arpa.gz", lm_gz
-                    )  # OpenSLR-11 4-gram LM (ARPA)
-                # decompress .gz -> .arpa
+                _download(f"{base}/4-gram.arpa.gz", lm_gz)
                 with gzip.open(lm_gz, "rb") as fin, open(lm_arpa, "wb") as fout:
                     shutil.copyfileobj(fin, fout)
-            return lexicon_path, lm_arpa
+
+            # Build char lexicon once. Keep only words representable by our tokens.
+            if not os.path.exists(char_lexicon):
+                allowed = set([t for t in decoder_tokens if t not in {"_", "|"}] + ["'"])
+                kept, skipped = 0, 0
+                with open(vocab_path, "r", encoding="utf-8") as fin, \
+                    open(char_lexicon, "w", encoding="utf-8") as fout:
+                    for line in fin:
+                        w = line.strip()
+                        if not w:
+                            continue
+                        # The vocab may have upper-case or non-ascii. Normalize to lowercase
+                        # and filter to [a-z and apostrophe].
+                        wl = w.lower()
+                        if re.fullmatch(r"[a-z']+", wl) and all(ch in allowed for ch in wl):
+                            # "a b c |" (append "|" = word boundary/space)
+                            spelling = " ".join(list(wl) + ["|"])
+                            fout.write(f"{wl} {spelling}\n")
+                            kept += 1
+                        else:
+                            skipped += 1
+                self.logger.info(f"[CTC-Decoder] Built char lexicon: kept={kept}, skipped={skipped}")
+            return char_lexicon, lm_arpa, vocab_path
 
         try:
-            lexicon_path, lm_path = _ensure_openslr_decoder_assets()
+            lexicon_path, lm_path, vocab_path = _ensure_openslr_assets()
         except Exception as e:
-            self.logger.warning(f"OpenSLR LM/lexicon download failed: {e}. "
-                                f"Proceeding without LM/lexicon (lexicon-free).")
-            lexicon_path, lm_path = None, None
+            self.logger.warning(f"OpenSLR LM/lexicon setup failed: {e}. "
+                                f"Falling back to lexicon-free decoding (no LM).")
+            lexicon_path, lm_path, vocab_path = None, None, None
 
         # Create the decoder (use '_' as blank; '|' for space/silence)
+        # If downloads failed, this gracefully becomes lexicon-free/no-LM decoding.
         decoder = ctc_decoder(
-            lexicon=lexicon_path,                 # if None -> lexicon-free decoding
-            tokens=decoder_tokens,
-            lm=lm_path,                           # if None -> no LM
+            lexicon=lexicon_path,                 # char lexicon we built (word -> chars + "|")
+            tokens=decoder_tokens,                # MUST align to model outputs; "_" then our labels
+            lm=lm_path,                           # OpenSLR 4-gram ARPA
+            lm_dict=vocab_path,                   # LM vocabulary to align LM <-> words
             nbest=1,
             beam_size=100,
             beam_threshold=10.0,
-            lm_weight=2.0,                        # reasonable default; tune if desired
+            lm_weight=2.0,
+            word_score=-1.0,
             sil_token="|",
             blank_token="_",
             unk_word="<unk>",
@@ -1892,26 +1903,21 @@ class Trainer:
                 with autocast(enabled=use_amp):
                     log_probs, out_lengths = classifier(waveforms, audio_lengths)  # (B,T,C) log-probs
 
-                # Decoder expects CPU tensors
-                emissions = log_probs.detach().cpu()              # (B,T,C)
-                emission_lengths = out_lengths.detach().cpu()     # (B,)
+                emissions = log_probs.detach().cpu()          # (B,T,C)
+                emission_lengths = out_lengths.detach().cpu() # (B,)
 
                 hypos_batch = decoder(emissions, emission_lengths)  # List[List[CTCHypothesis]]
 
                 for hypos, ref_seq, ref_len in zip(hypos_batch, labels_padded, label_lengths):
                     # Best hypothesis
-                    if len(hypos) > 0:
-                        hyp_words = hypos[0].words if hasattr(hypos[0], "words") else []
+                    hyp_text = ""
+                    if hypos and hasattr(hypos[0], "words") and hypos[0].words:
+                        hyp_text = " ".join(hypos[0].words)
                     else:
-                        hyp_words = []
-
-                    # If lexicon-free or empty, fall back to token sequence
-                    if not hyp_words:
-                        # Map token IDs to symbols and then to text (treat '|' as space)
-                        toks = decoder.idxs_to_tokens(hypos[0].tokens) if hypos else []
-                        hyp_text = "".join(toks).replace("|", " ")
-                    else:
-                        hyp_text = " ".join(hyp_words)
+                        # Fallback to tokens -> string (treat '|' as space)
+                        tok_ids = hypos[0].tokens if hypos else []
+                        tok_syms = [decoder_tokens[i] for i in tok_ids]
+                        hyp_text = "".join(tok_syms).replace("|", " ")
 
                     # Build reference from character labels (undo +1 shift; map to chars)
                     ref_ids = ref_seq[:ref_len]
