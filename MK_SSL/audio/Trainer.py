@@ -6,7 +6,7 @@ from torch import nn
 from tqdm.auto import (
     tqdm,
 )
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 from datetime import datetime
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from torch.utils.data.dataloader import default_collate
@@ -1815,6 +1815,7 @@ class Trainer:
 
         def _download(url: str, dst: str):
             if not os.path.exists(dst):
+                self.logger.info(f"Downloading: {url} -> {dst}")
                 urllib.request.urlretrieve(url, dst)
             return dst
 
