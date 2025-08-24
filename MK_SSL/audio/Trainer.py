@@ -1684,20 +1684,17 @@ class Trainer:
     ):
         """
         Evaluation for Wav2Vec2 using CTC with mixed precision (AMP).
-        Computes TRUE WER on words (WORD-level CTC labels; blank=0, labels stored +1).
+        Computes TRUE WER on words (character CTC with explicit SPACE token).
         """
 
-        # --- helpers (unchanged interfaces) ---
+        # --- helpers (match EAT) ---
         def normalize_sentence(text: str) -> str:
             text = text.lower().strip()
             return " ".join(text.split())
 
         def tokens_to_text(tokens):
-            """
-            tokens: list[str] of WORDS (e.g., ["don't","stop"])
-            -> "don't stop"
-            """
-            return " ".join(tokens)
+            # tokens: list[str] of characters, including SPACE token " "
+            return "".join(tokens)
 
         # === Backbone & CTC head ===
         backbone = Wav2Vec2Backbone(pretrained_model=self.model)
@@ -1716,6 +1713,7 @@ class Trainer:
             for p in classifier.backbone.parameters():
                 p.requires_grad = False
 
+
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, classifier.parameters()),
             lr=lr,
@@ -1730,7 +1728,7 @@ class Trainer:
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            collate_fn=self.collate_ctc,   # same collate as EAT: produces +1-shifted labels
+            collate_fn=self.collate_ctc,   # same collate as EAT
             num_workers=self.num_workers,
             pin_memory=True,
         )
@@ -1738,7 +1736,7 @@ class Trainer:
             test_dataset,
             batch_size=batch_size,
             shuffle=False,
-            collate_fn=self.collate_ctc,
+            collate_fn=self.collate_ctc,   # same collate as EAT
             num_workers=self.num_workers,
             pin_memory=True,
         )
@@ -1750,7 +1748,7 @@ class Trainer:
         use_amp = (self.device.type == "cuda")
         scaler = GradScaler(enabled=use_amp)
 
-        # === Training (unchanged) ===
+        # === Training (matches EAT) ===
         classifier.train()
         for epoch in range(epochs):
             running, seen = 0.0, 0
@@ -1766,10 +1764,11 @@ class Trainer:
                 with autocast(enabled=use_amp):
                     log_probs, output_lengths = classifier(waveforms, audio_lengths)
 
+########
                 assert output_lengths.shape[0] == waveforms.size(0)
                 assert (output_lengths > 0).all()
                 assert output_lengths.max().item() <= log_probs.size(1)  # time dim of logits
-
+#######
                 loss = criterion(
                     log_probs.float().permute(1, 0, 2),  # (T,B,C)
                     labels,
@@ -1807,10 +1806,10 @@ class Trainer:
                     "wav2vec2/lr": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
 
-        # === Evaluation ===
+        # === Evaluation (matches EAT) ===
         classifier.eval()
 
-        # Shared vocab checks
+        # Shared vocab checks (same as EAT)
         idx2label = getattr(train_dataset, "idx2label", None)
         if idx2label is None:
             raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
@@ -1828,7 +1827,7 @@ class Trainer:
                 waveforms = batch["audio"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                # references (padded, +1 shifted; 0 is pad/blank)
+                # (optional) refs (already +1 shifted; 0 is pad/blank)
                 labels_padded = batch["labels"].cpu().tolist()
                 label_lengths = batch["label_lengths"].cpu().tolist()
 
@@ -1839,7 +1838,7 @@ class Trainer:
                 out_lengths = out_lengths.cpu().tolist()
 
                 for pred_seq, ref_seq, ref_len, out_len in zip(preds, labels_padded, label_lengths, out_lengths):
-                    # --- Greedy CTC collapse (same logic, word ids instead of char ids) ---
+                    # --- Greedy CTC collapse (identical to EAT) ---
                     pred_seq = pred_seq[:out_len]
                     hyp_ids, prev = [], None
                     for p in pred_seq:
@@ -1850,14 +1849,14 @@ class Trainer:
                             hyp_ids.append(p)
                         prev = p
 
-                    # ids -> WORD tokens (undo +1 shift)
-                    hyp_words = [idx2label[p - 1] for p in hyp_ids]      # p >= 1
+                    # ids -> characters (undo +1 shift)
+                    hyp_chars = [idx2label[p - 1] for p in hyp_ids]      # p >= 1
                     ref_ids = ref_seq[:ref_len]
-                    ref_words = [idx2label[r - 1] for r in ref_ids]
+                    ref_chars = [idx2label[r - 1] for r in ref_ids]
 
-                    # words -> sentence, then normalize
-                    hyp_text = normalize_sentence(tokens_to_text(hyp_words))
-                    ref_text = normalize_sentence(tokens_to_text(ref_words))
+                    # chars -> sentence, then normalize
+                    hyp_text = normalize_sentence(tokens_to_text(hyp_chars))
+                    ref_text = normalize_sentence(tokens_to_text(ref_chars))
 
                     hyp_sentences.append(hyp_text)
                     ref_sentences.append(ref_text)
