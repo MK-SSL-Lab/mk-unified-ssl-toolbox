@@ -1758,8 +1758,10 @@ class Trainer:
             """
             try:
                 # Lazy import to keep NeMo optional
-                from nemo.collections.nlp.models.language_modeling.megatron_gpt_model import MegatronGPTModel
-                lm = MegatronGPTModel.from_pretrained("asrlm_en_transformer_large_ls", map_location=device)
+                import nemo.collections.nlp as nemo_nlp
+                lm = nemo_nlp.models.language_modeling.TransformerLMModel.from_pretrained(
+                    model_name="asrlm_en_transformer_large_ls"
+                    )
                 lm.eval()
                 # NeMo GPT uses its own tokenizer wrapper:
                 tokenizer = lm.tokenizer
