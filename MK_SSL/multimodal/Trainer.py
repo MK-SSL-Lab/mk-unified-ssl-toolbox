@@ -976,7 +976,9 @@ class Trainer:
         if self.method=="clap" and type(train_dataset[0]['text'][0])==str:
             self.collator= AudioTextCollator()
         elif self.method=="audio_clip" and "audio" in train_dataset[0]:
-             self.collator= AudioMultimodalCollator()  
+             self.collator= AudioMultimodalCollator()
+        elif self.method=="wav2clip":
+             self.collator= AudioMultimodalCollator() 
         else:
             self.collator=None
 
