@@ -1902,13 +1902,11 @@ class Trainer:
         decoder = ctc_decoder(
             lexicon=None,                   # lexicon-free decoder
             tokens=decoder_tokens,
-            lm=None,                        # external neural LM used for rescoring instead
+            lm=None,                        # neural LM handled via N-best rescoring
             nbest=nbest,
             beam_size=beam_size,
             beam_threshold=beam_threshold,
             blank_token="_",
-            sil_token=None,
-            unk_token=None,
         )
 
         # Try loading NeMo LM for rescoring (best-effort)
