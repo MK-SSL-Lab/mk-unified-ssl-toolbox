@@ -1680,22 +1680,15 @@ class Trainer:
         lr: float = 1e-3,
         epochs: int = 10,
         freeze_backbone: bool = True,
-        # Beam-search + LM knobs (safe defaults)
-        beam_size: int = 100,
-        beam_threshold: float = 25.0,
-        nbest: int = 10,
-        lm_alpha: float = 0.50,           # weight for LM score in rescoring
-        use_nemo_lm: bool = True,         # try NeMo LM; gracefully fallback if unavailable
         **kwargs
     ):
         """
         Evaluation for Wav2Vec2 using CTC with mixed precision (AMP).
-        Computes TRUE WER on words (character CTC with explicit SPACE token).
-        Decoding uses TorchAudio CTC beam search; N-best hypotheses are optionally
-        rescored with NeMo LM `asrlm_en_transformer_large_ls`.
+        Switched to TorchAudio CTC beam search decoder with KenLM (LibriSpeech 4-gram).
+        Computes TRUE WER on words.
         """
 
-        # --- helpers (kept local to comply with "define helpers in trainer") ---
+        # --- helpers (match EAT) ---
         def normalize_sentence(text: str) -> str:
             text = text.lower().strip()
             return " ".join(text.split())
@@ -1703,90 +1696,6 @@ class Trainer:
         def tokens_to_text(tokens):
             # tokens: list[str] of characters, including SPACE token " "
             return "".join(tokens)
-
-        def _build_decoder_tokens(idx2label: list[str]) -> list[str]:
-            """
-            Build tokens list for TorchAudio decoder:
-            - index 0 is CTC blank, symbol "_"
-            - map SPACE ' ' -> '|' (TorchAudio convention for space token in decoders)
-            """
-            decoder_tokens = ["_"]  # blank at index 0
-            for ch in idx2label:
-                decoder_tokens.append("|" if ch == " " else ch)
-            return decoder_tokens
-
-        def _hyp_to_text_lexfree(hyp, decoder_tokens: list[str]) -> str:
-            """
-            Convert a lexicon-free hypothesis to normalized text.
-            Robust to tokens being List[int], torch.Tensor 1D, or List[Tensor]/List[str].
-            """
-            toks = getattr(hyp, "tokens", None)
-            if toks is None:
-                # Fallback: some builds expose `hyp.words`; join and normalize.
-                words = getattr(hyp, "words", None)
-                if words is None:
-                    return ""
-                return normalize_sentence(" ".join(words))
-
-            # ---- Normalize tokens to a Python List[int] or List[str] ----
-            # Case: a single 1D tensor of indices
-            if torch.is_tensor(toks):
-                toks = toks.detach().cpu().tolist()
-
-            # Case: list of 0-d tensors -> to Python ints
-            if isinstance(toks, list) and len(toks) > 0 and torch.is_tensor(toks[0]):
-                toks = [int(t.item()) for t in toks]
-
-            # Case: indices -> map through decoder_tokens
-            if isinstance(toks, list) and len(toks) > 0 and isinstance(toks[0], int):
-                syms = [decoder_tokens[i] for i in toks]
-            else:
-                # Assume already string tokens
-                syms = list(toks)
-
-            # Remove blanks, map '|' back to real spaces
-            syms = [s for s in syms if s is not None and s != "_"]
-            text = "".join(" " if s == "|" else s for s in syms)
-            return normalize_sentence(text)
-
-
-        def _try_load_nemo_lm(device: torch.device):
-            """
-            Try to load NeMo LM `asrlm_en_transformer_large_ls` and return a callable:
-                score_texts(List[str]) -> List[float]  (log-prob scores; higher is better)
-            If not available, return None. This is a *best-effort* optional rescoring layer.
-            """
-            try:
-                # Lazy import to keep NeMo optional
-                import nemo.collections.nlp as nemo_nlp
-                lm = nemo_nlp.models.language_modeling.TransformerLMModel.from_pretrained(
-                    model_name="asrlm_en_transformer_large_ls"
-                    )
-                lm.eval()
-                # NeMo GPT uses its own tokenizer wrapper:
-                tokenizer = lm.tokenizer
-
-                @torch.no_grad()
-                def score_texts(texts: list[str]) -> list[float]:
-                    scores = []
-                    for t in texts:
-                        # Convert to IDs and compute per-token log-prob using teacher forcing.
-                        # We normalize by token count to stabilize lengths.
-                        ids = tokenizer.text_to_ids(t)
-                        if len(ids) == 0:
-                            scores.append(float("-inf"))
-                            continue
-                        inp = torch.tensor(ids, dtype=torch.long, device=device).unsqueeze(0)
-                        # Forward with labels to get NLL loss; negate to get log-prob.
-                        out = lm(input_ids=inp, labels=inp)  # returns .loss
-                        nll = float(out.loss.item()) * len(ids)  # loss is per-token average
-                        scores.append(-nll)
-                    return scores
-
-                return score_texts
-            except Exception as e:
-                self.logger.warning(f"[NeMo LM] Could not load 'asrlm_en_transformer_large_ls'. Falling back to acoustic-only beam search. Reason: {e}")
-                return None
 
         # === Backbone & CTC head ===
         backbone = Wav2Vec2Backbone(pretrained_model=self.model)
@@ -1819,7 +1728,7 @@ class Trainer:
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            collate_fn=self.collate_ctc,   # same collate as EAT (+1 shift, blank=0)
+            collate_fn=self.collate_ctc,   # same collate as EAT
             num_workers=self.num_workers,
             pin_memory=True,
         )
@@ -1839,7 +1748,7 @@ class Trainer:
         use_amp = (self.device.type == "cuda")
         scaler = GradScaler(enabled=use_amp)
 
-        # === Training (unchanged logic) ===
+        # === Training (matches EAT) ===
         classifier.train()
         for epoch in range(epochs):
             running, seen = 0.0, 0
@@ -1896,7 +1805,7 @@ class Trainer:
                     "wav2vec2/lr": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
 
-        # === Evaluation with TorchAudio CTC beam search + optional NeMo LM rescoring ===
+        # === Evaluation with TorchAudio CTC beam search + KenLM ===
         classifier.eval()
 
         # Shared vocab checks (same as EAT)
@@ -1908,28 +1817,69 @@ class Trainer:
         assert num_classes == len(idx2label) + 1, \
             f"num_classes ({num_classes}) must be len(idx2label)+1 ({len(idx2label)+1}) with blank=0."
 
-        # Build TorchAudio decoder (lexicon-free; we'll rescore N-best with NeMo LM)
-        from torchaudio.models.decoder import ctc_decoder
-        decoder_tokens = _build_decoder_tokens(idx2label)
-        decoder = ctc_decoder(
-            lexicon=None,                   # lexicon-free decoder
-            tokens=decoder_tokens,
-            lm=None,                        # neural LM handled via N-best rescoring
-            nbest=nbest,
-            beam_size=beam_size,
-            beam_threshold=beam_threshold,
-            blank_token="_",
-        )
+        # --- Build decoder tokens (blank '_' first; map SPACE -> '|') ---
+        if hasattr(train_dataset, "get_decoder_tokens"):
+            decoder_tokens = train_dataset.get_decoder_tokens()
+        else:
+            # Fallback construction if dataset lacks the helper
+            decoder_tokens = ["_"] + [("|" if t == " " else t) for t in idx2label]
+        assert len(decoder_tokens) == num_classes, "Decoder tokens must match model output classes"
 
-        # Try loading NeMo LM for rescoring (best-effort)
-        lm_scorer = _try_load_nemo_lm(self.device) if use_nemo_lm else None
-        if lm_scorer is None and use_nemo_lm:
-            self.logger.info("[Decode] Proceeding without LM rescoring (NeMo LM unavailable).")
+        # --- Prepare LM & lexicon from OpenSLR 11 and instantiate decoder ---
+        from torchaudio.models.decoder import ctc_decoder
+        import os, gzip, shutil, urllib.request
+
+        def _ensure_openslr_decoder_assets(cache_dir: str = "decoder_assets"):
+            """
+            Downloads LM/lexicon from OpenSLR 11 if missing:
+                - 4-gram.arpa.gz  -> decompressed to 4-gram.arpa
+                - librispeech-lexicon.txt
+            Returns (lexicon_path, lm_arpa_path).
+            """
+            os.makedirs(cache_dir, exist_ok=True)
+            lexicon_path = os.path.join(cache_dir, "librispeech-lexicon.txt")
+            lm_gz = os.path.join(cache_dir, "4-gram.arpa.gz")
+            lm_arpa = os.path.join(cache_dir, "4-gram.arpa")
+
+            if not os.path.exists(lexicon_path):
+                urllib.request.urlretrieve(
+                    "https://www.openslr.org/resources/11/librispeech-lexicon.txt", lexicon_path
+                )  # OpenSLR-11 lexicon
+            if not os.path.exists(lm_arpa):
+                if not os.path.exists(lm_gz):
+                    urllib.request.urlretrieve(
+                        "https://www.openslr.org/resources/11/4-gram.arpa.gz", lm_gz
+                    )  # OpenSLR-11 4-gram LM (ARPA)
+                # decompress .gz -> .arpa
+                with gzip.open(lm_gz, "rb") as fin, open(lm_arpa, "wb") as fout:
+                    shutil.copyfileobj(fin, fout)
+            return lexicon_path, lm_arpa
+
+        try:
+            lexicon_path, lm_path = _ensure_openslr_decoder_assets()
+        except Exception as e:
+            self.logger.warning(f"OpenSLR LM/lexicon download failed: {e}. "
+                                f"Proceeding without LM/lexicon (lexicon-free).")
+            lexicon_path, lm_path = None, None
+
+        # Create the decoder (use '_' as blank; '|' for space/silence)
+        decoder = ctc_decoder(
+            lexicon=lexicon_path,                 # if None -> lexicon-free decoding
+            tokens=decoder_tokens,
+            lm=lm_path,                           # if None -> no LM
+            nbest=1,
+            beam_size=100,
+            beam_threshold=10.0,
+            lm_weight=2.0,                        # reasonable default; tune if desired
+            sil_token="|",
+            blank_token="_",
+            unk_word="<unk>",
+        )
 
         ref_sentences, hyp_sentences = [], []
 
         with torch.no_grad():
-            for batch in tqdm(test_loader, desc="[Wav2Vec2-CTC Evaluation]"):
+            for batch in tqdm(test_loader, desc="[Wav2Vec2-CTC Evaluation: Beam+LM]"):
                 if batch is None:
                     continue
                 waveforms = batch["audio"].to(self.device)
@@ -1940,52 +1890,44 @@ class Trainer:
                 label_lengths = batch["label_lengths"].cpu().tolist()
 
                 with autocast(enabled=use_amp):
-                    log_probs, out_lengths = classifier(waveforms, audio_lengths)
+                    log_probs, out_lengths = classifier(waveforms, audio_lengths)  # (B,T,C) log-probs
 
-                # TorchAudio decoder expects CPU float32 emissions of shape (B, T, C)
-                emissions = log_probs.detach().cpu().to(torch.float32)
-                emission_lengths = out_lengths.detach().cpu().to(torch.int32)
+                # Decoder expects CPU tensors
+                emissions = log_probs.detach().cpu()              # (B,T,C)
+                emission_lengths = out_lengths.detach().cpu()     # (B,)
 
-                # Beam search (returns list[list[hypothesis]])
-                results = decoder(emissions, emission_lengths)
+                hypos_batch = decoder(emissions, emission_lengths)  # List[List[CTCHypothesis]]
 
-                # For each item in batch, pick best hypothesis (optionally LM-rescored)
-                for hyps, ref_seq, ref_len in zip(results, labels_padded, label_lengths):
-                    if not hyps:
-                        hyp_text = ""
+                for hypos, ref_seq, ref_len in zip(hypos_batch, labels_padded, label_lengths):
+                    # Best hypothesis
+                    if len(hypos) > 0:
+                        hyp_words = hypos[0].words if hasattr(hypos[0], "words") else []
                     else:
-                        if lm_scorer is None:
-                            # Use top-1 acoustic hypothesis
-                            hyp_text = _hyp_to_text_lexfree(hyps[0], decoder_tokens)
-                        else:
-                            # Rescore N-best with NeMo LM
-                            texts = [_hyp_to_text_lexfree(h, decoder_tokens) for h in hyps]
-                            # Acoustic scores from decoder (higher is better)
-                            am_scores = []
-                            for h in hyps:
-                                s = getattr(h, "score", 0.0)
-                                if torch.is_tensor(s):
-                                    s = float(s.item())
-                                else:
-                                    s = float(s)
-                                am_scores.append(s)
+                        hyp_words = []
 
-                            lm_scores = lm_scorer(texts)
-                            combined = [am + lm_alpha * lm for am, lm in zip(am_scores, lm_scores)]
-                            best_idx = int(torch.tensor(combined).argmax().item())
-                            hyp_text = texts[best_idx]
+                    # If lexicon-free or empty, fall back to token sequence
+                    if not hyp_words:
+                        # Map token IDs to symbols and then to text (treat '|' as space)
+                        toks = decoder.idxs_to_tokens(hypos[0].tokens) if hypos else []
+                        hyp_text = "".join(toks).replace("|", " ")
+                    else:
+                        hyp_text = " ".join(hyp_words)
 
-                    # Build reference from gold labels (undo +1)
+                    # Build reference from character labels (undo +1 shift; map to chars)
                     ref_ids = ref_seq[:ref_len]
-                    ref_chars = [idx2label[r - 1] for r in ref_ids]
-                    ref_text = normalize_sentence(tokens_to_text(ref_chars))
+                    ref_chars = [idx2label[r - 1] for r in ref_ids]  # r >= 1
+                    ref_text = tokens_to_text(ref_chars)
+
+                    # Normalize (lowercase/whitespace)
+                    hyp_text = normalize_sentence(hyp_text)
+                    ref_text = normalize_sentence(ref_text)
 
                     hyp_sentences.append(hyp_text)
                     ref_sentences.append(ref_text)
 
         # TRUE word-level WER
         wer_score = wer(ref_sentences, hyp_sentences)
-        self.logger.info(f"📊 [Wav2Vec2-CTC Evaluation] WER(words)={wer_score:.4f}")
+        self.logger.info(f"📊 [Wav2Vec2-CTC Evaluation] WER(words)={wer_score:.4f} (beam search + LM)")
 
         if self.wandb_logger.is_active:
             self.wandb_logger.log({"wav2vec2/test_wer": wer_score})
