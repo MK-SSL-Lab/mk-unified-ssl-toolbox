@@ -1808,76 +1808,84 @@ class Trainer:
             decoder_tokens = ["_"] + [("|" if t == " " else t) for t in idx2label]
         assert len(decoder_tokens) == num_classes, "Decoder tokens must match model output classes"
 
-        # --- Prepare LM & build a CHARACTER lexicon from OpenSLR-11 vocabulary ---
-        # NOTE: The OpenSLR "librispeech-lexicon.txt" is a phone lexicon (not char-level),
-        # which is incompatible with our character tokens and caused the 'Unknown entry: Z'
-        # error. We instead construct a char lexicon from 'librispeech-vocab.txt'.
+        # --- Prepare LM & build a CHARACTER lexicon from the LM 1-gram vocabulary ---
+        # IMPORTANT: We must ensure every lexicon word exists in the LM's own dictionary,
+        # otherwise torchaudio will raise "Unknown entry in dictionary".
         from torchaudio.models.decoder import ctc_decoder
         import os, gzip, shutil, urllib.request, re
 
-        def _download(url: str, dst: str):
-            if not os.path.exists(dst):
-                urllib.request.urlretrieve(url, dst)
-            return dst
-
-        def _ensure_openslr_assets(cache_dir: str = "decoder_assets"):
+        def _ensure_lm_and_char_lexicon(cache_dir: str = "decoder_assets"):
             """
-            Downloads the LM (4-gram ARPA) and vocab from OpenSLR-11 and
-            builds a character lexicon compatible with our tokens.
-            Returns: (lexicon_path, lm_arpa_path, vocab_path)
+            Downloads the 4-gram ARPA from OpenSLR-11 and constructs a CHAR lexicon
+            using ONLY words that appear in the LM's 1-gram vocabulary and are
+            spellable by our character tokens (a-z and apostrophe).
+            Returns (lexicon_path, lm_arpa_path).
             """
             os.makedirs(cache_dir, exist_ok=True)
             base = "https://www.openslr.org/resources/11"
-
-            vocab_path = os.path.join(cache_dir, "librispeech-vocab.txt")
             lm_gz = os.path.join(cache_dir, "4-gram.arpa.gz")
             lm_arpa = os.path.join(cache_dir, "4-gram.arpa")
-            char_lexicon = os.path.join(cache_dir, "lexicon_chars.txt")
+            char_lexicon = os.path.join(cache_dir, "lexicon_chars_from_lm.txt")
 
-            _download(f"{base}/librispeech-vocab.txt", vocab_path)
+            # Get LM (download + decompress if needed)
             if not os.path.exists(lm_arpa):
-                _download(f"{base}/4-gram.arpa.gz", lm_gz)
+                if not os.path.exists(lm_gz):
+                    urllib.request.urlretrieve(f"{base}/4-gram.arpa.gz", lm_gz)
                 with gzip.open(lm_gz, "rb") as fin, open(lm_arpa, "wb") as fout:
                     shutil.copyfileobj(fin, fout)
 
-            # Build char lexicon once. Keep only words representable by our tokens.
+            # Parse LM 1-gram vocabulary
             if not os.path.exists(char_lexicon):
-                allowed = set([t for t in decoder_tokens if t not in {"_", "|"}] + ["'"])
-                kept, skipped = 0, 0
-                with open(vocab_path, "r", encoding="utf-8") as fin, \
-                    open(char_lexicon, "w", encoding="utf-8") as fout:
-                    for line in fin:
-                        w = line.strip()
-                        if not w:
+                lm_vocab = set()
+                in_unigram = False
+                with open(lm_arpa, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
                             continue
-                        # The vocab may have upper-case or non-ascii. Normalize to lowercase
-                        # and filter to [a-z and apostrophe].
-                        wl = w.lower()
-                        if re.fullmatch(r"[a-z']+", wl) and all(ch in allowed for ch in wl):
-                            # "a b c |" (append "|" = word boundary/space)
-                            spelling = " ".join(list(wl) + ["|"])
-                            fout.write(f"{wl} {spelling}\n")
+                        if line.startswith("\\1-grams:"):
+                            in_unigram = True
+                            continue
+                        if in_unigram and line.startswith("\\2-grams:"):
+                            break
+                        if in_unigram:
+                            # Typical 1-gram line: "<logprob>\tWORD\t<backoff>"
+                            parts = line.split()
+                            if len(parts) >= 2:
+                                w = parts[1]
+                                lm_vocab.add(w.lower())
+
+                # Allowed characters per our dataset tokens (excluding '_' and '|')
+                allowed_chars = set(t for t in decoder_tokens if t not in {"_", "|"})
+                # Build character lexicon: keep only words BOTH in LM and spellable in our charset
+                kept, skipped = 0, 0
+                with open(char_lexicon, "w", encoding="utf-8") as fout:
+                    for w in lm_vocab:
+                        if re.fullmatch(r"[a-z']+", w) and all(ch in allowed_chars for ch in w):
+                            spelling = " ".join(list(w) + ["|"])  # append '|' to mark word boundary
+                            fout.write(f"{w} {spelling}\n")
                             kept += 1
                         else:
                             skipped += 1
-                self.logger.info(f"[CTC-Decoder] Built char lexicon: kept={kept}, skipped={skipped}")
-            return char_lexicon, lm_arpa, vocab_path
+                self.logger.info(f"[CTC-Decoder] Built LM-aligned char lexicon: kept={kept}, skipped={skipped}")
 
+            return char_lexicon, lm_arpa
+
+        # Try to build LM-aligned lexicon; if it fails (e.g., no internet), fall back
         try:
-            lexicon_path, lm_path, vocab_path = _ensure_openslr_assets()
+            lexicon_path, lm_path = _ensure_lm_and_char_lexicon()
         except Exception as e:
             self.logger.warning(f"OpenSLR LM/lexicon setup failed: {e}. "
                                 f"Falling back to lexicon-free decoding (no LM).")
-            lexicon_path, lm_path, vocab_path = None, None, None
+            lexicon_path, lm_path = None, None
 
-        # Create the decoder (use '_' as blank; '|' for space/silence)
-        # If downloads failed, this gracefully becomes lexicon-free/no-LM decoding.
+        # Create the decoder (use '_' as blank; '|' for space/silence).
+        # Note: Do NOT pass lm_dict. We filter lexicon words to the LM's vocabulary,
+        # so using the LM's own dictionary avoids 'Unknown entry in dictionary' errors.
         decoder = ctc_decoder(
-            # lexicon=lexicon_path,                 # char lexicon we built (word -> chars + "|")
-            lexicon=None,                 # char lexicon we built (word -> chars + "|")
-            tokens=decoder_tokens,                # MUST align to model outputs; "_" then our labels
-            lm=lm_path,                           # OpenSLR 4-gram ARPA
-            lm_dict=vocab_path,                   # LM vocabulary to align LM <-> words
+            lexicon=lexicon_path,
+            tokens=decoder_tokens,
+            lm=lm_path,
             nbest=1,
             beam_size=100,
             beam_threshold=10.0,
@@ -1910,12 +1918,10 @@ class Trainer:
                 hypos_batch = decoder(emissions, emission_lengths)  # List[List[CTCHypothesis]]
 
                 for hypos, ref_seq, ref_len in zip(hypos_batch, labels_padded, label_lengths):
-                    # Best hypothesis
-                    hyp_text = ""
-                    if hypos and hasattr(hypos[0], "words") and hypos[0].words:
+                    # Best hypothesis -> words if available, otherwise fall back to tokens
+                    if hypos and getattr(hypos[0], "words", None):
                         hyp_text = " ".join(hypos[0].words)
                     else:
-                        # Fallback to tokens -> string (treat '|' as space)
                         tok_ids = hypos[0].tokens if hypos else []
                         tok_syms = [decoder_tokens[i] for i in tok_ids]
                         hyp_text = "".join(tok_syms).replace("|", " ")
