@@ -1873,7 +1873,8 @@ class Trainer:
         # Create the decoder (use '_' as blank; '|' for space/silence)
         # If downloads failed, this gracefully becomes lexicon-free/no-LM decoding.
         decoder = ctc_decoder(
-            lexicon=lexicon_path,                 # char lexicon we built (word -> chars + "|")
+            # lexicon=lexicon_path,                 # char lexicon we built (word -> chars + "|")
+            lexicon=None,                 # char lexicon we built (word -> chars + "|")
             tokens=decoder_tokens,                # MUST align to model outputs; "_" then our labels
             lm=lm_path,                           # OpenSLR 4-gram ARPA
             lm_dict=vocab_path,                   # LM vocabulary to align LM <-> words
