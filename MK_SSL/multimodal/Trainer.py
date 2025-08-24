@@ -974,7 +974,7 @@ class Trainer:
         if self.method=="clap" and type(train_dataset[0]['text'][0])==str:
             self.collator=AudioTextCollator()
         else:
-            self.collator=self.normal_audio_collate
+            self.collator=self._normal_audio_collate
 
 
         train_loader = torch.utils.data.DataLoader(
