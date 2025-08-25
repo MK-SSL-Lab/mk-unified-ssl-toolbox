@@ -725,7 +725,8 @@ class Trainer:
         )
 
         if self.method == "mae":
-            return self._train_mae(
+            
+            self._train_mae(
                 train_loader=train_loader,
                 optimizer=optimizer,
                 epochs=epochs,

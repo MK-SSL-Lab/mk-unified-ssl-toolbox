@@ -67,6 +67,9 @@ class Trainer:
         wandb_notes: Optional[str] = None,
         wandb_tags: Optional[list[str]] = None,
         use_data_parallel: bool = False,
+        num_workers: int = 0,
+
+        
         **kwargs,
     ) -> None:
         """
@@ -127,7 +130,7 @@ class Trainer:
             )
 
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.num_workers = os.cpu_count()
+        self.num_workers = os.cpu_count() if num_workers is None else num_workers
 
         self.logger.info(
                     "\n"
