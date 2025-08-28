@@ -6,7 +6,6 @@ from torch import nn
 from tqdm.auto import (
     tqdm,
 )
-from tqdm.notebook import tqdm
 from datetime import datetime
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from torch.utils.data.dataloader import default_collate
@@ -67,7 +66,7 @@ class Trainer:
         wandb_notes: Optional[str] = None,
         wandb_tags: Optional[list[str]] = None,
         use_data_parallel: bool = False,
-        num_workers: int = 0,
+        num_workers: Optional[int] = None,
 
         
         **kwargs,
