@@ -45,7 +45,7 @@ class GraphCL(nn.Module):
 
         # Shared GNN encoder (architecture-agnostic per paper).
         if backbone is None:
-            if "in_dim" not in kwargs:
+            if not in_dim:
                 raise ValueError(
                     "GNNGraphEncoder requires `in_dim`. Pass it via GraphCL(..., in_dim=..., ...)"
                 )
