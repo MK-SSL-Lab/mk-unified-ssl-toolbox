@@ -30,7 +30,7 @@ class GraphCLGraphTransform(nn.Module):
         - Node Dropping
         - Edge Perturbation (random add/remove)
         - Attribute Masking
-        - Subgraph (node subset)
+        - Subgraph (node subset via Random Walk)  <-- modified to RW
 
     Behavior:
         For each input graph sample, we randomly choose one augmentation for view-1
@@ -46,7 +46,7 @@ class GraphCLGraphTransform(nn.Module):
         node_drop_ratio: Fraction of nodes to drop.
         edge_perturb_ratio: Fraction of edges to perturb (remove+add of ~same count).
         attr_mask_ratio: Fraction of nodes to mask (features set to 0).
-        subgraph_ratio: Fraction of nodes to keep for subgraph.
+        subgraph_ratio: Fraction of nodes to keep for subgraph (used by RW target size).
         allow_empty: If False, guarantees at least 1 node remains after node/subgraph drop.
         undirected_hint: If True, attempts to keep added edges approximately symmetric.
         rng: Optional torch.Generator for reproducibility.
@@ -128,7 +128,7 @@ class GraphCLGraphTransform(nn.Module):
         if op == "attr_mask":
             return self._attr_mask(data, self.attr_mask_ratio)
         if op == "subgraph":
-            return self._subgraph(data, self.subgraph_ratio)
+            return self._subgraph_rw(data, self.subgraph_ratio)  # <-- RW-based subgraph
         # identity fallback
         return data
 
@@ -196,8 +196,18 @@ class GraphCLGraphTransform(nn.Module):
         new_data.x = x_masked
         return new_data
 
-    def _subgraph(self, data: Data, keep_ratio: float) -> Data:
-        x = data.x
+    # ------------------------- Random-Walk Subgraph --------------------------
+
+    def _subgraph_rw(self, data: Data, keep_ratio: float) -> Data:
+        """
+        Random-walk-based subgraph sampling, following GraphCL's RW-style subgraph view.
+
+        Steps:
+          1) Choose a random start node.
+          2) Perform a random walk, accumulating unique nodes until we reach the target size.
+          3) If we get stuck (isolated), restart from a random node.
+        """
+        x = getattr(data, "x", None)
         num_nodes = x.size(0) if x is not None else int(data.num_nodes)
 
         keep_count = max(1 if not self.allow_empty else 0, int(round(keep_ratio * num_nodes)))
@@ -205,9 +215,62 @@ class GraphCLGraphTransform(nn.Module):
         if keep_count == num_nodes:
             return data
 
-        keep_idx = self._randperm(num_nodes)[:keep_count]
-        keep_idx, _ = torch.sort(keep_idx)
+        # Build neighbor lists (optionally treat as undirected-ish for better connectivity)
+        ei = data.edge_index
+        device = ei.device if ei is not None else None
+        if ei is None or ei.numel() == 0:
+            # Degenerate graph: fallback to uniform keep
+            keep_idx = self._randperm(num_nodes)[:keep_count]
+            keep_idx, _ = torch.sort(keep_idx)
+            return self._induce_by_nodes(data, keep_idx)
 
+        # Construct adjacency lists
+        neighbors: List[List[int]] = [[] for _ in range(num_nodes)]
+        src, dst = ei[0].tolist(), ei[1].tolist()
+        for u, v in zip(src, dst):
+            neighbors[u].append(v)
+            if self.undirected_hint:
+                neighbors[v].append(u)
+
+        # Random-walk until we collect keep_count unique nodes
+        def _randint(n: int) -> int:
+            if self._rng is not None:
+                return int(torch.randint(n, (1,), generator=self._rng).item())
+            return int(random.randrange(n))
+
+        visited = set()
+        # start node
+        current = _randint(num_nodes)
+        visited.add(current)
+
+        # walk
+        # (Limit steps to avoid pathological loops on tiny/degenerate graphs.)
+        max_steps = max(keep_count * 10, keep_count + 10)
+        steps = 0
+        while len(visited) < keep_count and steps < max_steps:
+            nbrs = neighbors[current]
+            if len(nbrs) == 0:
+                # jump to a random node if stuck
+                current = _randint(num_nodes)
+                visited.add(current)
+            else:
+                j = _randint(len(nbrs))
+                current = nbrs[j]
+                visited.add(current)
+            steps += 1
+
+        # If somehow still short (e.g., many isolated nodes), pad via random picks
+        if len(visited) < keep_count:
+            remaining = keep_count - len(visited)
+            extra = []
+            # avoid duplicates
+            while len(extra) < remaining:
+                candidate = _randint(num_nodes)
+                if candidate not in visited:
+                    extra.append(candidate)
+            visited.update(extra)
+
+        keep_idx = torch.tensor(sorted(visited), dtype=torch.long, device=device)
         return self._induce_by_nodes(data, keep_idx)
 
     # ---- Helpers ------------------------------------------------------------
