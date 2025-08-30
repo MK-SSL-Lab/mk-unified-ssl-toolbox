@@ -35,12 +35,12 @@ class GraphCLProjectionHead(ProjectionHead):
 
     Paper spec: small MLP (typically two layers). Loss runs on z (no activation on final layer).
 
-    If num_layers == 1:
-        Linear → (LayerNorm)
+    This version aligns closer to the paper/official repo:
+      • Hidden layers: (Linear → (LayerNorm) → ReLU) × (num_layers - 1)
+      • Final layer:   Linear (NO normalization, NO activation)
 
-    If num_layers > 1:
-        (Linear → (LayerNorm) → ReLU) × (num_layers - 1)
-        → Linear → (LayerNorm)
+    If num_layers == 1:
+      • Linear (NO normalization)
     """
 
     def __init__(
@@ -65,12 +65,15 @@ class GraphCLProjectionHead(ProjectionHead):
 
         layers: List[Tuple[int, int, Optional[nn.Module], Optional[nn.Module]]] = []
 
-        if num_layers == 1:
-            layers.append((input_dim, output_dim, _ln(output_dim), None))
+        if num_layers <= 1:
+            # Final layer only — no norm per GraphCL convention
+            layers.append((input_dim, output_dim, None, None))
         else:
+            # Hidden blocks (with optional LayerNorm + ReLU)
             layers.append((input_dim, hidden_dim, _ln(hidden_dim), nn.ReLU(inplace=True)))
             for _ in range(2, num_layers):
                 layers.append((hidden_dim, hidden_dim, _ln(hidden_dim), nn.ReLU(inplace=True)))
-            layers.append((hidden_dim, output_dim, _ln(output_dim), None))
+            # Final projection — NO normalization or activation
+            layers.append((hidden_dim, output_dim, None, None))
 
         super().__init__(layers)
