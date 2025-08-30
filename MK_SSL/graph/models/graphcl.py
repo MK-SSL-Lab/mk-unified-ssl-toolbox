@@ -4,7 +4,7 @@ from typing import Optional, Tuple, Union, Any
 
 from MK_SSL.graph.models.modules.heads import GraphCLProjectionHead
 from MK_SSL.graph.models.modules.backbones import GNNGraphEncoder
-from MK_SSL.graph.models.modules.losses.ntxent_loss import NTXentGraphLoss
+from MK_SSL.graph.models.modules.losses.graphcl_loss import NTXentGraphLoss
 from MK_SSL.graph.models.modules.transformations.graphcl_transform import GraphCLGraphTransform
 from MK_SSL.graph.models.utils.registry import register_method
 
