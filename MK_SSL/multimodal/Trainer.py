@@ -22,6 +22,9 @@ from MK_SSL.vision.models.modules.losses.nt_xent import NT_Xent
 
 from MK_SSL.multimodal.models.utils.registry import get_method
 from MK_SSL.multimodal.models.utils.clap_audio_text_collate import AudioTextCollator
+from MK_SSL.multimodal.models.utils.audio_clip_collator import AudioMultimodalCollator
+
+
 
 # from MK_SSL.multimodal.models.modules.clap_backbone import CLAPAudioBackbone
 # from MK_SSL.multimodal.models.modules.clap_backbone import CLAPTextBackbone
@@ -971,7 +974,11 @@ class Trainer:
 
         # Setting AudioTextCollator for tokenizing texts in clap
         if self.method=="clap" and type(train_dataset[0]['text'][0])==str:
-            self.collator=AudioTextCollator()
+            self.collator= AudioTextCollator()
+        elif self.method=="audio_clip" and "audio" in train_dataset[0]:
+             self.collator= AudioMultimodalCollator()
+        elif self.method=="wav2clip":
+             self.collator= AudioMultimodalCollator() 
         else:
             self.collator=None
 
@@ -1870,3 +1877,4 @@ class Trainer:
 
 
 
+   
