@@ -53,6 +53,7 @@ class Trainer:
     def __init__(
         self,
         method: str = "graphcl",
+        in_dim: int = None,
         backbone: nn.Module = None,
         save_dir: str = ".",
         checkpoint_interval: int = 10,
@@ -80,7 +81,7 @@ class Trainer:
             self.logger.addHandler(get_logger_handler())
         self.logger.setLevel(logging.INFO if verbose else logging.WARNING)
         self.logger.info("Graph Trainer initialized.")
-
+        self.in_dim = in_dim
         self.method = method.lower()
         self.backbone_override = backbone
         # Enable AMP only on CUDA
@@ -126,6 +127,7 @@ class Trainer:
         model_args = {k: v for k, v in kwargs.items() if k != "augmentation_defaults"}
         if self.backbone_override is not None:
             model_args["backbone"] = self.backbone_override
+        model_args['in_dim'] = self.in_dim
 
         # ---- Loss args ----
         # Expose temperature/normalize via kwargs if present; else construct with defaults.

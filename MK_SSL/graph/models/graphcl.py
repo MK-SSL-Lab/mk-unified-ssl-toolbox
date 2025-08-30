@@ -31,6 +31,7 @@ class GraphCL(nn.Module):
         self,
         feature_size: int = 512,
         backbone: Optional[nn.Module] = None,
+        in_dim: int = None,
         projection_dim: int = 128,
         projection_num_layers: int = 2,
         projection_batch_norm: bool = True,
@@ -48,7 +49,7 @@ class GraphCL(nn.Module):
                 raise ValueError(
                     "GNNGraphEncoder requires `in_dim`. Pass it via GraphCL(..., in_dim=..., ...)"
                 )
-            self.backbone = GNNGraphEncoder(out_dim=self.feature_size, **kwargs)
+            self.backbone = GNNGraphEncoder(in_dim=in_dim, out_dim=self.feature_size, **kwargs)
         else:
             self.backbone = backbone
 
