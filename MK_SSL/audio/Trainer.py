@@ -2173,7 +2173,7 @@ class Trainer:
             )
 
 
-            self.logger.info(f"[CTC-Decoder] Using lexicon ({use_lex}) / LM for decoding ({use_lm}).")
+            self.logger.info(f"[CTC-Decoder] Using lexicon ({use_lex})\nLM for decoding ({use_lm}).")
 
 
         except Exception as e:
