@@ -1987,58 +1987,57 @@ class Trainer:
         lr: float = 1e-3,
         epochs: int = 10,
         freeze_backbone: bool = True,
-        # Optional: paths to a phoneme lexicon and ARPA LM (n-gram over phoneme symbols)
+        # Optional: provide phoneme lexicon + ARPA LM if you have them; otherwise decoder runs token-only.
         phoneme_lexicon_path: str | None = None,
         phoneme_lm_arpa_path: str | None = None,
         **kwargs
     ):
         """
-        Wav2Vec2 + CTC for TIMIT phoneme recognition.
-        - Trains a small CTC head (can freeze backbone).
-        - Uses torchaudio beam-search decoder (same interface as before).
-        - Computes PER (phoneme error rate).
-
+        Wav2Vec2 + CTC for TIMIT phoneme recognition (PER).
         Assumptions:
-        - collate_ctc returns:
-            audio (B,1,T), audio_lengths (B,),
-            labels (B,Lmax) with +1 shift (0=blank/pad),
-            flat_labels (+1 shifted), label_lengths (B,)
-        - idx2label in dataset maps 0..P-1 -> phoneme strings
-        - num_classes == len(idx2label)+1 (extra class 0 = blank)
+        - train/test datasets expose `idx2label` (0..P-1 -> phoneme string) and matching `label2idx`.
+        - Your collate_ctc returns (+1 shifted labels; 0=CTC blank/pad):
+                "audio": (B,1,T),
+                "audio_lengths": (B,),  # raw samples
+                "labels": (B,Lmax) in [0..P], 0 is pad/blank; valid part is [1..P]
+                "flat_labels": (sum L_b,) in [1..P],
+                "label_lengths": (B,)
+        - num_classes = P + 1  (index 0 is the blank)
         """
         import os
         import editdistance
         from torchaudio.models.decoder import ctc_decoder
 
-        # ---------- helpers ----------
+        # ----------------- helpers -----------------
         def collapse_and_strip_blanks(pred_ids):
             out, prev = [], None
             for p in pred_ids:
-                if p != 0 and p != prev:
+                if p != 0 and p != prev:  # 0 is CTC blank
                     out.append(p)
                 prev = p
-            return out  # still +1 shifted ids (>=1)
+            return out  # still +1 shifted (>=1)
 
         def ids_to_phones(ids, idx2label):
-            # ids are +1 shifted (>=1). Convert to 0-based and map.
+            # ids must be in [1..P]; map via (i-1)
+            if any(i == 0 for i in ids):
+                raise RuntimeError("Found 0 (blank) in phone ids after collapse.")
             return [idx2label[i - 1] for i in ids]
 
         def compute_per(refs, hyps):
-            # list[list[str]] each
             total_err, total_len = 0, 0
             for r, h in zip(refs, hyps):
                 total_err += editdistance.eval(r, h)
                 total_len += len(r)
             return total_err / max(total_len, 1)
 
-        # ---------- backbone + head ----------
+        # ----------------- backbone + head -----------------
         backbone = Wav2Vec2Backbone(pretrained_model=self.model)
         feature_size = self.model.model_config["encoder_embed_dim"]
 
         classifier = EvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
-            num_classes=num_classes,  # incl. blank (0)
+            num_classes=num_classes,  # includes blank class at index 0
             is_linear=freeze_backbone,
         ).to(self.device)
 
@@ -2068,7 +2067,7 @@ class Trainer:
         use_amp = (self.device.type == "cuda")
         scaler = GradScaler(enabled=use_amp)
 
-        # ---------- training ----------
+        # ----------------- training -----------------
         classifier.train()
         for epoch in range(epochs):
             running, seen = 0.0, 0
@@ -2077,12 +2076,16 @@ class Trainer:
                 if batch is None:
                     continue
                 waveforms = batch["audio"].to(self.device)                 # (B,1,T)
-                labels = batch["flat_labels"].to(self.device)              # +1 shifted (>=1)
+                labels = batch["flat_labels"].to(self.device)              # +1 shifted in [1..P]
                 label_lengths = batch["label_lengths"].to(self.device)     # (B,)
                 audio_lengths = batch["audio_lengths"].to(self.device)     # (B,)
 
+                # safety: labels must be >=1 (since +1 shift already applied)
+                if (labels == 0).any():
+                    raise RuntimeError("flat_labels contains 0, but collate should shift to [1..P].")
+
                 with autocast(enabled=use_amp):
-                    log_probs, output_lengths = classifier(waveforms, audio_lengths)
+                    log_probs, output_lengths = classifier(waveforms, audio_lengths)  # (B,T,C), (B,)
 
                 assert output_lengths.shape[0] == waveforms.size(0)
                 assert (output_lengths > 0).all()
@@ -2122,25 +2125,28 @@ class Trainer:
                     "wav2vec2/lr": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
 
-        # ---------- evaluation (beam search + PER) ----------
+        # ----------------- evaluation (beam search + PER) -----------------
         classifier.eval()
 
         idx2label = getattr(train_dataset, "idx2label", None)
         if idx2label is None:
             raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
+
         if hasattr(test_dataset, "label2idx") and hasattr(train_dataset, "label2idx"):
             assert test_dataset.label2idx == train_dataset.label2idx, "Train/Test vocab mismatch!"
-        assert num_classes == len(idx2label) + 1, \
-            f"num_classes ({num_classes}) must be len(idx2label)+1 ({len(idx2label)+1}) with blank=0."
 
-        # tokens (index-aligned with model outputs): 0 is "_"(blank), 1..P map to idx2label[0..P-1]
+        assert num_classes == len(idx2label) + 1, (
+            f"num_classes={num_classes}, but need P+1={len(idx2label)+1} (blank=0)."
+        )
+
+        # tokens index-aligned with logits: 0 -> blank "_", 1..P -> idx2label[0..P-1]
         decoder_tokens = ["_"] + list(idx2label)
         assert len(decoder_tokens) == num_classes
 
-        # decoder with optional phoneme lexicon/LM; clean fallback to token-only search
+        # instantiate decoder (optional LM/lexicon); fall back to greedy if construction fails
         try:
-            use_lex = phoneme_lexicon_path and os.path.exists(phoneme_lexicon_path)
-            use_lm  = phoneme_lm_arpa_path and os.path.exists(phoneme_lm_arpa_path)
+            use_lex = bool(phoneme_lexicon_path) and os.path.exists(phoneme_lexicon_path)
+            use_lm  = bool(phoneme_lm_arpa_path) and os.path.exists(phoneme_lm_arpa_path)
             decoder = ctc_decoder(
                 lexicon=phoneme_lexicon_path if use_lex else None,
                 tokens=decoder_tokens,
@@ -2150,7 +2156,7 @@ class Trainer:
                 beam_threshold=10.0,
                 lm_weight=2.0,
                 word_score=-1.0,
-                sil_token="_",    # fine for token-level search
+                sil_token="_",    # ok for token-level search
                 blank_token="_",
                 unk_word="<unk>",
             )
@@ -2172,6 +2178,11 @@ class Trainer:
                 labels_padded = batch["labels"].cpu().tolist()       # +1 shifted
                 label_lengths = batch["label_lengths"].cpu().tolist()
 
+                # safety: ensure no 0 inside valid reference spans
+                for rs, rl in zip(labels_padded, label_lengths):
+                    if any(x == 0 for x in rs[:rl]):
+                        raise RuntimeError("Reference contains 0 (blank/pad) within valid length.")
+
                 with autocast(enabled=use_amp):
                     log_probs, out_lengths = classifier(waveforms, audio_lengths)  # (B,T,C)
 
@@ -2182,13 +2193,14 @@ class Trainer:
                     hypos_batch = decoder(emissions, emission_lengths)  # List[List[CTCHypothesis]]
                     for hypos, ref_seq, ref_len in zip(hypos_batch, labels_padded, label_lengths):
                         if hypos:
-                            tok_ids = collapse_and_strip_blanks(hypos[0].tokens)  # still +1 shifted
+                            tok_ids = collapse_and_strip_blanks(hypos[0].tokens)  # in [1..P]
+                            if any(i == 0 for i in tok_ids):
+                                raise RuntimeError("Decoder hypothesis still has 0 after collapse.")
                             hyp = ids_to_phones(tok_ids, idx2label)
                         else:
                             hyp = []
 
-                        # reference: remove pads, stay +1 shifted then map
-                        ref_ids = ref_seq[:ref_len]
+                        ref_ids = ref_seq[:ref_len]  # in [1..P]
                         ref = ids_to_phones(ref_ids, idx2label)
 
                         hyp_seqs.append(hyp)
@@ -2196,10 +2208,12 @@ class Trainer:
                 else:
                     preds = torch.argmax(emissions, dim=-1).tolist()
                     for pred_seq, ref_seq, ref_len in zip(preds, labels_padded, label_lengths):
-                        pred_ids = collapse_and_strip_blanks(pred_seq)
+                        pred_ids = collapse_and_strip_blanks(pred_seq)  # in [1..P]
+                        if any(i == 0 for i in pred_ids):
+                            raise RuntimeError("Greedy hypothesis still has 0 after collapse.")
                         hyp = ids_to_phones(pred_ids, idx2label)
 
-                        ref_ids = ref_seq[:ref_len]
+                        ref_ids = ref_seq[:ref_len]  # in [1..P]
                         ref = ids_to_phones(ref_ids, idx2label)
 
                         hyp_seqs.append(hyp)
@@ -2207,11 +2221,11 @@ class Trainer:
 
         per_score = compute_per(ref_seqs, hyp_seqs)
         self.logger.info(f"📊 [Wav2Vec2-CTC Evaluation] PER(phonemes)={per_score:.4f}")
+
         if self.wandb_logger.is_active:
             self.wandb_logger.log({"wav2vec2/test_per": per_score})
 
         torch.save(classifier.state_dict(), "Wav2Vec2_Classifier.pth")
-
 
 
 
