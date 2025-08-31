@@ -1976,8 +1976,6 @@ class Trainer:
         # Save head weights
         torch.save(classifier.state_dict(), "Wav2Vec2_Classifier.pth")
 
-
-
     def _evaluate_wav2vec2(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -2007,7 +2005,12 @@ class Trainer:
         """
         import os
         import editdistance
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader
+        from torch.cuda.amp import GradScaler, autocast
         from torchaudio.models.decoder import ctc_decoder
+        from tqdm.auto import tqdm
 
         # ----------------- helpers -----------------
         def collapse_and_strip_blanks(pred_ids):
@@ -2042,11 +2045,9 @@ class Trainer:
             is_linear=freeze_backbone,
         ).to(self.device)
 
-
         if classifier_path is not None and os.path.exists(classifier_path):
             self.logger.info(f"Loading classifier weights from: {classifier_path}")
             classifier.load_state_dict(torch.load(classifier_path, map_location=self.device))
-
 
         if freeze_backbone:
             classifier.backbone.eval()
@@ -2068,7 +2069,7 @@ class Trainer:
             collate_fn=self.collate_ctc, num_workers=self.num_workers, pin_memory=True,
         )
 
-        if self.wandb_logger.is_active:
+        if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
 
         use_amp = (self.device.type == "cuda")
@@ -2125,7 +2126,7 @@ class Trainer:
 
             epoch_loss = running / max(seen, 1)
             self.logger.info(f"[Wav2Vec2-CTC Train] Epoch {epoch+1}/{epochs} - Loss: {epoch_loss:.4f}")
-            if self.wandb_logger.is_active:
+            if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
                 self.wandb_logger.log({
                     "wav2vec2/train_loss": epoch_loss,
                     "wav2vec2/epoch": epoch + 1,
@@ -2154,21 +2155,27 @@ class Trainer:
         try:
             use_lex = bool(phoneme_lexicon_path) and os.path.exists(phoneme_lexicon_path)
             use_lm  = bool(phoneme_lm_arpa_path) and os.path.exists(phoneme_lm_arpa_path)
+
             decoder = ctc_decoder(
+                # FIX: actually honor use_lex
                 lexicon=phoneme_lexicon_path if use_lex else None,
                 tokens=decoder_tokens,
                 lm=phoneme_lm_arpa_path if use_lm else None,
-                nbest=1,
-                beam_size=100,
-                beam_threshold=10.0,
-                lm_weight=2.0,
+                nbest=50,
+                beam_size=250,
+                beam_threshold=12.0,
+                lm_weight=1.5,
                 word_score=-1.0,
-                sil_token="_",    # ok for token-level search
+                # FIX: match dataset token, not "SIL"
+                sil_token="sil",     # phone-level search
                 blank_token="_",
                 unk_word="<unk>",
             )
-            if not (use_lex and use_lm):
-                self.logger.info("[CTC-Decoder] Using lexicon-free / LM-free phoneme decoding.")
+
+
+            self.logger.info(f"[CTC-Decoder] Using lexicon ({use_lex}) / LM for decoding ({use_lm}).")
+
+
         except Exception as e:
             self.logger.warning(f"CTC decoder setup failed ({e}). Falling back to greedy PER.")
             decoder = None
@@ -2229,10 +2236,11 @@ class Trainer:
         per_score = compute_per(ref_seqs, hyp_seqs)
         self.logger.info(f"📊 [Wav2Vec2-CTC Evaluation] PER(phonemes)={per_score:.4f}")
 
-        if self.wandb_logger.is_active:
+        if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
             self.wandb_logger.log({"wav2vec2/test_per": per_score})
 
         torch.save(classifier.state_dict(), "Wav2Vec2_Classifier.pth")
+
 
 
 
@@ -3047,40 +3055,50 @@ class Trainer:
 
     def collate_ctc(self, batch):
         """
-        Collate function for CTC training/evaluation.
-
+        Expects items with:
+        - "audio": FloatTensor(1, T)
+        - "labels": LongTensor(L) in 0..P-1  (P phones, no blank)
         Returns:
-            {
-                "audio":         FloatTensor (B, 1, T_max)  - zero-padded waveforms
-                "audio_lengths": LongTensor  (B,)           - valid lengths in raw samples
-                "labels":        LongTensor  (B, L_max)     - +1 shifted, 0 is CTC blank/pad
-                "flat_labels":   LongTensor  (sum(L_b),)    - concatenated labels for CTCLoss
-                "label_lengths": LongTensor  (B,)           - valid label lengths (pre-pad)
-            }
+        - audio: (B,1,Tmax)
+        - audio_lengths: (B,)
+        - labels: (B,Lmax) in [0..P], +1 shift, 0 used for pad/blank
+        - flat_labels: (sum L_b,) in [1..P]
+        - label_lengths: (B,)
         """
-        batch = [b for b in batch if b is not None]
-        if len(batch) == 0:
-            return None
+        import torch
+        from torch.nn.utils.rnn import pad_sequence
 
-        # ---- Audio padding (keep lengths in *samples* for accurate out_lengths) ----
-        audios = [b["audio"].squeeze(0) for b in batch]  # (T,) per item
-        audio_lengths = torch.tensor([a.size(0) for a in audios], dtype=torch.long)
-        padded_audios = pad_sequence(audios, batch_first=True).unsqueeze(1).contiguous()  # (B,1,T_max)
+        audios = [x["audio"] for x in batch]
+        lengths = torch.tensor([a.size(-1) for a in audios], dtype=torch.long)
+        Tmax = int(lengths.max().item())
+        B = len(batch)
 
-        # ---- Label padding (shift by +1 so 0 is reserved for CTC blank/pad) ----
-        labels = [b["labels"] + 1 for b in batch]  # each is (L_b,)
-        label_lengths = torch.tensor([len(l) for l in labels], dtype=torch.long)
-        padded_labels = pad_sequence(labels, batch_first=True, padding_value=0)          # (B,L_max)
-        flat_labels = torch.cat(labels, dim=0)                                           # (sum L_b,)
+        # pad audio to Tmax
+        audio_pad = []
+        for a in audios:
+            if a.size(-1) < Tmax:
+                pad = torch.zeros(1, Tmax - a.size(-1), dtype=a.dtype)
+                audio_pad.append(torch.cat([a, pad], dim=-1))
+            else:
+                audio_pad.append(a)
+        audio = torch.stack(audio_pad, dim=0)  # (B,1,Tmax)
+
+        # labels
+        labels_list = [x["labels"] for x in batch]  # each in 0..P-1
+        label_lengths = torch.tensor([l.numel() for l in labels_list], dtype=torch.long)
+
+        # +1 shift so 0 is reserved for CTC blank/pad
+        labels_shifted = [l + 1 for l in labels_list]
+        labels_padded = pad_sequence(labels_shifted, batch_first=True, padding_value=0)  # (B,Lmax)
+        flat_labels = torch.cat(labels_shifted, dim=0)  # (sum L_b,)
 
         return {
-            "audio": padded_audios,
-            "audio_lengths": audio_lengths,
-            "labels": padded_labels,
-            "flat_labels": flat_labels,   # used by CTCLoss with (T,B,C) logits
+            "audio": audio,
+            "audio_lengths": lengths,
+            "labels": labels_padded,
+            "flat_labels": flat_labels,
             "label_lengths": label_lengths,
         }
-
 
 
 
