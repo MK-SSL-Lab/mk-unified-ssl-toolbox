@@ -1977,6 +1977,7 @@ class Trainer:
         torch.save(classifier.state_dict(), "Wav2Vec2_Classifier.pth")
 
 
+
     def _evaluate_wav2vec2(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -1986,55 +1987,58 @@ class Trainer:
         lr: float = 1e-3,
         epochs: int = 10,
         freeze_backbone: bool = True,
-        # Optional: provide your own phoneme LM (ARPA) and lexicon paths if you have them.
-        # If left as None, we fall back to lexicon-free, LM-free decoding (still beam-search).
-        phoneme_lexicon_path: str | None = None,   # format: WORD  t1 t2 ... (here WORD can be the same as the phoneme symbol)
-        phoneme_lm_arpa_path: str | None = None,   # e.g., a 3-gram over phoneme symbols
+        # Optional: paths to a phoneme lexicon and ARPA LM (n-gram over phoneme symbols)
+        phoneme_lexicon_path: str | None = None,
+        phoneme_lm_arpa_path: str | None = None,
         **kwargs
     ):
         """
-        Evaluation for Wav2Vec2 on TIMIT-style phoneme recognition with CTC.
-        - Trains a small CTC head (optionally freezing the backbone).
-        - Decodes with torchaudio beam-search decoder.
-        - Computes true Phoneme Error Rate (PER).
+        Wav2Vec2 + CTC for TIMIT phoneme recognition.
+        - Trains a small CTC head (can freeze backbone).
+        - Uses torchaudio beam-search decoder (same interface as before).
+        - Computes PER (phoneme error rate).
 
-        Notes:
-        * Tokens are phoneme symbols; index 0 is CTC blank ("_").
-        * If `phoneme_lexicon_path` and `phoneme_lm_arpa_path` are provided, beam search
-        uses them. Otherwise we do token-only beam search (no LM).
+        Assumptions:
+        - collate_ctc returns:
+            audio (B,1,T), audio_lengths (B,),
+            labels (B,Lmax) with +1 shift (0=blank/pad),
+            flat_labels (+1 shifted), label_lengths (B,)
+        - idx2label in dataset maps 0..P-1 -> phoneme strings
+        - num_classes == len(idx2label)+1 (extra class 0 = blank)
         """
-
+        import os
         import editdistance
         from torchaudio.models.decoder import ctc_decoder
 
-        # === helpers ===
-        def collapse_and_strip_blanks(pred_ids: list[int]) -> list[int]:
+        # ---------- helpers ----------
+        def collapse_and_strip_blanks(pred_ids):
             out, prev = [], None
             for p in pred_ids:
                 if p != 0 and p != prev:
                     out.append(p)
                 prev = p
-            return out
+            return out  # still +1 shifted ids (>=1)
 
-        def ids_to_phones(ids: list[int], idx2label: list[str]) -> list[str]:
-            # ids are 1..C-1 (0 is blank)
+        def ids_to_phones(ids, idx2label):
+            # ids are +1 shifted (>=1). Convert to 0-based and map.
             return [idx2label[i - 1] for i in ids]
 
-        def compute_per(refs: list[list[str]], hyps: list[list[str]]) -> float:
+        def compute_per(refs, hyps):
+            # list[list[str]] each
             total_err, total_len = 0, 0
             for r, h in zip(refs, hyps):
                 total_err += editdistance.eval(r, h)
                 total_len += len(r)
             return total_err / max(total_len, 1)
 
-        # === Backbone & CTC head ===
+        # ---------- backbone + head ----------
         backbone = Wav2Vec2Backbone(pretrained_model=self.model)
         feature_size = self.model.model_config["encoder_embed_dim"]
 
         classifier = EvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
-            num_classes=num_classes,  # vocab size incl. blank (blank=0)
+            num_classes=num_classes,  # incl. blank (0)
             is_linear=freeze_backbone,
         ).to(self.device)
 
@@ -2061,11 +2065,10 @@ class Trainer:
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
 
-        # AMP
         use_amp = (self.device.type == "cuda")
         scaler = GradScaler(enabled=use_amp)
 
-        # === Training ===
+        # ---------- training ----------
         classifier.train()
         for epoch in range(epochs):
             running, seen = 0.0, 0
@@ -2073,8 +2076,8 @@ class Trainer:
             for batch in pbar:
                 if batch is None:
                     continue
-                waveforms = batch["audio"].to(self.device)                 # (B,1,T_pad)
-                labels = batch["flat_labels"].to(self.device)              # values 1..C-1 (0 is blank)
+                waveforms = batch["audio"].to(self.device)                 # (B,1,T)
+                labels = batch["flat_labels"].to(self.device)              # +1 shifted (>=1)
                 label_lengths = batch["label_lengths"].to(self.device)     # (B,)
                 audio_lengths = batch["audio_lengths"].to(self.device)     # (B,)
 
@@ -2119,10 +2122,9 @@ class Trainer:
                     "wav2vec2/lr": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
 
-        # === Evaluation: Beam-search decoding over PHONEME tokens + PER ===
+        # ---------- evaluation (beam search + PER) ----------
         classifier.eval()
 
-        # Shared phoneme vocab checks
         idx2label = getattr(train_dataset, "idx2label", None)
         if idx2label is None:
             raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
@@ -2131,18 +2133,16 @@ class Trainer:
         assert num_classes == len(idx2label) + 1, \
             f"num_classes ({num_classes}) must be len(idx2label)+1 ({len(idx2label)+1}) with blank=0."
 
-        # Decoder tokens: index-aligned with model outputs (0 is blank "_")
-        # Unlike the WER setup, we DO NOT introduce a "space" token here.
+        # tokens (index-aligned with model outputs): 0 is "_"(blank), 1..P map to idx2label[0..P-1]
         decoder_tokens = ["_"] + list(idx2label)
         assert len(decoder_tokens) == num_classes
 
-        # Try to instantiate the decoder WITH the provided phoneme LM/lexicon if available.
-        # Otherwise fall back to token-only decoding (no LM / no lexicon).
+        # decoder with optional phoneme lexicon/LM; clean fallback to token-only search
         try:
-            use_lexicon = phoneme_lexicon_path is not None and os.path.exists(phoneme_lexicon_path)
-            use_lm = phoneme_lm_arpa_path is not None and os.path.exists(phoneme_lm_arpa_path)
+            use_lex = phoneme_lexicon_path and os.path.exists(phoneme_lexicon_path)
+            use_lm  = phoneme_lm_arpa_path and os.path.exists(phoneme_lm_arpa_path)
             decoder = ctc_decoder(
-                lexicon=phoneme_lexicon_path if use_lexicon else None,
+                lexicon=phoneme_lexicon_path if use_lex else None,
                 tokens=decoder_tokens,
                 lm=phoneme_lm_arpa_path if use_lm else None,
                 nbest=1,
@@ -2150,12 +2150,12 @@ class Trainer:
                 beam_threshold=10.0,
                 lm_weight=2.0,
                 word_score=-1.0,
-                sil_token="_",     # fine for token-level decoding
+                sil_token="_",    # fine for token-level search
                 blank_token="_",
                 unk_word="<unk>",
             )
-            if not (use_lexicon and use_lm):
-                self.logger.info("[CTC-Decoder] Using lexicon-free / LM-free decoding for phonemes.")
+            if not (use_lex and use_lm):
+                self.logger.info("[CTC-Decoder] Using lexicon-free / LM-free phoneme decoding.")
         except Exception as e:
             self.logger.warning(f"CTC decoder setup failed ({e}). Falling back to greedy PER.")
             decoder = None
@@ -2169,7 +2169,7 @@ class Trainer:
                 waveforms = batch["audio"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                labels_padded = batch["labels"].cpu().tolist()
+                labels_padded = batch["labels"].cpu().tolist()       # +1 shifted
                 label_lengths = batch["label_lengths"].cpu().tolist()
 
                 with autocast(enabled=use_amp):
@@ -2179,28 +2179,24 @@ class Trainer:
                 emission_lengths = out_lengths.detach().cpu() # (B,)
 
                 if decoder is not None:
-                    # torchaudio beam search (token-level or LM-backed, depending on availability)
                     hypos_batch = decoder(emissions, emission_lengths)  # List[List[CTCHypothesis]]
                     for hypos, ref_seq, ref_len in zip(hypos_batch, labels_padded, label_lengths):
                         if hypos:
-                            # decoder returns token ids already index-aligned w/ `decoder_tokens`
-                            tok_ids = hypos[0].tokens
-                            # remove 0(blank) + CTC repeats
-                            tok_ids = collapse_and_strip_blanks(tok_ids)
+                            tok_ids = collapse_and_strip_blanks(hypos[0].tokens)  # still +1 shifted
                             hyp = ids_to_phones(tok_ids, idx2label)
                         else:
                             hyp = []
 
-                        ref_ids = ref_seq[:ref_len]          # 1..C-1
+                        # reference: remove pads, stay +1 shifted then map
+                        ref_ids = ref_seq[:ref_len]
                         ref = ids_to_phones(ref_ids, idx2label)
 
                         hyp_seqs.append(hyp)
                         ref_seqs.append(ref)
                 else:
-                    # greedy fallback
                     preds = torch.argmax(emissions, dim=-1).tolist()
                     for pred_seq, ref_seq, ref_len in zip(preds, labels_padded, label_lengths):
-                        pred_ids = collapse_and_strip_blanks(pred_seq)  # still includes 0s; already removed
+                        pred_ids = collapse_and_strip_blanks(pred_seq)
                         hyp = ids_to_phones(pred_ids, idx2label)
 
                         ref_ids = ref_seq[:ref_len]
@@ -2211,11 +2207,9 @@ class Trainer:
 
         per_score = compute_per(ref_seqs, hyp_seqs)
         self.logger.info(f"📊 [Wav2Vec2-CTC Evaluation] PER(phonemes)={per_score:.4f}")
-
         if self.wandb_logger.is_active:
             self.wandb_logger.log({"wav2vec2/test_per": per_score})
 
-        # Save head weights
         torch.save(classifier.state_dict(), "Wav2Vec2_Classifier.pth")
 
 
