@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, Tuple, Union, List
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.dataloader import default_collate
-from tqdm.auto import tqdm
+from tqdm import tqdm
 import logging
 import optuna
 
