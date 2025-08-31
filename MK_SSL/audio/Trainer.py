@@ -2172,14 +2172,9 @@ class Trainer:
                 unk_word="<unk>",
             )
 
-            if use_lex and use_lm:
-                self.logger.info("[CTC-Decoder] Using lexicon + LM for decoding.")
-            elif use_lex and not use_lm:
-                self.logger.info("[CTC-Decoder] Using lexicon-only decoding (no LM).")
-            elif use_lm and not use_lex:
-                self.logger.info("[CTC-Decoder] Using LM-only phoneme decoding (no lexicon).")
-            else:
-                self.logger.info("[CTC-Decoder] Using lexicon-free / LM-free phoneme decoding.")
+
+            self.logger.info(f"[CTC-Decoder] Using lexicon ({use_lex}) / LM for decoding ({use_lm}).")
+
 
         except Exception as e:
             self.logger.warning(f"CTC decoder setup failed ({e}). Falling back to greedy PER.")
