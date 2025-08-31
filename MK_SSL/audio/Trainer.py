@@ -1990,6 +1990,7 @@ class Trainer:
         # Optional: provide phoneme lexicon + ARPA LM if you have them; otherwise decoder runs token-only.
         phoneme_lexicon_path: str | None = None,
         phoneme_lm_arpa_path: str | None = None,
+        classifier_path: str | None = None,  # optionally load existing head weights
         **kwargs
     ):
         """
@@ -2040,6 +2041,12 @@ class Trainer:
             num_classes=num_classes,  # includes blank class at index 0
             is_linear=freeze_backbone,
         ).to(self.device)
+
+
+        if classifier_path is not None and os.path.exists(classifier_path):
+            self.logger.info(f"Loading classifier weights from: {classifier_path}")
+            classifier.load_state_dict(torch.load(classifier_path, map_location=self.device))
+
 
         if freeze_backbone:
             classifier.backbone.eval()
