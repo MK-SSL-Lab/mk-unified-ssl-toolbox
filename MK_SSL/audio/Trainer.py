@@ -3058,7 +3058,7 @@ class Trainer:
 
 
 
-    def collate_ctc(batch):
+    def collate_ctc(self, batch):
         """
         Expects items with:
         - "audio": FloatTensor(1, T)
