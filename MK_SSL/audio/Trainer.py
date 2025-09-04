@@ -861,8 +861,11 @@ class Trainer:
         **kwargs,
     ):
         """Train the HuBERT model with embedding logging via HuBERTBackbone."""
+
+
         transformer_layer = kwargs.get(
-            "transformer_layer", getattr(self.model, "extractor_layer", None)
+            "transformer_layer",
+            self.model.config.get("extractor_layer", None)  # <- default to paper layer
         )
         if transformer_layer is None:
             self.logger.warning("⚠️  No 'transformer_layer' specified for HuBERT.")
