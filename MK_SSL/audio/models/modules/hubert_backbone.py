@@ -20,9 +20,8 @@ class HuBERTBackbone(nn.Module):
         self.feature_extractor = pretrained_model.feature_extractor
         self.feature_projection = pretrained_model.feature_projection
         self.norm = pretrained_model.post_extract_proj_norm
-        self.dropout = pretrained_model.post_extract_proj_dropout
         self.encoder = pretrained_model.encoder
-
+        self.projection_head = pretrained_model.projection_head
         # Optional: freeze weights (up to user)
         # for p in self.parameters():
         #     p.requires_grad = False
@@ -44,6 +43,6 @@ class HuBERTBackbone(nn.Module):
         x = self.feature_extractor(waveforms)[0]  # discard lengths if returned
         x = self.feature_projection(x)
         x = self.norm(x)
-        x = self.dropout(x)
         x = self.encoder(x)
+        x = self.projection_head(x)
         return x
