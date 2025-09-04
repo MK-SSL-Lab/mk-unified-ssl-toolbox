@@ -37,29 +37,53 @@ class PseudoLabelGenerator:
         self.layer = None
         self.device = None
 
-    def _extract_features_for_clustering_batch(self, audio_batch: torch.Tensor, is_mfcc: bool) -> torch.Tensor:
-        """Extract features for the entire batch (B, T) -> (B, T', D)."""
+    def _extract_features_for_clustering_batch(
+        self,
+        audio_batch: torch.Tensor,
+        is_mfcc: bool,
+        lengths: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Extract features for K-means.
+        - Iter 0: MFCCs
+        - Iter >=1: Transformer *layer* hidden states (per HuBERT paper).
+        Returns (B, T', D).
+        """
         audio_batch = audio_batch.to(self.device)
+        lengths = lengths.to(self.device) if lengths is not None else None
+
         with torch.no_grad():
             if is_mfcc:
-                if hasattr(self.model, 'feature_extractor') and isinstance(self.model.feature_extractor, MFCCFeatureExtractor):
-                    feats = self.model.feature_extractor(audio_batch)
+                # Iteration 0: MFCC features
+                if hasattr(self.model, "feature_extractor") and \
+                self.model.feature_extractor.__class__.__name__ == "MFCCFeatureExtractor":
+                    feats = self.model.feature_extractor(audio_batch)  # (B, T', D)
+                    # MFCC extractor generally doesn't return lengths; that's fine for KMeans
                 else:
-                    self.logger.warning(
-                        "Model's feature_extractor is not MFCC-based. Using temporary MFCCFeatureExtractor."
-                    )
-                    temp_mfcc_extractor = MFCCFeatureExtractor(sample_rate=self.sample_rate, n_mfcc=39).to(self.device)
-                    feats = temp_mfcc_extractor(audio_batch)
+                    from MK_SSL.audio.models.modules.feature_extractors import MFCCFeatureExtractor
+                    temp_mfcc_extractor = MFCCFeatureExtractor(
+                        sample_rate=self.sample_rate,
+                        n_mfcc=39
+                    ).to(self.device)
+                    feats = temp_mfcc_extractor(audio_batch)  # (B, T', D)
             else:
-                feats, _ = self.model.feature_extractor(audio_batch)
+                # Iterations >= 1: conv -> proj -> specific transformer layer
+                feats, out_lengths = self.model.feature_extractor(audio_batch, lengths)  # (B, T', C), (B,)
                 feats = self.model.feature_projection(feats)
                 feats = self.model.post_extract_proj_norm(feats)
                 feats = self.model.post_extract_proj_dropout(feats)
-                feats = self.model.encoder(feats)
 
-            if isinstance(feats, tuple):  # If encoder returns (output, attn)
-                feats = feats[0]
-        return feats  # Shape: (B, T', D)
+                use_layer = self.layer  # set in generate_pseudo_labels(...)
+                if use_layer is None or use_layer <= 0:
+                    # Fallback to final layer if not specified
+                    feats = self.model.encoder(feats, out_lengths)  # final layer output
+                else:
+                    # Critical fix: take the requested layer's hidden states
+                    feats = self.model.encoder.extract_layer(
+                        feats, layer=int(use_layer), lengths=out_lengths
+                    )  # (B, T', D)
+
+        return feats  # (B, T', D)
 
 
 
@@ -101,8 +125,14 @@ class PseudoLabelGenerator:
         for batch in tqdm(dataloader, desc="Feature Extraction (K-means)"):
             audio_batch = batch["audio"]
             indices_batch = batch["original_idx"].tolist()
-    
-            feats_batch = self._extract_features_for_clustering_batch(audio_batch, is_mfcc)
+            lengths_batch = batch.get("length", None)
+
+
+            feats_batch = self._extract_features_for_clustering_batch(
+                audio_batch=audio_batch,
+                is_mfcc=is_mfcc,
+                lengths=lengths_batch
+            )
             if isinstance(feats_batch, tuple):  # guard
                 feats_batch = feats_batch[0]
     
