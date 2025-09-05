@@ -43,7 +43,7 @@ from MK_SSL.audio.models.modules.eat_backbone import EATBackbone
 from MK_SSL.audio.models.modules.backbones import ViTAudioEncoder
 
 
-from MK_SSL.audio.models.utils.evaluate import EvaluateNet
+from MK_SSL.audio.models.utils.evaluate import CTCEvaluateNet
 from MK_SSL.utils import EmbeddingLogger
 from MK_SSL.utils import get_logger_handler
 from MK_SSL.utils import WandbLogger
@@ -1744,7 +1744,7 @@ class Trainer:
         backbone = Wav2Vec2Backbone(pretrained_model=self.model)
         feature_size = self.model.model_config["encoder_embed_dim"]
 
-        classifier = EvaluateNet(
+        classifier = CTCEvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
             num_classes=num_classes,  # includes blank class at index 0
@@ -1969,7 +1969,7 @@ class Trainer:
         backbone = SimCLRBackbone(model)
         feature_size = model.backbone.embed_dim
 
-        classifier = EvaluateNet(
+        classifier = CTCEvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
             num_classes=num_classes,   # vocab size incl. blank
@@ -2160,7 +2160,7 @@ class Trainer:
 
         backbone = HuBERTBackbone(model)
 
-        classifier = EvaluateNet(
+        classifier = CTCEvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
             num_classes=num_classes,   # vocab size incl. blank
@@ -2349,7 +2349,7 @@ class Trainer:
         backbone = COLABackbone(self.model)
         feature_size = self.model.feature_size
 
-        classifier = EvaluateNet(
+        classifier = CTCEvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
             num_classes=num_classes,   # vocab size incl. blank
@@ -2537,7 +2537,7 @@ class Trainer:
         """
         EAT + CTC for phoneme recognition (PER), **identical flow to Wav2Vec2**:
         - collate_ctc: +1 shift (blank=0), provides flat_labels, label_lengths, audio_lengths
-        - EvaluateNet head on top of backbone
+        - CTCEvaluateNet head on top of backbone
         - Training with CTCLoss
         - Evaluation with torchaudio beam CTC decoder (optional lexicon/LM) → PER
         """
@@ -2577,7 +2577,7 @@ class Trainer:
         if feature_size is None:
             raise RuntimeError("EAT model missing 'embed_dim' attribute.")
 
-        classifier = EvaluateNet(
+        classifier = CTCEvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
             num_classes=num_classes,  # includes blank class at index 0
