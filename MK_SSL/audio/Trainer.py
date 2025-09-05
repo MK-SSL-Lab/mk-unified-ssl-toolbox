@@ -2637,6 +2637,12 @@ class Trainer:
                 assert (output_lengths > 0).all()
                 assert output_lengths.max().item() <= log_probs.size(1)
 
+                invalid = (output_lengths < label_lengths).sum().item()
+                if invalid:
+                    self.logger.warning(f"{invalid}/{labels.size(0)} samples have output_lengths < label_lengths "
+                                        f"(zero_infinity will set their loss to 0).")
+
+
                 loss = criterion(
                     log_probs.float().permute(1, 0, 2),  # (T,B,C)
                     labels, output_lengths, label_lengths
@@ -2702,7 +2708,7 @@ class Trainer:
                 beam_threshold=12.0,
                 lm_weight=1.5,
                 word_score=-1.0,
-                sil_token="sil",     # match your wav2vec2 setup
+                sil_token="sil",
                 blank_token="_",
                 unk_word="<unk>",
             )
