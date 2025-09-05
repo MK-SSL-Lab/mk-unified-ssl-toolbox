@@ -2637,10 +2637,6 @@ class Trainer:
                 assert (output_lengths > 0).all()
                 assert output_lengths.max().item() <= log_probs.size(1)
 
-                invalid = (output_lengths < label_lengths).sum().item()
-                if invalid:
-                    self.logger.warning(f"{invalid}/{labels.size(0)} samples have output_lengths < label_lengths "
-                                        f"(zero_infinity will set their loss to 0).")
 
 
                 loss = criterion(
