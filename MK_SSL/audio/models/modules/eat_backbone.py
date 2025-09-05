@@ -136,6 +136,7 @@ class EATBackbone(nn.Module):
         device = feats_time.device
 
         # Defaults if lengths not provided: full length
+        lengths = None
         if lengths is None:
             t_lengths = torch.full((B,), T_g, dtype=torch.long, device=device)
             return feats_time, t_lengths
