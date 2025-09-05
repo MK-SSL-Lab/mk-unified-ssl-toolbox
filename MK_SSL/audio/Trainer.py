@@ -43,7 +43,7 @@ from MK_SSL.audio.models.modules.eat_backbone import EATBackbone
 from MK_SSL.audio.models.modules.backbones import ViTAudioEncoder
 
 
-from MK_SSL.utils import EvaluateNet
+from MK_SSL.audio.models.utils.evaluate import EvaluateNet
 from MK_SSL.utils import EmbeddingLogger
 from MK_SSL.utils import get_logger_handler
 from MK_SSL.utils import WandbLogger
@@ -1679,305 +1679,8 @@ class Trainer:
         )
         self.logger.info(f"Checkpoint loaded from: {checkpoint_path}")
 
-    def _evaluate_wav2vec2_2(
-        self,
-        train_dataset: torch.utils.data.Dataset,
-        test_dataset: torch.utils.data.Dataset,
-        num_classes: int,
-        batch_size: int = 64,
-        lr: float = 1e-3,
-        epochs: int = 10,
-        freeze_backbone: bool = True,
-        **kwargs
-    ):
-        """
-        Evaluation for Wav2Vec2 using CTC with mixed precision (AMP).
-        Uses TorchAudio CTC beam search decoder + KenLM 4-gram (OpenSLR-11).
-        Downloads the official LibriSpeech lexicon and filters it to ONLY words
-        that (1) are representable by our tokens and (2) exist in the LM vocabulary.
-        Computes TRUE WER on words.
-        """
 
-        # --- helpers (match EAT) ---
-        def normalize_sentence(text: str) -> str:
-            text = text.lower().strip()
-            return " ".join(text.split())
 
-        def tokens_to_text(tokens):
-            # tokens: list[str] of characters, including SPACE token " "
-            return "".join(tokens)
-
-        # === Backbone & CTC head ===
-        backbone = Wav2Vec2Backbone(pretrained_model=self.model)
-        feature_size = self.model.model_config["encoder_embed_dim"]
-
-        classifier = EvaluateNet(
-            backbone=backbone,
-            feature_size=feature_size,
-            num_classes=num_classes,  # vocab size incl. blank (blank=0)
-            is_linear=freeze_backbone,
-        ).to(self.device)
-
-        # True freeze semantics when requested
-        if freeze_backbone:
-            classifier.backbone.eval()
-            for p in classifier.backbone.parameters():
-                p.requires_grad = False
-
-        optimizer = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, classifier.parameters()),
-            lr=lr, betas=(0.9, 0.98), eps=1e-8, weight_decay=1e-4
-        )
-        criterion = nn.CTCLoss(blank=0, zero_infinity=True)
-
-        train_loader = DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True,
-            collate_fn=self.collate_ctc, num_workers=self.num_workers, pin_memory=True,
-        )
-        test_loader = DataLoader(
-            test_dataset, batch_size=batch_size, shuffle=False,
-            collate_fn=self.collate_ctc, num_workers=self.num_workers, pin_memory=True,
-        )
-
-        if self.wandb_logger.is_active:
-            self.wandb_logger.watch_model(classifier)
-
-        # AMP
-        use_amp = (self.device.type == "cuda")
-        scaler = GradScaler(enabled=use_amp)
-
-        # === Training ===
-        classifier.train()
-        for epoch in range(epochs):
-            running, seen = 0.0, 0
-            pbar = tqdm(train_loader, desc=f"[Wav2Vec2-CTC Training] Epoch {epoch+1}")
-            for batch in pbar:
-                if batch is None:
-                    continue
-                waveforms = batch["audio"].to(self.device)                 # (B,1,T_pad)
-                labels = batch["flat_labels"].to(self.device)              # values 1..C-1 (0 is blank)
-                label_lengths = batch["label_lengths"].to(self.device)     # (B,)
-                audio_lengths = batch["audio_lengths"].to(self.device)     # (B,)
-
-                with autocast(enabled=use_amp):
-                    log_probs, output_lengths = classifier(waveforms, audio_lengths)
-
-                assert output_lengths.shape[0] == waveforms.size(0)
-                assert (output_lengths > 0).all()
-                assert output_lengths.max().item() <= log_probs.size(1)
-
-                loss = criterion(
-                    log_probs.float().permute(1, 0, 2),  # (T,B,C)
-                    labels, output_lengths, label_lengths
-                )
-
-                if torch.isnan(loss):
-                    self.logger.error("❌ NaN loss detected!")
-                    self.logger.error(f"log_probs: {log_probs.shape}, "
-                                    f"labels: {labels.shape}, "
-                                    f"input_lengths: {output_lengths}, "
-                                    f"label_lengths: {label_lengths}")
-                    continue
-
-                optimizer.zero_grad(set_to_none=True)
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
-                scaler.step(optimizer)
-                scaler.update()
-
-                bs = waveforms.size(0)
-                running += loss.item() * bs
-                seen += bs
-                pbar.set_postfix({"loss": f"{loss.item():.4f}"})
-
-            epoch_loss = running / max(seen, 1)
-            self.logger.info(f"[Wav2Vec2-CTC Train] Epoch {epoch+1}/{epochs} - Loss: {epoch_loss:.4f}")
-            if self.wandb_logger.is_active:
-                self.wandb_logger.log({
-                    "wav2vec2/train_loss": epoch_loss,
-                    "wav2vec2/epoch": epoch + 1,
-                    "wav2vec2/lr": optimizer.param_groups[0]["lr"]
-                }, step=epoch + 1)
-
-        # === Evaluation: TorchAudio CTC beam search + KenLM ===
-        classifier.eval()
-
-        # Shared vocab checks
-        idx2label = getattr(train_dataset, "idx2label", None)
-        if idx2label is None:
-            raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
-        if hasattr(test_dataset, "label2idx") and hasattr(train_dataset, "label2idx"):
-            assert test_dataset.label2idx == train_dataset.label2idx, "Train/Test vocab mismatch!"
-        assert num_classes == len(idx2label) + 1, \
-            f"num_classes ({num_classes}) must be len(idx2label)+1 ({len(idx2label)+1}) with blank=0."
-
-        # --- Build decoder tokens (blank '_' first; map SPACE -> '|') ---
-        if hasattr(train_dataset, "get_decoder_tokens"):
-            decoder_tokens = train_dataset.get_decoder_tokens()
-        else:
-            decoder_tokens = ["_"] + [("|" if t == " " else t) for t in idx2label]
-        assert len(decoder_tokens) == num_classes, "Decoder tokens must match model output classes"
-
-        # --- Download official LM + lexicon, and FILTER the lexicon ---
-        from torchaudio.models.decoder import ctc_decoder
-        import os, gzip, shutil, urllib.request, re
-
-        def _download(url: str, dst: str):
-            if not os.path.exists(dst):
-                self.logger.info(f"Downloading: {url} -> {dst}")
-                urllib.request.urlretrieve(url, dst)
-            return dst
-
-        def _ensure_lm_and_filtered_lexicon(cache_dir: str = "decoder_assets"):
-            """
-            Downloads from OpenSLR-11:
-            - 4-gram.arpa.gz  -> 4-gram.arpa
-            - librispeech-lexicon.txt (OFFICIAL)
-            Filters the official lexicon to include ONLY words that:
-            (1) are spellable with our tokens (a-z and apostrophe), and
-            (2) exist in the LM's 1-gram vocabulary.
-            Produces a CHARACTER lexicon (word -> sequence of characters + '|').
-            Returns (filtered_char_lexicon_path, lm_arpa_path).
-            """
-            os.makedirs(cache_dir, exist_ok=True)
-            base = "https://www.openslr.org/resources/11"
-
-            lm_gz = os.path.join(cache_dir, "4-gram.arpa.gz")
-            lm_arpa = os.path.join(cache_dir, "4-gram.arpa")
-            official_lex = os.path.join(cache_dir, "librispeech-lexicon.txt")
-            char_lex = os.path.join(cache_dir, "lexicon_chars.filtered.txt")
-
-            _download(f"{base}/librispeech-lexicon.txt", official_lex)
-            if not os.path.exists(lm_arpa):
-                _download(f"{base}/4-gram.arpa.gz", lm_gz)
-                with gzip.open(lm_gz, "rb") as fin, open(lm_arpa, "wb") as fout:
-                    shutil.copyfileobj(fin, fout)
-
-            # Build LM 1-gram vocabulary (lowercased)
-            lm_vocab = set()
-            in_unigram = False
-            with open(lm_arpa, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if line.startswith("\\1-grams:"):
-                        in_unigram = True
-                        continue
-                    if in_unigram and line.startswith("\\2-grams:"):
-                        break
-                    if in_unigram:
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            lm_vocab.add(parts[1].lower())
-
-            # Allowed character set (exclude '_' and '|' which are special)
-            allowed_chars = set(t for t in decoder_tokens if t not in {"_", "|"})
-            # Filter the OFFICIAL lexicon by allowed chars + LM vocab, and emit char spellings
-            if not os.path.exists(char_lex):
-                kept, skipped = 0, 0
-                seen = set()
-                with open(official_lex, "r", encoding="utf-8", errors="ignore") as fin, \
-                    open(char_lex, "w", encoding="utf-8") as fout:
-                    for line in fin:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        # official format: WORD PRON1 [PRON2 ...]  (phones — we ignore phones)
-                        word = line.split()[0].lower()
-                        if word in seen:
-                            continue  # multiple pronunciations -> dedupe
-                        seen.add(word)
-
-                        # must be in LM vocab and spellable by our charset
-                        if word in lm_vocab and re.fullmatch(r"[a-z']+", word) and all(ch in allowed_chars for ch in word):
-                            spelling = " ".join(list(word) + ["|"])  # character sequence + word boundary
-                            fout.write(f"{word} {spelling}\n")
-                            kept += 1
-                        else:
-                            skipped += 1
-                self.logger.info(f"[CTC-Decoder] Filtered official lexicon: kept={kept}, skipped={skipped}")
-
-            return char_lex, lm_arpa
-
-        # Try to build filtered lexicon; if it fails (e.g., no internet), fall back
-        try:
-            lexicon_path, lm_path = _ensure_lm_and_filtered_lexicon()
-        except Exception as e:
-            self.logger.warning(f"OpenSLR LM/lexicon setup failed: {e}. "
-                                f"Falling back to lexicon-free decoding (no LM).")
-            lexicon_path, lm_path = None, None
-
-        # Create the decoder (use '_' as blank; '|' for space/silence).
-        # We DO NOT pass lm_dict: by filtering the lexicon to words in the LM,
-        # the decoder's internal LM dictionary and our lexicon stay consistent,
-        # avoiding the "Unknown entry in dictionary" errors.
-        decoder = ctc_decoder(
-            lexicon=lexicon_path,
-            tokens=decoder_tokens,
-            lm=lm_path,
-            nbest=1,
-            beam_size=100,
-            beam_threshold=10.0,
-            lm_weight=2.0,
-            word_score=-1.0,
-            sil_token="|",
-            blank_token="_",
-            unk_word="<unk>",
-        )
-
-        ref_sentences, hyp_sentences = [], []
-
-        with torch.no_grad():
-            for batch in tqdm(test_loader, desc="[Wav2Vec2-CTC Evaluation: Beam+LM]"):
-                if batch is None:
-                    continue
-                waveforms = batch["audio"].to(self.device)
-                audio_lengths = batch["audio_lengths"].to(self.device)
-
-                # (optional) refs (already +1 shifted; 0 is pad/blank)
-                labels_padded = batch["labels"].cpu().tolist()
-                label_lengths = batch["label_lengths"].cpu().tolist()
-
-                with autocast(enabled=use_amp):
-                    log_probs, out_lengths = classifier(waveforms, audio_lengths)  # (B,T,C) log-probs
-
-                emissions = log_probs.detach().cpu()          # (B,T,C)
-                emission_lengths = out_lengths.detach().cpu() # (B,)
-
-                hypos_batch = decoder(emissions, emission_lengths)  # List[List[CTCHypothesis]]
-
-                for hypos, ref_seq, ref_len in zip(hypos_batch, labels_padded, label_lengths):
-                    # Best hypothesis -> words if available, otherwise fall back to tokens
-                    if hypos and getattr(hypos[0], "words", None):
-                        hyp_text = " ".join(hypos[0].words)
-                    else:
-                        tok_ids = hypos[0].tokens if hypos else []
-                        tok_syms = [decoder_tokens[i] for i in tok_ids]
-                        hyp_text = "".join(tok_syms).replace("|", " ")
-
-                    # Build reference from character labels (undo +1 shift; map to chars)
-                    ref_ids = ref_seq[:ref_len]
-                    ref_chars = [idx2label[r - 1] for r in ref_ids]  # r >= 1
-                    ref_text = tokens_to_text(ref_chars)
-
-                    # Normalize (lowercase/whitespace)
-                    hyp_text = normalize_sentence(hyp_text)
-                    ref_text = normalize_sentence(ref_text)
-
-                    hyp_sentences.append(hyp_text)
-                    ref_sentences.append(ref_text)
-
-        # TRUE word-level WER
-        wer_score = wer(ref_sentences, hyp_sentences)
-        self.logger.info(f"📊 [Wav2Vec2-CTC Evaluation] WER(words)={wer_score:.4f} (beam search + LM)")
-
-        if self.wandb_logger.is_active:
-            self.wandb_logger.log({"wav2vec2/test_wer": wer_score})
-
-        # Save head weights
-        torch.save(classifier.state_dict(), "Wav2Vec2_Classifier.pth")
 
     def _evaluate_wav2vec2(
         self,
@@ -2437,8 +2140,6 @@ class Trainer:
                 "simclr/test_per_no_sil": per_score
             })
 
-
-
     def _evaluate_hubert(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -2817,6 +2518,7 @@ class Trainer:
             })
 
 
+
     def _evaluate_eat(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -2826,98 +2528,126 @@ class Trainer:
         lr: float = 1e-3,
         epochs: int = 10,
         freeze_backbone: bool = True,
+        # Optional LM/lexicon inputs — SAME names/semantics as your wav2vec2 code
+        phoneme_lexicon_path: str | None = None,
+        phoneme_lm_arpa_path: str | None = None,
+        classifier_path: str | None = None,
         **kwargs
     ):
         """
-        Evaluation for EAT using CTC with mixed precision (AMP).
-        Computes TRUE WER on words (character CTC with explicit SPACE token).
+        EAT + CTC for phoneme recognition (PER), **identical flow to Wav2Vec2**:
+        - collate_ctc: +1 shift (blank=0), provides flat_labels, label_lengths, audio_lengths
+        - EvaluateNet head on top of backbone
+        - Training with CTCLoss
+        - Evaluation with torchaudio beam CTC decoder (optional lexicon/LM) → PER
         """
+        import os
+        import editdistance
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader
+        from torch.cuda.amp import GradScaler, autocast
+        from torchaudio.models.decoder import ctc_decoder
+        from tqdm.auto import tqdm
 
-        def normalize_sentence(text: str) -> str:
-            # simple normalization aligned with dataset’s preprocessing
-            text = text.lower().strip()
-            text = " ".join(text.split())  # collapse whitespace
-            return text
+        # ---------- helpers (EXACTLY mirroring your wav2vec2 version) ----------
+        def collapse_and_strip_blanks(pred_ids):
+            out, prev = [], None
+            for p in pred_ids:
+                if p != 0 and p != prev:  # 0 is CTC blank
+                    out.append(p)
+                prev = p
+            return out  # still +1 shifted (>=1)
 
-        def tokens_to_text(tokens):
-            # tokens: list[str] of characters, including SPACE token " "
-            return "".join(tokens)
+        def ids_to_phones(ids, idx2label):
+            if any(i == 0 for i in ids):
+                raise RuntimeError("Found 0 (blank) in phone ids after collapse.")
+            return [idx2label[i - 1] for i in ids]
 
-        backbone = EATBackbone(self.model).to(self.device)
-        feature_size = self.model.embed_dim
+        def compute_per(refs, hyps):
+            total_err, total_len = 0, 0
+            for r, h in zip(refs, hyps):
+                total_err += editdistance.eval(r, h)
+                total_len += len(r)
+            return total_err / max(total_len, 1)
+
+        # ---------- backbone + head ----------
+        backbone = EATBackbone(pretrained_model=self.model)
+        feature_size = getattr(self.model, "embed_dim", None)
+        if feature_size is None:
+            raise RuntimeError("EAT model missing 'embed_dim' attribute.")
 
         classifier = EvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
-            num_classes=num_classes,   # vocab size incl. blank (blank=0)
+            num_classes=num_classes,  # includes blank class at index 0
             is_linear=freeze_backbone,
         ).to(self.device)
 
+        if classifier_path is not None and os.path.exists(classifier_path):
+            self.logger.info(f"Loading classifier weights from: {classifier_path}")
+            classifier.load_state_dict(torch.load(classifier_path, map_location=self.device))
+
+        if freeze_backbone:
+            classifier.backbone.eval()
+            for p in classifier.backbone.parameters():
+                p.requires_grad = False
+
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, classifier.parameters()),
-            lr=lr,
-            betas=(0.9, 0.98),
-            eps=1e-8,
-            weight_decay=1e-4
+            lr=lr, betas=(0.9, 0.98), eps=1e-8, weight_decay=1e-4
         )
-
         criterion = nn.CTCLoss(blank=0, zero_infinity=True)
 
         train_loader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            collate_fn=self.collate_ctc,   # unchanged
-            num_workers=self.num_workers,
-            pin_memory=True,
+            train_dataset, batch_size=batch_size, shuffle=True,
+            collate_fn=self.collate_ctc, num_workers=self.num_workers, pin_memory=True,
         )
-
         test_loader = DataLoader(
-            test_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            collate_fn=self.collate_ctc,   # unchanged
-            num_workers=self.num_workers,
-            pin_memory=True,
+            test_dataset, batch_size=batch_size, shuffle=False,
+            collate_fn=self.collate_ctc, num_workers=self.num_workers, pin_memory=True,
         )
 
-        if self.wandb_logger.is_active:
+        if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
 
         use_amp = (self.device.type == "cuda")
         scaler = GradScaler(enabled=use_amp)
 
-        # === Training ===
+        # ---------- training ----------
         classifier.train()
-        if freeze_backbone:
-            classifier.backbone.eval()
-
         for epoch in range(epochs):
+            running, seen = 0.0, 0
             pbar = tqdm(train_loader, desc=f"[EAT-CTC Training] Epoch {epoch+1}")
             for batch in pbar:
                 if batch is None:
                     continue
-                audio = batch["audio"].to(self.device)                    # (B, 1, T_pad)
-                labels = batch["flat_labels"].to(self.device)             # values 1..C (0 is blank)
-                label_lengths = batch["label_lengths"].to(self.device)    # (B,)
-                audio_lengths = batch["audio_lengths"].to(self.device)    # (B,)
+                waveforms = batch["audio"].to(self.device)                 # (B,1,T)
+                labels = batch["flat_labels"].to(self.device)              # +1 shifted in [1..P]
+                label_lengths = batch["label_lengths"].to(self.device)     # (B,)
+                audio_lengths = batch["audio_lengths"].to(self.device)     # (B,)
+
+                if (labels == 0).any():
+                    raise RuntimeError("flat_labels contains 0, but collate should shift to [1..P].")
 
                 with autocast(enabled=use_amp):
-                    log_probs, output_lengths = classifier(audio, audio_lengths)
+                    log_probs, output_lengths = classifier(waveforms, audio_lengths)  # (B,T,C), (B,)
+
+                assert output_lengths.shape[0] == waveforms.size(0)
+                assert (output_lengths > 0).all()
+                assert output_lengths.max().item() <= log_probs.size(1)
 
                 loss = criterion(
-                    log_probs.float().permute(1, 0, 2),  # (T, B, C)
-                    labels,
-                    output_lengths,
-                    label_lengths
+                    log_probs.float().permute(1, 0, 2),  # (T,B,C)
+                    labels, output_lengths, label_lengths
                 )
 
                 if torch.isnan(loss):
                     self.logger.error("❌ NaN loss detected!")
                     self.logger.error(f"log_probs: {log_probs.shape}, "
-                                      f"labels: {labels.shape}, "
-                                      f"input_lengths: {output_lengths}, "
-                                      f"label_lengths: {label_lengths}")
+                                    f"labels: {labels.shape}, "
+                                    f"input_lengths: {output_lengths}, "
+                                    f"label_lengths: {label_lengths}")
                     continue
 
                 optimizer.zero_grad(set_to_none=True)
@@ -2927,83 +2657,120 @@ class Trainer:
                 scaler.step(optimizer)
                 scaler.update()
 
-                # 🔹 NEW: update tqdm postfix with batch loss
+                bs = waveforms.size(0)
+                running += loss.item() * bs
+                seen += bs
                 pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
-            self.logger.info(f"[EAT-CTC Train] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
-
-            if self.wandb_logger.is_active:
+            epoch_loss = running / max(seen, 1)
+            self.logger.info(f"[EAT-CTC Train] Epoch {epoch+1}/{epochs} - Loss: {epoch_loss:.4f}")
+            if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
                 self.wandb_logger.log({
-                    "eat/train_loss": loss.item(),
+                    "eat/train_loss": epoch_loss,
                     "eat/epoch": epoch + 1,
                     "eat/lr": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
 
-        # === Evaluation ===
+        # ---------- evaluation (beam search + PER) ----------
         classifier.eval()
 
-        # Shared vocab (train & test must match)
         idx2label = getattr(train_dataset, "idx2label", None)
         if idx2label is None:
             raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
         if hasattr(test_dataset, "label2idx") and hasattr(train_dataset, "label2idx"):
             assert test_dataset.label2idx == train_dataset.label2idx, "Train/Test vocab mismatch!"
 
-        ref_sentences, hyp_sentences = [], []
+        assert num_classes == len(idx2label) + 1, (
+            f"num_classes={num_classes}, but need P+1={len(idx2label)+1} (blank=0)."
+        )
+
+        # tokens index-aligned with logits: 0 -> blank "_", 1..P -> idx2label[0..P-1]
+        decoder_tokens = ["_"] + list(idx2label)
+        assert len(decoder_tokens) == num_classes
+
+        # instantiate decoder (optional LM/lexicon); fall back to greedy if it fails
+        try:
+            use_lex = bool(phoneme_lexicon_path) and os.path.exists(phoneme_lexicon_path)
+            use_lm  = bool(phoneme_lm_arpa_path) and os.path.exists(phoneme_lm_arpa_path)
+
+            decoder = ctc_decoder(
+                lexicon=phoneme_lexicon_path if use_lex else None,
+                tokens=decoder_tokens,
+                lm=phoneme_lm_arpa_path if use_lm else None,
+                nbest=50,
+                beam_size=250,
+                beam_threshold=12.0,
+                lm_weight=1.5,
+                word_score=-1.0,
+                sil_token="sil",     # match your wav2vec2 setup
+                blank_token="_",
+                unk_word="<unk>",
+            )
+            self.logger.info(f"[CTC-Decoder] Using lexicon ({use_lex})\nLM for decoding ({use_lm}).")
+        except Exception as e:
+            self.logger.warning(f"CTC decoder setup failed ({e}). Falling back to greedy PER.")
+            decoder = None
+
+        ref_seqs, hyp_seqs = [], []
 
         with torch.no_grad():
-            for batch in tqdm(test_loader, desc="[EAT-CTC Evaluation]"):
+            for batch in tqdm(test_loader, desc="[EAT-CTC Evaluation: Phonemes]"):
                 if batch is None:
                     continue
-                audio = batch["audio"].to(self.device)
+                waveforms = batch["audio"].to(self.device)
                 audio_lengths = batch["audio_lengths"].to(self.device)
 
-                # (optional) get reference labels (for audit)
-                labels_padded = batch["labels"].cpu().tolist()
+                labels_padded = batch["labels"].cpu().tolist()       # +1 shifted
                 label_lengths = batch["label_lengths"].cpu().tolist()
 
+                # safety: ensure no 0 inside valid reference spans
+                for rs, rl in zip(labels_padded, label_lengths):
+                    if any(x == 0 for x in rs[:rl]):
+                        raise RuntimeError("Reference contains 0 (blank/pad) within valid length.")
+
                 with autocast(enabled=use_amp):
-                    log_probs, out_lengths = classifier(audio, audio_lengths)
+                    log_probs, out_lengths = classifier(waveforms, audio_lengths)  # (B,T,C)
 
-                preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
-                out_lengths = out_lengths.cpu().tolist()
+                emissions = log_probs.detach().cpu()          # (B,T,C)
+                emission_lengths = out_lengths.detach().cpu() # (B,)
 
-                for pred_seq, ref_seq, ref_len, out_len in zip(preds, labels_padded, label_lengths, out_lengths):
-                    # --- Greedy CTC collapse for hypothesis ---
-                    pred_seq = pred_seq[:out_len]
-                    hyp_ids = []
-                    prev = None
-                    for p in pred_seq:
-                        if p == 0:         # blank
-                            prev = p
-                            continue
-                        if p != prev:       # collapse repeats
-                            hyp_ids.append(p)
-                        prev = p
+                if decoder is not None:
+                    hypos_batch = decoder(emissions, emission_lengths)  # List[List[CTCHypothesis]]
+                    for hypos, ref_seq, ref_len in zip(hypos_batch, labels_padded, label_lengths):
+                        if hypos:
+                            tok_ids = collapse_and_strip_blanks(hypos[0].tokens)  # [1..P]
+                            if any(i == 0 for i in tok_ids):
+                                raise RuntimeError("Decoder hypothesis still has 0 after collapse.")
+                            hyp = ids_to_phones(tok_ids, idx2label)
+                        else:
+                            hyp = []
 
-                    # map ids → characters (subtract 1 to undo +1 shift in collate)
-                    hyp_chars = [idx2label[p - 1] for p in hyp_ids]      # p >= 1
-                    ref_ids = ref_seq[:ref_len]                          # already +1 shifted
-                    ref_chars = [idx2label[r - 1] for r in ref_ids]
+                        ref_ids = ref_seq[:ref_len]  # [1..P]
+                        ref = ids_to_phones(ref_ids, idx2label)
 
-                    # chars → sentence
-                    hyp_text = normalize_sentence(tokens_to_text(hyp_chars))
-                    ref_text = normalize_sentence(tokens_to_text(ref_chars))
+                        hyp_seqs.append(hyp)
+                        ref_seqs.append(ref)
+                else:
+                    preds = torch.argmax(emissions, dim=-1).tolist()
+                    for pred_seq, ref_seq, ref_len in zip(preds, labels_padded, label_lengths):
+                        pred_ids = collapse_and_strip_blanks(pred_seq)  # [1..P]
+                        if any(i == 0 for i in pred_ids):
+                            raise RuntimeError("Greedy hypothesis still has 0 after collapse.")
+                        hyp = ids_to_phones(pred_ids, idx2label)
 
-                    hyp_sentences.append(hyp_text)
-                    ref_sentences.append(ref_text)
+                        ref_ids = ref_seq[:ref_len]  # [1..P]
+                        ref = ids_to_phones(ref_ids, idx2label)
 
-        # TRUE word-level WER (jiwer splits on whitespace)
-        wer_score = wer(ref_sentences, hyp_sentences)
+                        hyp_seqs.append(hyp)
+                        ref_seqs.append(ref)
 
-        self.logger.info(f"📊 [EAT-CTC Evaluation] WER(words)={wer_score:.4f}")
+        per_score = compute_per(ref_seqs, hyp_seqs)
+        self.logger.info(f"📊 [EAT-CTC Evaluation] PER(phonemes)={per_score:.4f}")
 
-        if self.wandb_logger.is_active:
-            self.wandb_logger.log({"eat/test_wer": wer_score})
+        if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
+            self.wandb_logger.log({"eat/test_per": per_score})
 
         torch.save(classifier.state_dict(), "EAT_Classifier.pth")
-
-
 
 
     def evaluate(

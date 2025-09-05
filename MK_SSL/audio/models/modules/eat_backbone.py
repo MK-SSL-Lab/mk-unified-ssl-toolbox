@@ -1,82 +1,82 @@
+# =========================
+# EAT Backbone (Wav2Vec2-parity)
+# Returns: (features, token_lengths) just like your Wav2Vec2Backbone
+# =========================
 import torch
 import torch.nn as nn
 from torch import Tensor
-from typing import Optional
-
-# Optional: if you want static type-checking against the concrete class
-# from MK_SSL.audio.models.eat import EAT  # noqa: F401
+from typing import Optional, Tuple, List
 
 
 class EATBackbone(nn.Module):
     """
-    Backbone model for downstream tasks using a pretrained **EAT** model.
+    Backbone for downstream CTC evaluation using a pretrained **EAT** model.
 
-    The backbone disables masking/decoding and returns a fixed-length,
-    utterance-level representation suitable for classification or regression.
-
-    Args:
-        pretrained_model (nn.Module): A fully-trained :class:`EAT` model.
+    Mirrors Wav2Vec2Backbone behavior:
+      - Input:  waveforms (B,1,T) and optional raw lengths (B,)
+      - Output: contextualized frame features (B, T_out, D) and token lengths (B,)
     """
 
     def __init__(self, pretrained_model: nn.Module):
         super().__init__()
-        # Re-use only the parts needed for pure feature extraction
+        # Use teacher path (EMA-smoothed) for stable features
         self.logmel_transform = pretrained_model.logmel_transform
         self.feature_extractor = pretrained_model.feature_extractor
-        self.teacher_encoder = pretrained_model.teacher_encoder  # EMA-smoothed weights
+        self.teacher_encoder = pretrained_model.teacher_encoder  # outputs all layers
 
-        # Optional: freeze everything (uncomment if you don’t want finetuning)
-        # for p in self.parameters():
-        #     p.requires_grad = False
-    def forward(self, waveforms: Tensor, lengths: Optional[Tensor] = None):
+    @torch.no_grad()
+    def _teacher_avg(self, patches: Tensor) -> Tensor:
+        """
+        Run teacher encoder and average across layers.
+        Args:
+            patches: (B, P, E)
+        Returns:
+            (B, P, E)
+        """
+        layers: List[Tensor] = self.teacher_encoder(patches)   # list[L] of (B,P,E)
+        return torch.stack(layers, dim=0).mean(dim=0)          # (B,P,E)
+
+    def forward(
+        self, waveforms: Tensor, lengths: Optional[Tensor] = None
+    ) -> Tuple[Tensor, Tensor]:
         """
         Args:
-            waveforms (Tensor): (B, 1, T) padded.
-            lengths   (Optional[Tensor]): valid raw lengths (in samples) before padding.
+            waveforms: (B, 1, T) padded
+            lengths:   (B,) raw lengths in samples (pre-pad). Optional.
 
         Returns:
-            feats_time (Tensor): (B, T_g, E) time-major features (freq-pooled).
-            t_lengths  (Tensor): (B,) per-item valid lengths in time tokens (<= T_g).
+            feats:      (B, T_out, D) contextualized frame features for CTC
+            t_lengths:  (B,) valid lengths in **time tokens** (<= T_out)
         """
         if waveforms.dim() != 3 or waveforms.size(1) != 1:
-            raise ValueError(f"Expected input shape (B, 1, T), but got {tuple(waveforms.shape)}")
+            raise ValueError(f"Expected (B,1,T), got {tuple(waveforms.shape)}")
 
         # 1) Log-mel spectrogram: (B, 1, F_spec, T_spec)
         logmel = self.logmel_transform(waveforms)
+        B, _, _, T_spec = logmel.shape
 
-        # 2) Patchify -> (B, P, E) and the grid sizes (F_g, T_g)
-        patches, (F_g, T_g) = self.feature_extractor(logmel)   # P = F_g * T_g
-        B, P, E = patches.shape
-        assert P == F_g * T_g, "Feature extractor grid does not match flattened token count."
+        # 2) Patchify → (B, P, E) and grid (F_g, T_g)
+        patches, (F_g, T_g) = self.feature_extractor(logmel)  # P = F_g * T_g
+        P, E = patches.size(1), patches.size(2)
+        assert P == F_g * T_g, "Patch grid mismatch"
 
-        # 3) Teacher encoder outputs: list of (B, P, E) -> average over layers -> (B, P, E)
-        need_grad = any(p.requires_grad for p in self.teacher_encoder.parameters())
-        with torch.set_grad_enabled(need_grad):
-            layer_outputs = self.teacher_encoder(patches)      # List[L] of (B, P, E)
-        reps = torch.stack(layer_outputs).mean(dim=0)          # (B, P, E)
+        # 3) Teacher encoder aggregation (no grad for stability)
+        with torch.no_grad():
+            reps = self._teacher_avg(patches)                 # (B, P, E)
 
-        # 4) Reshape to time × freq, then pool over frequency to get a **time sequence**
-        reps_2d = reps.view(B, T_g, F_g, E)                    # (B, T_g, F_g, E)
-        feats_time = reps_2d.mean(dim=2)                       # (B, T_g, E)  <-- CTC time axis
+        # 4) Reshape to time×freq, then pool frequency → time sequence
+        reps_2d = reps.view(B, T_g, F_g, E)                   # (B, T_g, F_g, E)
+        feats = reps_2d.mean(dim=2)                           # (B, T_g, E)  <-- CTC time axis
 
-        # 5) Compute per-example output lengths in **time tokens**
-        #    We avoid hard-coding hop/stride. Instead:
-        #    - T_spec = logmel.size(-1) is the spectrogram time steps of the padded batch.
-        #    - T_g is the time tokens after patching.
-        #    - For each item, scale by raw length vs padded max length.
-        T_spec = logmel.size(-1)
+        # 5) Compute per-example output lengths in time tokens
         if lengths is None:
-            t_lengths = torch.full((B,), T_g, dtype=torch.long, device=waveforms.device)
+            t_lengths = torch.full((B,), T_g, dtype=torch.long, device=feats.device)
         else:
-            max_L = waveforms.size(-1)
-            # valid spectrogram frames per item (proportional to its raw length)
-            valid_spec = torch.floor(lengths.to(torch.float32) * (T_spec / float(max_L)))
+            max_samples = waveforms.size(-1)
+            valid_spec = (lengths.to(torch.float32) * (T_spec / float(max_samples))).floor()
             valid_spec.clamp_(min=1)
-
-            # map spectrogram frames -> token frames by proportional scaling
             frames_per_token = T_spec / float(T_g)
-            t_lengths = torch.floor(valid_spec / frames_per_token).to(torch.long)
-            t_lengths.clamp_(min=1, max=T_g)
+            t_lengths = (valid_spec / frames_per_token).floor().to(torch.long)
+            t_lengths = t_lengths.clamp_(min=1, max=T_g).to(device=feats.device)
 
-        return feats_time, t_lengths
-
+        return feats, t_lengths
