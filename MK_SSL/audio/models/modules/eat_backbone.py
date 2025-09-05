@@ -11,10 +11,10 @@ class EATBackbone(nn.Module):
     Pipeline:
         wave -> LogMelSpectrogramTransform -> SpectrogramPatchEmbedder -> ViT(student)
 
-    This module applies NO masking and NO decoder. It produces patch-level
-    token embeddings and the (optional) CLS embedding. It also returns the
-    effective (unpadded) sequence length in **patch units** (time-patches),
-    i.e., how many tokens are valid for each sample after your front-end.
+    This applies NO masking and NO decoder. It returns:
+      - token embeddings (CLS removed),
+      - the final (unpadded) length in **time-patch units**,
+      - and optionally the CLS embedding.
 
     Args:
         pretrained_model: An instance of your EAT class exposing:
@@ -25,17 +25,16 @@ class EATBackbone(nn.Module):
         normalize: If True, L2-normalize returned embeddings.
 
     Inputs:
-        waveforms: Float tensor (B, 1, T), raw mono audio.
-        lengths: Optional Long/Int tensor (B,) with the TRUE waveform lengths
-                 (in samples) before padding. If omitted, the final lengths
-                 are assumed to be the full patch length for each item.
+        waveforms: (B, 1, T) raw mono audio (padded to a common T).
+        lengths: Optional (B,) true audio lengths in **samples** before padding.
+                 If omitted, all time-patches are considered valid.
         return_cls: If True, also return the CLS embedding.
 
     Returns:
-        If return_cls=False:
-            token_embeddings: (B, P, E)  # CLS removed
-            final_lengths:    (B,)       # valid tokens count (time-patches)
-        If return_cls=True:
+        If return_cls == False:
+            token_embeddings: (B, P, E)  # CLS removed, P = T_g * F_g
+            final_lengths:    (B,)       # valid count along **time-patches** (0..T_g)
+        If return_cls == True:
             token_embeddings: (B, P, E)
             final_lengths:    (B,)
             cls_embeddings:   (B, E)
@@ -61,19 +60,6 @@ class EATBackbone(nn.Module):
             return x
         return x / (x.norm(dim=-1, keepdim=True) + 1e-12)
 
-    def _wave_to_frame_lengths(self, lengths_samples: Tensor, total_frames: int) -> Tensor:
-        """
-        Convert true waveform lengths (in samples) to spectrogram frame counts,
-        using the same STFT params as the LogMel transform.
-
-        L_spec = floor((L_wave - win_length)/hop_length) + 1, clamped to [0, total_frames]
-        """
-        hop = getattr(self.logmel_transform, "hop_length")
-        win = getattr(self.logmel_transform, "win_length")
-        frames = torch.div((lengths_samples - win), hop, rounding_mode="floor") + 1
-        frames = torch.clamp(frames, min=0, max=total_frames)
-        return frames
-
     def forward(
         self,
         waveforms: Tensor,
@@ -86,33 +72,35 @@ class EATBackbone(nn.Module):
         if waveforms.dim() != 3 or waveforms.size(1) != 1:
             raise ValueError(f"Expected input shape (B, 1, T), got {tuple(waveforms.shape)}")
 
-        # 1) Log-mel
+        # 1) Log-mel (same module as training)
         logmel = self.logmel_transform(waveforms)               # (B, n_mels, T_spec)
         if torch.isnan(logmel).any():
             raise ValueError("NaN in log-mel output")
 
-        # 2) Patchify (returns patches and grid sizes)
-        patches, (F_g, T_g) = self.feature_extractor(logmel)    # patches: (B, P, E)
-        B, P, E = patches.shape  # P == F_g * T_g (rasterized order)
+        # 2) Patchify spectrogram (same embedder as training)
+        patches, (F_g, T_g) = self.feature_extractor(logmel)    # patches: (B, P, E), P = F_g*T_g
+        B, P, E = patches.shape
 
-        # 3) Build effective (unpadded) final lengths in **patch units (time)**
-        # We derive the valid count along time by mapping true waveform lengths
-        # -> spectrogram frames -> time-patches. We scale into the time grid T_g.
+        # 3) Compute final unpadded length in **time-patch units** without using hop/win.
+        #    We map true waveform lengths (samples) -> spectrogram frames (proportionally)
+        #    -> time patches (proportionally). This avoids relying on transform internals.
         if lengths is not None:
-            # frames valid in spectrogram (time axis)
-            total_frames = logmel.size(-1)
-            frame_lengths = self._wave_to_frame_lengths(lengths.to(device=logmel.device), total_frames)
-            # proportional mapping frames -> time-patches (T_g)
+            total_samples = waveforms.size(-1)                  # padded T (samples)
+            total_frames = logmel.size(-1)                      # T_spec (frames)
+            # valid spectrogram frames (proportional mapping from samples)
+            frame_lengths = torch.div(
+                lengths.to(device=logmel.device) * total_frames,
+                total_samples,
+                rounding_mode="floor",
+            )
+            frame_lengths = torch.clamp(frame_lengths, min=0, max=total_frames)
+            # frames -> time-patches
             time_patch_lengths = torch.div(
                 frame_lengths * T_g, total_frames, rounding_mode="floor"
             )
-            # clip to [0, T_g]
-            time_patch_lengths = torch.clamp(time_patch_lengths, min=0, max=T_g)
+            final_lengths = torch.clamp(time_patch_lengths, min=0, max=T_g).to(dtype=torch.long)
         else:
-            # no padding info -> assume all time patches are valid
-            time_patch_lengths = torch.full(
-                (B,), T_g, dtype=torch.long, device=patches.device
-            )
+            final_lengths = torch.full((B,), T_g, dtype=torch.long, device=patches.device)
 
         # 4) Encode with student (prepend CLS, no masking)
         cls_tok = self.cls_token.expand(B, 1, E)                # (B, 1, E)
@@ -127,8 +115,7 @@ class EATBackbone(nn.Module):
         token_embeddings = self._maybe_l2(token_embeddings)
         cls_embeddings = self._maybe_l2(cls_embeddings)
 
-        # Return tokens + final (unpadded) length in patch units, and optional CLS
         if return_cls:
-            return token_embeddings, time_patch_lengths, cls_embeddings
+            return token_embeddings, final_lengths, cls_embeddings
         else:
-            return token_embeddings, time_patch_lengths
+            return token_embeddings, final_lengths
