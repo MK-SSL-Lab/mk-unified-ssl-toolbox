@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch import Tensor
 
 
-class EvaluateNet(nn.Module):
+class CTCEvaluateNet(nn.Module):
     """
     EvaluateNet: CTC-based evaluation on top of a pre-trained backbone.
     """

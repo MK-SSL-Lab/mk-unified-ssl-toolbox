@@ -1,171 +1,134 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, Union
 
 
 class EATBackbone(nn.Module):
     """
-    Backbone for downstream CTC evaluation using a pretrained **EAT** model.
+    Backbone for downstream use of a pre-trained EAT model (student path).
 
-    Matches your Wav2Vec2Backbone contract:
-      - Input:  waveforms (B, 1, T), optional raw lengths (B,) in samples
-      - Output: (features, token_lengths)
-            features:     (B, T_out, D)   # time sequence fed to EvaluateNet's FC
-            token_lengths:(B,)            # valid time tokens per item (<= T_out)
+    Pipeline:
+        wave -> LogMelSpectrogramTransform -> SpectrogramPatchEmbedder -> ViT(student)
 
-    Notes
-    -----
-    * Uses the **teacher encoder** outputs (averaged across layers) as stable features.
-      If you unfreeze the backbone (EvaluateNet with is_linear=False), gradients
-      will flow; otherwise they're disabled.
-    * Token lengths are computed per item:
-        1) Try **exact** math from STFT + patcher (preferred; avoids CTC warnings).
-        2) Fallback: **ceil** proportional mapping from spectrogram frames to tokens,
-           clamped to T_out, which is safe against undercounts.
+    This module applies NO masking and NO decoder. It produces patch-level
+    token embeddings and the (optional) CLS embedding. It also returns the
+    effective (unpadded) sequence length in **patch units** (time-patches),
+    i.e., how many tokens are valid for each sample after your front-end.
+
+    Args:
+        pretrained_model: An instance of your EAT class exposing:
+            - logmel_transform
+            - feature_extractor
+            - student_encoder (output_all_layers=False)
+            - cls_token
+        normalize: If True, L2-normalize returned embeddings.
+
+    Inputs:
+        waveforms: Float tensor (B, 1, T), raw mono audio.
+        lengths: Optional Long/Int tensor (B,) with the TRUE waveform lengths
+                 (in samples) before padding. If omitted, the final lengths
+                 are assumed to be the full patch length for each item.
+        return_cls: If True, also return the CLS embedding.
+
+    Returns:
+        If return_cls=False:
+            token_embeddings: (B, P, E)  # CLS removed
+            final_lengths:    (B,)       # valid tokens count (time-patches)
+        If return_cls=True:
+            token_embeddings: (B, P, E)
+            final_lengths:    (B,)
+            cls_embeddings:   (B, E)
     """
 
-    def __init__(self, pretrained_model: nn.Module):
+    def __init__(self, pretrained_model: nn.Module, normalize: bool = False):
         super().__init__()
-        # Reuse EAT components
+        needed = ["logmel_transform", "feature_extractor", "student_encoder", "cls_token"]
+        for n in needed:
+            if not hasattr(pretrained_model, n):
+                raise AttributeError(
+                    f"`pretrained_model` lacks `{n}`; expected an instance of your EAT class."
+                )
         self.logmel_transform = pretrained_model.logmel_transform
         self.feature_extractor = pretrained_model.feature_extractor
-        self.teacher_encoder = pretrained_model.teacher_encoder  # returns all layers
+        self.student_encoder = pretrained_model.student_encoder
+        self.cls_token = pretrained_model.cls_token
 
-    # ----------------------- helpers: params & math -----------------------
-    @staticmethod
-    def _stft_frames(L: torch.Tensor, n_fft: int, hop_length: int, win_length: int, center: bool) -> torch.Tensor:
+        self.normalize = normalize
+
+    def _maybe_l2(self, x: Tensor) -> Tensor:
+        if not self.normalize:
+            return x
+        return x / (x.norm(dim=-1, keepdim=True) + 1e-12)
+
+    def _wave_to_frame_lengths(self, lengths_samples: Tensor, total_frames: int) -> Tensor:
         """
-        Compute number of STFT frames for each raw length L (in samples), matching
-        torchaudio/librosa convention. Returns LongTensor (B,).
+        Convert true waveform lengths (in samples) to spectrogram frame counts,
+        using the same STFT params as the LogMel transform.
+
+        L_spec = floor((L_wave - win_length)/hop_length) + 1, clamped to [0, total_frames]
         """
-        L = L.to(dtype=torch.long)
-        if center:
-            pad = n_fft // 2
-            L_eff = L + 2 * pad
-        else:
-            L_eff = L
-        # floor((L_eff - win_length)/hop) + 1, with min 1
-        num = (L_eff - win_length).to(dtype=torch.float32)
-        frames = torch.floor(num / float(hop_length)).to(dtype=torch.long) + 1
-        return torch.clamp(frames, min=1)
+        hop = getattr(self.logmel_transform, "hop_length")
+        win = getattr(self.logmel_transform, "win_length")
+        frames = torch.div((lengths_samples - win), hop, rounding_mode="floor") + 1
+        frames = torch.clamp(frames, min=0, max=total_frames)
+        return frames
 
-    @staticmethod
-    def _try_get_stft_params(logmel_transform) -> Tuple[int, int, int, bool]:
-        # Try common attribute names; fall back to typical 25ms/10ms @16k
-        n_fft      = getattr(logmel_transform, "n_fft", 400)
-        hop_length = getattr(logmel_transform, "hop_length", 160)
-        win_length = getattr(logmel_transform, "win_length", n_fft)
-        center     = getattr(logmel_transform, "center", True)
-        return int(n_fft), int(hop_length), int(win_length), bool(center)
-
-    @staticmethod
-    def _try_get_time_patch_stride(feature_extractor) -> Optional[Tuple[int, int]]:
-        """
-        Best-effort introspection of time patch & stride from the patch embedder.
-        Returns (t_patch, t_stride) if found, else None.
-        """
-        # Direct attribute names (common patterns)
-        for attr_p, attr_s in [
-            ("patch_size_t", "stride_t"),
-            ("patch_time", "stride_time"),
-            ("t_patch", "t_stride"),
-        ]:
-            if hasattr(feature_extractor, attr_p):
-                t_patch = int(getattr(feature_extractor, attr_p))
-                t_stride = int(getattr(feature_extractor, attr_s, t_patch))
-                return t_patch, t_stride
-
-        # If there's a Conv2d projector, read its kernel/stride
-        for m in feature_extractor.modules():
-            if isinstance(m, nn.Conv2d):
-                # kernel_size: (F_patch, T_patch); stride: (F_stride, T_stride)
-                t_patch = int(m.kernel_size[-1])
-                t_stride = int(m.stride[-1])
-                return t_patch, t_stride
-
-        return None
-
-    @staticmethod
-    def _teacher_avg(encoder: nn.Module, patches: Tensor, need_grad: bool) -> Tensor:
-        """
-        Run teacher encoder, average across layers. Respects training/freeze state.
-        """
-        with torch.set_grad_enabled(need_grad):
-            layers: List[Tensor] = encoder(patches)  # list[L] of (B,P,E)
-            reps = torch.stack(layers, dim=0).mean(dim=0)  # (B,P,E)
-        return reps
-
-    # ----------------------------- forward ------------------------------
     def forward(
-        self, waveforms: Tensor, lengths: Optional[Tensor] = None
-    ) -> Tuple[Tensor, Tensor]:
+        self,
+        waveforms: Tensor,
+        lengths: Optional[Tensor] = None,
+        return_cls: bool = False,
+    ) -> Union[Tuple[Tensor, Tensor], Tuple[Tensor, Tensor, Tensor]]:
         """
-        Args:
-            waveforms: (B, 1, T) padded waveforms.
-            lengths:   (B,) raw sample lengths before padding (optional).
-
-        Returns:
-            feats_time: (B, T_out, D)
-            t_lengths:  (B,)
+        See class docstring for details.
         """
         if waveforms.dim() != 3 or waveforms.size(1) != 1:
             raise ValueError(f"Expected input shape (B, 1, T), got {tuple(waveforms.shape)}")
 
-        B = waveforms.size(0)
+        # 1) Log-mel
+        logmel = self.logmel_transform(waveforms)               # (B, n_mels, T_spec)
+        if torch.isnan(logmel).any():
+            raise ValueError("NaN in log-mel output")
 
-        # 1) Log-mel spectrogram → (B, 1, F_spec, T_spec)
-        logmel = self.logmel_transform(waveforms)
-        T_spec = logmel.size(-1)
+        # 2) Patchify (returns patches and grid sizes)
+        patches, (F_g, T_g) = self.feature_extractor(logmel)    # patches: (B, P, E)
+        B, P, E = patches.shape  # P == F_g * T_g (rasterized order)
 
-        # 2) Patchify → (B, P, E) with grid (F_g, T_g)
-        patches, (F_g, T_g) = self.feature_extractor(logmel)  # P == F_g * T_g
-        P, E = patches.size(1), patches.size(2)
-        if P != F_g * T_g:
-            raise RuntimeError("Feature extractor grid does not match flattened token count.")
-
-        # 3) Teacher encoder (avg over layers). Allow grads only if module is unfrozen.
-        need_grad = any(p.requires_grad for p in self.teacher_encoder.parameters())
-        reps = self._teacher_avg(self.teacher_encoder, patches, need_grad=need_grad)  # (B,P,E)
-
-        # 4) Reshape to (B, T_g, F_g, E) then mean over freq → time sequence
-        reps_2d = reps.view(B, T_g, F_g, E)     # (B, T_g, F_g, E)
-        feats_time = reps_2d.mean(dim=2)        # (B, T_g, E)  <-- CTC time axis
-
-        # 5) Per-item **token lengths** (exact if possible; safe fallback otherwise)
-        device = feats_time.device
-
-        # Defaults if lengths not provided: full length
-        lengths = None
-        if lengths is None:
-            t_lengths = torch.full((B,), T_g, dtype=torch.long, device=device)
-            return feats_time, t_lengths
-
-        # Try exact STFT → patch math
-        n_fft, hop, win, center = self._try_get_stft_params(self.logmel_transform)
-        tps = self._try_get_time_patch_stride(self.feature_extractor)
-
-        # Per-item spectrogram frames from raw sample lengths
-        T_spec_i = self._stft_frames(lengths.to(device), n_fft, hop, win, center)
-        # Clamp to batch spectrogram length just in case
-        T_spec_i = torch.clamp(T_spec_i, min=1, max=T_spec)
-
-        if tps is not None:
-            t_patch, t_stride = tps
-            # tokens per item along time: floor((T_spec_i - t_patch) / t_stride) + 1
-            # make sure we never go below 1
-            num = (T_spec_i.to(torch.float32) - float(t_patch))
-            t_lengths = torch.floor(num / float(t_stride)).to(torch.long) + 1
-            t_lengths = torch.clamp(t_lengths, min=1, max=T_g).to(device=device, dtype=torch.long)
+        # 3) Build effective (unpadded) final lengths in **patch units (time)**
+        # We derive the valid count along time by mapping true waveform lengths
+        # -> spectrogram frames -> time-patches. We scale into the time grid T_g.
+        if lengths is not None:
+            # frames valid in spectrogram (time axis)
+            total_frames = logmel.size(-1)
+            frame_lengths = self._wave_to_frame_lengths(lengths.to(device=logmel.device), total_frames)
+            # proportional mapping frames -> time-patches (T_g)
+            time_patch_lengths = torch.div(
+                frame_lengths * T_g, total_frames, rounding_mode="floor"
+            )
+            # clip to [0, T_g]
+            time_patch_lengths = torch.clamp(time_patch_lengths, min=0, max=T_g)
         else:
-            # Fallback: **ceil** proportional mapping to avoid undercount
-            # t_len = ceil(T_g * T_spec_i / T_spec)
-            ratio = (T_spec_i.to(torch.float32) / float(T_spec))
-            t_lengths = torch.ceil(ratio * float(T_g)).to(torch.long)
-            t_lengths = torch.clamp(t_lengths, min=1, max=T_g).to(device=device, dtype=torch.long)
+            # no padding info -> assume all time patches are valid
+            time_patch_lengths = torch.full(
+                (B,), T_g, dtype=torch.long, device=patches.device
+            )
 
-        # Final sanity: cannot exceed actual time dimension
-        if t_lengths.max().item() > feats_time.size(1):
-            t_lengths = torch.clamp(t_lengths, max=feats_time.size(1))
+        # 4) Encode with student (prepend CLS, no masking)
+        cls_tok = self.cls_token.expand(B, 1, E)                # (B, 1, E)
+        x = torch.cat([cls_tok, patches], dim=1)                # (B, 1+P, E)
+        out = self.student_encoder(x)                           # (B, 1+P, E)
+        if torch.isnan(out).any():
+            raise ValueError("NaN in student encoder output")
 
-        return feats_time, t_lengths
+        cls_embeddings = out[:, 0]                              # (B, E)
+        token_embeddings = out[:, 1:]                           # (B, P, E)
+
+        token_embeddings = self._maybe_l2(token_embeddings)
+        cls_embeddings = self._maybe_l2(cls_embeddings)
+
+        # Return tokens + final (unpadded) length in patch units, and optional CLS
+        if return_cls:
+            return token_embeddings, time_patch_lengths, cls_embeddings
+        else:
+            return token_embeddings, time_patch_lengths
