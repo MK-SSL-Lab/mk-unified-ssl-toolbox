@@ -6,14 +6,14 @@ from typing import Optional, Tuple
 
 class HuBERTBackbone(nn.Module):
     """
-    Backbone for downstream use of a pretrained HuBERT model (no masking/decoder).
+    Encoder-only backbone for a pretrained HuBERT model (no masking/prediction head).
 
-    Pipeline (aligned with HuBERT.forward minus pretext masking/prediction):
-        wave -> ConvFeatureExtractor -> Linear projection + LayerNorm + Dropout
-             -> TransformerEncoder -> HuBERTProjectionHead
-             -> masked mean pool over time -> utterance embedding
+    Pipeline:
+        wave -> ConvFeatureExtractor -> Linear + LayerNorm + Dropout
+             -> TransformerEncoder
+             -> length-aware mean pool over time -> (B, D) features
 
-    Returns a single embedding per waveform plus the original lengths in samples.
+    Returns a single utterance-level representation per waveform plus lengths (samples).
 
     Args:
         pretrained_model (nn.Module): HuBERT instance exposing:
@@ -22,8 +22,7 @@ class HuBERTBackbone(nn.Module):
             - post_extract_proj_norm (nn.LayerNorm)
             - post_extract_proj_dropout (nn.Dropout)
             - encoder(feat_seq, frame_lengths)
-            - projection_head (HuBERTProjectionHead)
-        normalize (bool): If True, L2-normalize the returned embeddings.
+        normalize (bool): If True, L2-normalize returned features.
     """
 
     def __init__(self, pretrained_model: nn.Module, normalize: bool = False):
@@ -35,7 +34,6 @@ class HuBERTBackbone(nn.Module):
             "post_extract_proj_norm",
             "post_extract_proj_dropout",
             "encoder",
-            "projection_head",
         ]
         for n in needed:
             if not hasattr(pretrained_model, n):
@@ -46,19 +44,9 @@ class HuBERTBackbone(nn.Module):
         self.post_extract_proj_norm = pretrained_model.post_extract_proj_norm
         self.post_extract_proj_dropout = pretrained_model.post_extract_proj_dropout
         self.encoder = pretrained_model.encoder
-        self.projection_head = pretrained_model.projection_head
 
-        # Handy references
+        # Useful reference
         self.encoder_embed_dim = getattr(self.encoder, "embed_dim", None)
-        # Try to infer final embedding dim (projection head output)
-        self.projection_dim = getattr(self.projection_head, "output_dim", None)
-        if self.projection_dim is None:
-            # Fall back to last Linear out_features inside the projection head
-            last_linear_out = None
-            for m in self.projection_head.modules():
-                if isinstance(m, nn.Linear):
-                    last_linear_out = m.out_features
-            self.projection_dim = last_linear_out
 
         self.normalize = normalize
 
@@ -70,12 +58,12 @@ class HuBERTBackbone(nn.Module):
     @torch.no_grad()
     def forward(
         self,
-        waveforms: Tensor,              # (B, 1, T)
+        waveforms: Tensor,                 # (B, 1, T)
         lengths: Optional[Tensor] = None,  # (B,) in samples
     ) -> Tuple[Tensor, Tensor]:
         """
         Returns:
-            embeddings: (B, E) where E == projection_dim
+            features:      (B, D) where D == encoder_embed_dim
             final_lengths: (B,) in samples (same units as input `lengths`)
         """
         if waveforms.dim() != 3 or waveforms.size(1) != 1:
@@ -90,7 +78,7 @@ class HuBERTBackbone(nn.Module):
         else:
             lengths = lengths.to(device=device, dtype=torch.long)
 
-        # 1) Conv feature extractor → returns (feat_seq, frame_lengths)
+        # 1) Conv feature extractor → (feat_seq, frame_lengths)
         #    feat_seq: (B, T_feat, C_in), frame_lengths: (B,) in frames
         feat_seq, frame_lengths = self.feature_extractor(waveforms, lengths)
         if torch.isnan(feat_seq).any():
@@ -101,27 +89,22 @@ class HuBERTBackbone(nn.Module):
         feat_seq = self.post_extract_proj_norm(feat_seq)
         feat_seq = self.post_extract_proj_dropout(feat_seq)
 
-        # 3) Transformer encoder (length-aware)
-        enc = self.encoder(feat_seq, frame_lengths)  # (B, T_enc, D)
+        # 3) Transformer encoder (length-aware) → (B, T_enc, D)
+        enc = self.encoder(feat_seq, frame_lengths)
         if torch.isnan(enc).any():
             raise ValueError("NaN encountered in Transformer encoder output")
 
-        # 4) HuBERT projection head (frame-wise) → (B, T_enc, E)
-        proj = self.projection_head(enc)
-        if torch.isnan(proj).any():
-            raise ValueError("NaN encountered in HuBERT projection head output")
+        # 4) Length-aware mean pooling over time (use frame_lengths)
+        T_enc = enc.size(1)
+        arange = torch.arange(T_enc, device=device).unsqueeze(0)            # (1, T_enc)
+        valid_mask = (arange < frame_lengths.unsqueeze(1)).unsqueeze(-1)    # (B, T_enc, 1)
+        valid_mask = valid_mask.to(enc.dtype)
 
-        # 5) Length-aware mean pooling over time (use frame_lengths)
-        T_enc = proj.size(1)
-        arange = torch.arange(T_enc, device=device).unsqueeze(0)          # (1, T_enc)
-        valid_mask = (arange < frame_lengths.unsqueeze(1)).unsqueeze(-1)  # (B, T_enc, 1)
-        valid_mask = valid_mask.to(proj.dtype)
+        denom = valid_mask.sum(dim=1).clamp_min(1.0)                        # (B, 1)
+        pooled = (enc * valid_mask).sum(dim=1) / denom                      # (B, D)
 
-        denom = valid_mask.sum(dim=1).clamp_min(1.0)                      # (B, 1)
-        pooled = (proj * valid_mask).sum(dim=1) / denom                   # (B, E)
+        feats = self._maybe_l2(pooled)
 
-        emb = self._maybe_l2(pooled)
-
-        # Return original sample lengths (consistent with other backbones)
+        # Return original sample lengths for consistency with other backbones
         final_lengths = lengths
-        return emb, final_lengths
+        return feats, final_lengths

@@ -6,35 +6,34 @@ from typing import Optional, Tuple
 
 class SimCLRBackbone(nn.Module):
     """
-    Backbone for downstream use of a pretrained SimCLRSpeech model.
+    Encoder-only backbone for a pretrained SimCLRSpeech model.
 
-    Aligned with SimCLRSpeech.encode:
+    Pipeline (projection head removed):
         wave -> FBANK(80) -> optional input_proj -> Transformer backbone
-            -> masked mean pool over time -> projection_head -> embedding
+             -> length-aware mean pool over time -> (B, E) features
 
-    Returns a single utterance-level embedding per waveform plus the (sample) lengths.
+    Returns a single utterance-level representation per waveform plus (sample) lengths.
 
     Args:
-        pretrained_model (nn.Module): Your SimCLRSpeech instance exposing:
+        pretrained_model (nn.Module): SimCLRSpeech instance exposing:
             - fbank
             - input_proj
             - backbone
-            - projection_head
-        normalize (bool): If True, L2-normalize the returned embeddings.
+        normalize (bool): If True, L2-normalize returned features.
 
     Inputs:
         waveforms: (B, 1, T) raw mono audio, padded to a common T.
-        lengths: Optional (B,) *true* audio lengths in **samples** (before padding).
+        lengths:   Optional (B,) true audio lengths in **samples** (before padding).
 
     Returns:
-        embeddings: (B, E) where E = projection_dim used in SimCLRSpeech
-        final_lengths: (B,) in **samples** (same units as `lengths`)
+        features:       (B, E) where E = backbone embed dim (e.g., 768)
+        final_lengths:  (B,) in **samples** (same units as `lengths`)
     """
 
     def __init__(self, pretrained_model: nn.Module, normalize: bool = False):
         super().__init__()
 
-        needed = ["fbank", "input_proj", "backbone", "projection_head"]
+        needed = ["fbank", "input_proj", "backbone"]
         for n in needed:
             if not hasattr(pretrained_model, n):
                 raise AttributeError(
@@ -44,11 +43,9 @@ class SimCLRBackbone(nn.Module):
         self.fbank = pretrained_model.fbank
         self.input_proj = pretrained_model.input_proj
         self.backbone = pretrained_model.backbone
-        self.projection_head = pretrained_model.projection_head
 
-        # Useful references if needed downstream
+        # Useful reference (encoder embedding dim)
         self.embed_dim = getattr(self.backbone, "embed_dim", None)
-        self.projection_dim = getattr(pretrained_model, "projection_head", None)
         self.normalize = normalize
 
     def _maybe_l2(self, x: Tensor) -> Tensor:
@@ -81,12 +78,11 @@ class SimCLRBackbone(nn.Module):
         if torch.isnan(enc).any():
             raise ValueError("NaN encountered in Transformer output")
 
-        # 4) Masked mean over time using provided sample-lengths → spec-frame lengths
+        # 4) Length-aware mean pooling over time (samples → frames mapping)
         B, T_spec, E = enc.shape
         if lengths is not None:
-            total_samples = waveforms.size(-1)          # padded T (samples)
-            total_frames  = T_spec                      # FBANK frames
-            # proportional mapping samples → frames (integer, clipped)
+            total_samples = waveforms.size(-1)            # padded T (samples)
+            total_frames  = T_spec                        # FBANK frames
             frame_lengths = torch.div(
                 lengths.to(device=enc.device) * total_frames,
                 total_samples,
@@ -94,15 +90,14 @@ class SimCLRBackbone(nn.Module):
             )
             frame_lengths = torch.clamp(frame_lengths, min=0, max=total_frames).to(torch.long)
 
-            # build mask (B, T_spec, 1)
-            arange = torch.arange(T_spec, device=enc.device).unsqueeze(0)  # (1, T_spec)
-            mask = (arange < frame_lengths.unsqueeze(1)).unsqueeze(-1).to(enc.dtype)  # (B,T_spec,1)
+            arange = torch.arange(T_spec, device=enc.device).unsqueeze(0)   # (1, T_spec)
+            mask = (arange < frame_lengths.unsqueeze(1)).unsqueeze(-1).to(enc.dtype)  # (B,T,1)
 
-            denom = mask.sum(dim=1).clamp_min(1.0)       # (B,1)
-            pooled = (enc * mask).sum(dim=1) / denom     # (B,E)
+            denom = mask.sum(dim=1).clamp_min(1.0)        # (B,1)
+            pooled = (enc * mask).sum(dim=1) / denom      # (B,E)
             final_lengths = lengths.to(device=enc.device, dtype=torch.long)
         else:
-            pooled = enc.mean(dim=1)                      # (B,E)
+            pooled = enc.mean(dim=1)                       # (B,E)
             final_lengths = torch.full(
                 (B,),
                 waveforms.size(-1),
@@ -110,10 +105,5 @@ class SimCLRBackbone(nn.Module):
                 device=enc.device,
             )
 
-        # 5) SimCLR projection head → utterance embedding (B, proj_dim)
-        emb = self.projection_head(pooled)
-        if torch.isnan(emb).any():
-            raise ValueError("NaN encountered in projection head output")
-
-        emb = self._maybe_l2(emb)                         # optional L2-normalization
-        return emb, final_lengths
+        feats_out = self._maybe_l2(pooled)                 # optional L2-normalization
+        return feats_out, final_lengths
