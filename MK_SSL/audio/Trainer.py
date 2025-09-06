@@ -2518,17 +2518,6 @@ class Trainer:
             })
 
 
-from torch.nn.utils.rnn import pad_sequence
-from torch import nn
-import torch
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-
-# Optional: slight speed win on newer GPUs / PyTorch 2.x
-try:
-    torch.set_float32_matmul_precision("high")
-except Exception:
-    pass
 
 
     def _evaluate_eat(
