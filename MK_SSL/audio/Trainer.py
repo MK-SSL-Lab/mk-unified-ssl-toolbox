@@ -2517,6 +2517,7 @@ class Trainer:
                 "cola/test_per_no_sil": per_score
             })
 
+
     def _evaluate_eat(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -2533,10 +2534,21 @@ class Trainer:
         Progress bars via tqdm; no functional changes to metrics or logging.
         """
 
+        # -------- Collate function (zero-pad & return lengths) --------
+        def collate_fn(batch):
+            audios = [torch.tensor(item["audio"]) for item in batch]
+            labels = [item["label"] for item in batch]
+
+            lengths = torch.tensor([a.size(0) for a in audios], dtype=torch.long)
+            padded_audios = pad_sequence(audios, batch_first=True, padding_value=0.0)
+            labels = torch.tensor(labels, dtype=torch.long)
+
+            return padded_audios, labels, lengths
+
         # Wrap the pretrained EAT model with the provided backbone
         eat_backbone = EATBackbone(pretrained_model=self.model, normalize=False)
 
-        feature_size = self.model.embed_dim  # stays as before
+        feature_size = self.model.embed_dim
 
         classifier = ClassificationEvalNet(
             backbone=eat_backbone,
@@ -2554,8 +2566,13 @@ class Trainer:
         )
         criterion = nn.CrossEntropyLoss()
 
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False)
+        # ✅ Use collate_fn here
+        train_loader = DataLoader(
+            train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn
+        )
+        test_loader = DataLoader(
+            test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn
+        )
 
         if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
@@ -2564,17 +2581,13 @@ class Trainer:
         classifier.train()
         for epoch in range(epochs):
             last_loss = None
-            pbar = tqdm(
-                train_loader,
-                desc=f"🎧 [EAT] Epoch {epoch+1}/{epochs}",
-                leave=False,
-                dynamic_ncols=True,
-            )
-            for waveforms, labels in pbar:
+            pbar = tqdm(train_loader, desc=f"🎧 [EAT] Epoch {epoch+1}/{epochs}", leave=False, dynamic_ncols=True)
+            for waveforms, labels, lengths in pbar:
                 waveforms = waveforms.to(self.device, non_blocking=True)
                 labels    = labels.to(self.device, non_blocking=True)
+                lengths   = lengths.to(self.device, non_blocking=True)
 
-                logits = classifier(waveforms)  # lengths are optional; EATBackbone handles None
+                logits = classifier(waveforms)  # lengths could be passed if backbone supports it
                 loss   = criterion(logits, labels)
 
                 optimizer.zero_grad(set_to_none=True)
@@ -2598,9 +2611,10 @@ class Trainer:
         all_preds, all_labels = [], []
         with torch.no_grad():
             pbar = tqdm(test_loader, desc="🧪 [EAT] Evaluating", leave=False, dynamic_ncols=True)
-            for waveforms, labels in pbar:
+            for waveforms, labels, lengths in pbar:
                 waveforms = waveforms.to(self.device, non_blocking=True)
                 labels    = labels.to(self.device, non_blocking=True)
+                lengths   = lengths.to(self.device, non_blocking=True)
 
                 logits = classifier(waveforms)
                 preds  = torch.argmax(logits, dim=1)
@@ -2628,6 +2642,8 @@ class Trainer:
                 "eat/test_macro_avg_precision": report["macro avg"]["precision"],
                 "eat/test_macro_avg_recall": report["macro avg"]["recall"]
             })
+
+
 
 
     def evaluate(
