@@ -2007,32 +2007,7 @@ class Trainer:
         # ---------- Backbone + classifier ----------
         simclr_backbone = SimCLRBackbone(pretrained_model=self.model, normalize=False)
 
-        # Make feature_size robustly match the backbone's embedding dim (projection head output)
-        def _infer_feature_dim(model) -> int:
-            # Preferred: explicit attribute on the model
-            v = getattr(model, "projection_dim", None)
-            if isinstance(v, int) and v > 0:
-                return v
-            # Next: projection_head exposes output_dim
-            head = getattr(model, "projection_head", None)
-            if head is not None:
-                out_dim = getattr(head, "output_dim", None)
-                if isinstance(out_dim, int) and out_dim > 0:
-                    return out_dim
-                # Fallback: find last Linear's out_features inside the head
-                last_linear_out = None
-                for m in head.modules():
-                    if isinstance(m, nn.Linear):
-                        last_linear_out = m.out_features
-                if last_linear_out is not None:
-                    return last_linear_out
-            raise AttributeError(
-                "Unable to infer SimCLR projection output dimension. "
-                "Please ensure SimCLRSpeech exposes `projection_dim` or the "
-                "projection head has an accessible output dimension."
-            )
-
-        feature_size = _infer_feature_dim(self.model)
+        feature_size = self.model.backbone.embed_dim
 
         classifier = ClassificationEvalNet(
             backbone=simclr_backbone,
@@ -2230,31 +2205,7 @@ class Trainer:
         # ---------- Backbone + classifier ----------
         hubert_backbone = HuBERTBackbone(pretrained_model=self.model, normalize=False)
 
-        # Infer feature size (projection head output dim preferred)
-        def _infer_feature_dim(model) -> int:
-            # Prefer explicit projection dim from projection head
-            head = getattr(model, "projection_head", None)
-            if head is not None:
-                out_dim = getattr(head, "output_dim", None)
-                if isinstance(out_dim, int) and out_dim > 0:
-                    return out_dim
-                # Fallback: last Linear in the head
-                last_linear_out = None
-                for m in head.modules():
-                    if isinstance(m, nn.Linear):
-                        last_linear_out = m.out_features
-                if last_linear_out is not None:
-                    return last_linear_out
-            # Next: model.config["projection_dim"]
-            cfg = getattr(model, "config", {})
-            if isinstance(cfg, dict) and "projection_dim" in cfg:
-                return int(cfg["projection_dim"])
-            raise AttributeError(
-                "Unable to infer HuBERT projection output dimension. "
-                "Ensure `projection_head.output_dim` or `config['projection_dim']` exists."
-            )
-
-        feature_size = _infer_feature_dim(self.model)
+        feature_size = self.model.encoder.embed_dim
 
         classifier = ClassificationEvalNet(
             backbone=hubert_backbone,
@@ -2452,7 +2403,7 @@ class Trainer:
 
         # ---------- Backbone + classifier ----------
         cola_backbone = COLABackbone(pretrained_cola=self.model, normalize=False)
-        feature_size  = getattr(self.model, "projection_dim", None)
+        feature_size  = getattr(self.model, "feature_size", None)
         if feature_size is None:
             raise AttributeError("COLA model must expose `projection_dim` or `feature_size`.")
 

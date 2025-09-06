@@ -46,7 +46,7 @@ class SimCLRSpeech(nn.Module):
     ):
         super().__init__()
         self.fbank = FBANKFeatureExtractor(sample_rate=sample_rate)
-
+        self.embed_dim = embed_dim
         if embed_dim != 80 and use_input_proj:
             self.input_proj = InputSpeechSimCLRProjectionHead(
                 input_dim=80,
