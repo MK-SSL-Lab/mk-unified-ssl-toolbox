@@ -2530,26 +2530,48 @@ class Trainer:
         **kwargs
     ):
         """
-        Same training/eval logic as before, now using EATBackbone.
-        Progress bars via tqdm; no functional changes to metrics or logging.
+        Training/eval logic for EATBackbone with tqdm progress bars.
         """
 
-        # -------- Collate function (zero-pad & return lengths) --------
+        # -------- Collate function (pad to B,1,T) --------
         def collate_fn(batch):
-            audios = [torch.tensor(item["audio"]) for item in batch]
-            labels = [item["label"] for item in batch]
+            waves_1d, labels, lengths = [], [], []
+            for item in batch:
+                x = torch.as_tensor(item["audio"], dtype=torch.float32)
 
-            lengths = torch.tensor([a.size(0) for a in audios], dtype=torch.long)
-            padded_audios = pad_sequence(audios, batch_first=True, padding_value=0.0)
-            labels = torch.tensor(labels, dtype=torch.long)
+                # --- Normalize to mono 1D waveform (T,) ---
+                if x.ndim == 1:
+                    pass
+                elif x.ndim == 2:
+                    if x.shape[1] > x.shape[0]:
+                        x = x.mean(dim=0)   # (C, T) → (T,)
+                    else:
+                        x = x.mean(dim=1)   # (T, C) → (T,)
+                else:
+                    x = x.squeeze()
+                    if x.ndim == 2:
+                        if x.shape[1] > x.shape[0]:
+                            x = x.mean(dim=0)
+                        else:
+                            x = x.mean(dim=1)
+                if x.ndim != 1:
+                    raise ValueError(f"Expected 1D waveform, got {tuple(x.shape)}")
 
-            return padded_audios, labels, lengths
+                lengths.append(x.shape[0])
+                waves_1d.append(x)
+                labels.append(int(item["label"]))
 
-        # Wrap the pretrained EAT model with the provided backbone
+            lengths = torch.tensor(lengths, dtype=torch.long)
+            labels  = torch.tensor(labels,  dtype=torch.long)
+
+            # Pad → (B, T_max), then add channel → (B, 1, T_max)
+            padded_bt = pad_sequence(waves_1d, batch_first=True, padding_value=0.0)
+            padded_b1t = padded_bt.unsqueeze(1)
+            return padded_b1t, labels, lengths
+
+        # -------- Model + Classifier --------
         eat_backbone = EATBackbone(pretrained_model=self.model, normalize=False)
-
         feature_size = self.model.embed_dim
-
         classifier = ClassificationEvalNet(
             backbone=eat_backbone,
             feature_size=feature_size,
@@ -2566,7 +2588,6 @@ class Trainer:
         )
         criterion = nn.CrossEntropyLoss()
 
-        # ✅ Use collate_fn here
         train_loader = DataLoader(
             train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn
         )
@@ -2577,7 +2598,7 @@ class Trainer:
         if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
 
-        # ---- Train ----
+        # -------- Train --------
         classifier.train()
         for epoch in range(epochs):
             last_loss = None
@@ -2585,9 +2606,8 @@ class Trainer:
             for waveforms, labels, lengths in pbar:
                 waveforms = waveforms.to(self.device, non_blocking=True)
                 labels    = labels.to(self.device, non_blocking=True)
-                lengths   = lengths.to(self.device, non_blocking=True)
 
-                logits = classifier(waveforms)  # lengths could be passed if backbone supports it
+                logits = classifier(waveforms)
                 loss   = criterion(logits, labels)
 
                 optimizer.zero_grad(set_to_none=True)
@@ -2595,9 +2615,10 @@ class Trainer:
                 optimizer.step()
 
                 last_loss = float(loss.item())
-                pbar.set_postfix(loss=f"{last_loss:.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
+                # 👇 Show per-batch loss on progress bar
+                pbar.set_postfix(batch_loss=f"{last_loss:.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
 
-            self.logger.info(f"[EAT Eval] Epoch {epoch+1}/{epochs} - Loss: {last_loss:.4f}")
+            self.logger.info(f"[EAT Eval] Epoch {epoch+1}/{epochs} - Last batch loss: {last_loss:.4f}")
 
             if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
                 self.wandb_logger.log({
@@ -2606,7 +2627,7 @@ class Trainer:
                     "eat/lr": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
 
-        # ---- Eval ----
+        # -------- Eval --------
         classifier.eval()
         all_preds, all_labels = [], []
         with torch.no_grad():
@@ -2614,7 +2635,6 @@ class Trainer:
             for waveforms, labels, lengths in pbar:
                 waveforms = waveforms.to(self.device, non_blocking=True)
                 labels    = labels.to(self.device, non_blocking=True)
-                lengths   = lengths.to(self.device, non_blocking=True)
 
                 logits = classifier(waveforms)
                 preds  = torch.argmax(logits, dim=1)
