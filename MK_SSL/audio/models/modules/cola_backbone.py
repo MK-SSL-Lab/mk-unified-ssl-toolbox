@@ -1,66 +1,92 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from typing import Optional
-
+from typing import Optional, Tuple
 
 class COLABackbone(nn.Module):
     """
-    Backbone model for downstream tasks using a pretrained COLA model.
+    Backbone for downstream use of a pre-trained COLA model.
 
-    This class wraps the pretrained backbone and can return either:
-      - Global embeddings (B, C) [default]
-      - Frame-level embeddings (B, T, C) for CTC
-    
+    Workflow (aligned with COLA):
+        wave -> (internal COLA backbone: log-mel + EfficientNet-B0 + global pooling)
+             -> COLAProjectionHead -> 512-D embedding
+
+    This module applies *no* masking beyond what COLA already supports internally.
+    It simply forwards to the exact same backbone + projection head that were used
+    for pretraining, so representations stay consistent.
+
     Args:
-        pretrained_model (nn.Module): The pretrained COLA model (pretext phase).
-        return_sequence (bool): If True, outputs frame-level features (B, T, C).
-                                If False, outputs global embeddings (B, C).
+        pretrained_cola (nn.Module): An instance of your COLA class exposing:
+            - backbone(x, lengths=None) -> feature tensor
+            - projection_head(feature)  -> embedding tensor (B, projection_dim)
+        normalize (bool): If True, L2-normalize embeddings.
+
+    Inputs:
+        waveforms: (B, 1, T) raw mono audio (padded to a common T).
+        lengths: Optional (B,) true audio lengths in **samples** before padding.
+
+    Returns:
+        embeddings: (B, E)   # E == projection_dim (e.g., 512)
+        final_lengths: (B,)  # returned in **samples** (same units as input `lengths`)
     """
 
-    def __init__(self, pretrained_model: nn.Module, return_sequence: bool = False):
+    def __init__(self, pretrained_cola: nn.Module, normalize: bool = False):
         super().__init__()
-        self.backbone = pretrained_model.backbone   # EfficientNetAudioEncoder
-        self.encoder = self.backbone.encoder        # conv stack inside EfficientNet
-        self.mel = self.backbone.mel
-        self.log1p = self.backbone.log1p
-        self.hop_len = self.backbone.hop_len
-        self.return_sequence = return_sequence
 
+        needed = ["backbone", "projection_head"]
+        for n in needed:
+            if not hasattr(pretrained_cola, n):
+                raise AttributeError(
+                    f"`pretrained_cola` lacks `{n}`; expected an instance of your COLA class."
+                )
+
+        self.backbone = pretrained_cola.backbone          # EfficientNetAudioEncoder (with COLA-internal path)
+        self.projection_head = pretrained_cola.projection_head  # COLAProjectionHead
+        # Keep these for reference; helpful if downstream needs dims.
+        self.feature_size = getattr(pretrained_cola, "feature_size", None)
+        self.projection_dim = getattr(pretrained_cola, "projection_dim", None)
+
+        self.normalize = normalize
+
+    def _maybe_l2(self, x: Tensor) -> Tensor:
+        if not self.normalize:
+            return x
+        return x / (x.norm(dim=-1, keepdim=True) + 1e-12)
+
+    @torch.no_grad()
     def forward(
-        self, waveforms: Tensor, lengths: Optional[Tensor] = None
-    ) -> Tensor:
+        self,
+        waveforms: Tensor,
+        lengths: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Tensor]:
         """
-        Args:
-            waveforms (Tensor): Input waveform tensor of shape (B,1,T).
-            lengths (Optional[Tensor]): Valid lengths before padding.
-
-        Returns:
-            Tensor:
-              - (B, C) if return_sequence == False
-              - (B, T, C) if return_sequence == True
+        See class docstring for shapes.
         """
-        if not self.return_sequence:
-            # Default COLA behavior → pooled embeddings
-            return self.backbone(waveforms, lengths)
+        if waveforms.dim() != 3 or waveforms.size(1) != 1:
+            raise ValueError(f"Expected input shape (B, 1, T), got {tuple(waveforms.shape)}")
 
-        # --- Frame-level mode (CTC) ---
-        mel = self.mel(waveforms.squeeze(1))     # (B, n_mels, time)
-        mel = self.log1p(mel).unsqueeze(1)       # (B, 1, n_mels, time)
+        # Forward through the exact same COLA backbone & head.
+        # Note: COLA.backbone already accepts `lengths` for masking pooled stats.
+        feats = self.backbone(waveforms, lengths=lengths)   # (B, feature_size) after global pooling
+        if torch.isnan(feats).any():
+            raise ValueError("NaN encountered in COLA backbone output")
 
-        feats = self.encoder(mel)                # (B, C, H, W)
-        feats = feats.mean(dim=2)                # collapse freq dim → (B, C, T)
-        feats = feats.transpose(1, 2)            # (B, T, C)
+        emb = self.projection_head(feats)                   # (B, projection_dim)
+        if torch.isnan(emb).any():
+            raise ValueError("NaN encountered in COLA projection head output")
 
-        if lengths is not None:
-            # compute valid number of frames per example
-            num_frames = torch.div(lengths, self.hop_len, rounding_mode="floor") + 1
-            max_frames = feats.size(1)
+        emb = self._maybe_l2(emb)
 
-            mask = torch.arange(max_frames, device=feats.device).expand(len(num_frames), max_frames)
-            mask = mask < num_frames.unsqueeze(1)   # (B, T)
+        # Return lengths in the same unit as provided: **samples**.
+        # If not provided, assume all samples are valid (the padded length T).
+        if lengths is None:
+            final_lengths = torch.full(
+                (waveforms.size(0),),
+                waveforms.size(-1),
+                dtype=torch.long,
+                device=waveforms.device,
+            )
+        else:
+            final_lengths = lengths.to(device=waveforms.device, dtype=torch.long)
 
-            # Optionally you could return mask alongside features
-            return feats, mask
-
-        return feats
+        return emb, final_lengths
