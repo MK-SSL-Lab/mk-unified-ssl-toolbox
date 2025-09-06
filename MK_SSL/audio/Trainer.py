@@ -2601,7 +2601,8 @@ class Trainer:
         # -------- Train --------
         classifier.train()
         for epoch in range(epochs):
-            last_loss = None
+            running_loss = 0.0
+            num_batches = 0
             pbar = tqdm(train_loader, desc=f"🎧 [EAT] Epoch {epoch+1}/{epochs}", leave=False, dynamic_ncols=True)
             for waveforms, labels, lengths in pbar:
                 waveforms = waveforms.to(self.device, non_blocking=True)
@@ -2614,15 +2615,19 @@ class Trainer:
                 loss.backward()
                 optimizer.step()
 
-                last_loss = float(loss.item())
-                # 👇 Show per-batch loss on progress bar
-                pbar.set_postfix(batch_loss=f"{last_loss:.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
+                batch_loss = float(loss.item())
+                running_loss += batch_loss
+                num_batches += 1
 
-            self.logger.info(f"[EAT Eval] Epoch {epoch+1}/{epochs} - Last batch loss: {last_loss:.4f}")
+                # 👇 Show per-batch loss on progress bar
+                pbar.set_postfix(batch_loss=f"{batch_loss:.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
+
+            epoch_loss = running_loss / num_batches
+            self.logger.info(f"[EAT Eval] Epoch {epoch+1}/{epochs} - Epoch loss: {epoch_loss:.4f}")
 
             if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
                 self.wandb_logger.log({
-                    "eat/train_loss": last_loss,
+                    "eat/train_loss": epoch_loss,
                     "eat/epoch": epoch + 1,
                     "eat/lr": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
