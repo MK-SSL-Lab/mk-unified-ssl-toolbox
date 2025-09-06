@@ -2518,6 +2518,19 @@ class Trainer:
             })
 
 
+from torch.nn.utils.rnn import pad_sequence
+from torch import nn
+import torch
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+# Optional: slight speed win on newer GPUs / PyTorch 2.x
+try:
+    torch.set_float32_matmul_precision("high")
+except Exception:
+    pass
+
+
     def _evaluate_eat(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -2527,10 +2540,14 @@ class Trainer:
         lr: float = 1e-3,
         epochs: int = 10,
         freeze_backbone: bool = True,
+        use_amp: bool = True,                 # ← enable mixed precision
+        amp_dtype: str = "fp16",              # ← "fp16" (with scaler) or "bf16" (no scaler)
+        num_workers: int = 4,                 # ← dataloader perf
         **kwargs
     ):
         """
         Training/eval logic for EATBackbone with tqdm progress bars.
+        Mixed precision + GradScaler for faster training on CUDA.
         """
 
         # -------- Collate function (pad to B,1,T) --------
@@ -2588,41 +2605,81 @@ class Trainer:
         )
         criterion = nn.CrossEntropyLoss()
 
+        # -------- DataLoaders (perf-friendly) --------
+        pin_mem = "cuda" in str(self.device)
         train_loader = DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=pin_mem,
+            persistent_workers=num_workers > 0,
+            prefetch_factor=2 if num_workers > 0 else None,
         )
         test_loader = DataLoader(
-            test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=pin_mem,
+            persistent_workers=num_workers > 0,
+            prefetch_factor=2 if num_workers > 0 else None,
         )
 
         if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
 
+        # -------- AMP/Scaler setup --------
+        is_cuda = "cuda" in str(self.device) and torch.cuda.is_available()
+        use_autocast = bool(use_amp and (is_cuda or amp_dtype.lower() == "bf16"))
+        dtype = torch.float16 if amp_dtype.lower() == "fp16" else torch.bfloat16
+        # GradScaler is only useful for FP16 (not BF16)
+        scaler_enabled = use_autocast and is_cuda and dtype == torch.float16
+        scaler = torch.cuda.amp.GradScaler(enabled=scaler_enabled)
+
+        # cudnn autotune can help with variable lengths
+        if is_cuda:
+            torch.backends.cudnn.benchmark = True
+
         # -------- Train --------
         classifier.train()
         for epoch in range(epochs):
-            running_loss = 0.0
-            num_batches = 0
+            running_loss, num_batches = 0.0, 0
             pbar = tqdm(train_loader, desc=f"🎧 [EAT] Epoch {epoch+1}/{epochs}", leave=False, dynamic_ncols=True)
             for waveforms, labels, lengths in pbar:
                 waveforms = waveforms.to(self.device, non_blocking=True)
                 labels    = labels.to(self.device, non_blocking=True)
 
-                logits = classifier(waveforms)
-                loss   = criterion(logits, labels)
-
                 optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                optimizer.step()
+
+                # forward (AMP)
+                with torch.cuda.amp.autocast(dtype=dtype, enabled=use_autocast):
+                    logits = classifier(waveforms)
+                    loss   = criterion(logits, labels)
+
+                # backward + step (with/without scaler)
+                if scaler_enabled:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
 
                 batch_loss = float(loss.item())
                 running_loss += batch_loss
                 num_batches += 1
 
-                # 👇 Show per-batch loss on progress bar
-                pbar.set_postfix(batch_loss=f"{batch_loss:.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
+                pbar.set_postfix(
+                    batch_loss=f"{batch_loss:.4f}",
+                    lr=f"{optimizer.param_groups[0]['lr']:.2e}",
+                    amp=("on" if use_autocast else "off"),
+                    dtype=("fp16" if dtype == torch.float16 else "bf16" if dtype == torch.bfloat16 else "fp32"),
+                )
 
-            epoch_loss = running_loss / num_batches
+            epoch_loss = running_loss / max(1, num_batches)
             self.logger.info(f"[EAT Eval] Epoch {epoch+1}/{epochs} - Epoch loss: {epoch_loss:.4f}")
 
             if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
@@ -2635,14 +2692,15 @@ class Trainer:
         # -------- Eval --------
         classifier.eval()
         all_preds, all_labels = [], []
-        with torch.no_grad():
+        with torch.inference_mode():
             pbar = tqdm(test_loader, desc="🧪 [EAT] Evaluating", leave=False, dynamic_ncols=True)
             for waveforms, labels, lengths in pbar:
                 waveforms = waveforms.to(self.device, non_blocking=True)
                 labels    = labels.to(self.device, non_blocking=True)
 
-                logits = classifier(waveforms)
-                preds  = torch.argmax(logits, dim=1)
+                with torch.cuda.amp.autocast(dtype=dtype, enabled=use_autocast):
+                    logits = classifier(waveforms)
+                    preds  = torch.argmax(logits, dim=1)
 
                 all_preds.append(preds.cpu())
                 all_labels.append(labels.cpu())
