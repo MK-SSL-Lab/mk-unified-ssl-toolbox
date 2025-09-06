@@ -1083,72 +1083,140 @@ class Trainer:
 
         return final_test_accuracy
 
+
     def _evaluate_mae(
         self,
-        train_dataset: Dataset,
-        test_dataset: Dataset,
+        train_dataset,
+        test_dataset,
         num_classes: int,
+        *,
+        mode: str = "linear",               # "linear" or "finetune"
         batch_size: int = 64,
-        lr: float = 1e-3,
         epochs: int = 10,
-        freeze_backbone: bool = True,
+        # Optimizer hyperparams
+        lr_head: float = 1e-3,
+        lr_backbone: float = 5e-5,          # used only in finetune
+        wd_head: float = 0.00,
+        wd_backbone: float = 0.05,
+        optimizer_cls=torch.optim.AdamW,
+        # Scheduler (optional cosine)
+        use_cosine: bool = False,
+        cosine_T_max: int | None = None,    # defaults to epochs if None
+        # Misc
+        num_workers: int = 4,
+        pin_memory: bool = True,
         **kwargs,
     ):
         """
-        Evaluation for MAE (linear probing or fine-tuning).
+        Evaluate a MAE encoder with either linear probing or fine-tuning.
 
         Args:
-            train_dataset (Dataset): Labeled training dataset (x, y).
-            test_dataset (Dataset): Labeled evaluation dataset (x, y).
-            num_classes (int): Number of output classes.
-            batch_size (int): Evaluation batch size.
-            lr (float): Learning rate.
-            epochs (int): Max number of epochs.
-            freeze_backbone (bool): Freeze encoder during linear probing?
+            train_dataset, test_dataset: labeled datasets (x, y).
+            num_classes: number of classes.
+            mode: "linear" (freeze encoder) or "finetune" (train encoder + head).
+            batch_size, epochs: training hyperparameters.
+            lr_head, lr_backbone: learning rates for head/encoder.
+            wd_head, wd_backbone: weight decays for head/encoder.
+            optimizer_cls: torch optimizer class (default AdamW).
+            use_cosine: whether to apply CosineAnnealingLR.
+            cosine_T_max: T_max for cosine scheduler (defaults to epochs).
+            num_workers, pin_memory: DataLoader options.
         """
 
+        assert mode in {"linear", "finetune"}, "mode must be 'linear' or 'finetune'"
+        freeze_backbone = (mode == "linear")
+
         # === Backbone and classifier ===
-        backbone = MAEBackbone(self.model)
-        feature_size = backbone.encoder.head.in_features  # e.g., 768
+        backbone = MAEBackbone(self.model)  # wraps your MAE encoder
+        # If your backbone exposes a feature dim directly, prefer that:
+        try:
+            feature_size = backbone.encoder.head.in_features  # as in your current code
+        except Exception:
+            # Fallback: infer by a tiny forward pass on one batch (safe on CPU/GPU)
+            tmp_loader = DataLoader(train_dataset, batch_size=1)
+            x0, _ = next(iter(tmp_loader))
+            x0 = x0.to(self.device)
+            backbone = backbone.to(self.device).eval()
+            with torch.no_grad():
+                f0 = backbone(x0)
+            feature_size = f0.shape[-1]
 
         classifier = EvaluateNet(
             backbone=backbone,
             feature_size=feature_size,
             num_classes=num_classes,
-            is_linear=freeze_backbone,
+            is_linear=freeze_backbone,  # your EvaluateNet can use this to freeze internally if you prefer
         ).to(self.device)
 
-        optimizer = torch.optim.AdamW(classifier.parameters(), lr=lr)
+        # Freeze/unfreeze explicitly to be robust regardless of EvaluateNet internals
+        for p in classifier.backbone.parameters():
+            p.requires_grad = not freeze_backbone
+        for p in classifier.head.parameters():
+            p.requires_grad = True
+
+        # Param groups (head only for linear; head + backbone for finetune)
+        if freeze_backbone:
+            params = [{"params": classifier.head.parameters(), "lr": lr_head, "weight_decay": wd_head}]
+        else:
+            params = [
+                {"params": classifier.backbone.parameters(), "lr": lr_backbone, "weight_decay": wd_backbone},
+                {"params": classifier.head.parameters(),     "lr": lr_head,     "weight_decay": wd_head},
+            ]
+
+        optimizer = optimizer_cls(params)
         criterion = torch.nn.CrossEntropyLoss()
 
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        train_loader = DataLoader(
+            train_dataset, batch_size=batch_size, shuffle=True,
+            num_workers=num_workers, pin_memory=pin_memory
+        )
+        test_loader = DataLoader(
+            test_dataset, batch_size=batch_size, shuffle=False,
+            num_workers=num_workers, pin_memory=pin_memory
+        )
+
+        scheduler = None
+        if use_cosine:
+            T_max = cosine_T_max if cosine_T_max is not None else epochs
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max)
 
         if self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
 
         # === Training ===
-        classifier.train()
         for epoch in range(epochs):
+            classifier.train()
+            running_loss, n = 0.0, 0
+
             for x, y in train_loader:
-                x, y = x.to(self.device), y.to(self.device)
-                logits = classifier(x)
+                x, y = x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+
+                logits = classifier(x)  # inside, it will call backbone + head
                 loss = criterion(logits, y)
 
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
 
+                running_loss += loss.item() * y.size(0)
+                n += y.size(0)
+
+            if scheduler is not None:
+                scheduler.step()
+
+            avg_loss = running_loss / max(1, n)
             self.logger.info(
-                f"[MAE Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}"
+                f"[MAE Eval:{mode}] Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}"
             )
 
             if self.wandb_logger.is_active:
+                # pull current lrs from param groups
+                lrs = {f"pg{i}_lr": g["lr"] for i, g in enumerate(optimizer.param_groups)}
                 self.wandb_logger.log(
                     {
-                        "mae/train_loss": loss.item(),
-                        "mae/epoch": epoch + 1,
-                        "mae/lr": optimizer.param_groups[0]["lr"],
+                        f"mae/{mode}_train_loss": avg_loss,
+                        f"mae/{mode}_epoch": epoch + 1,
+                        **lrs,
                     },
                     step=epoch + 1,
                 )
@@ -1156,23 +1224,20 @@ class Trainer:
         # === Evaluation ===
         classifier.eval()
         all_preds, all_labels = [], []
-
         with torch.no_grad():
             for x, y in test_loader:
-                x = x.to(self.device)
+                x = x.to(self.device, non_blocking=True)
                 logits = classifier(x)
                 preds = torch.argmax(logits, dim=1)
-
                 all_preds.append(preds.cpu())
                 all_labels.append(y.cpu())
 
         all_preds = torch.cat(all_preds)
         all_labels = torch.cat(all_labels)
 
-        self.logger.info(
-            "\n📊 [MAE Evaluation Report]:\n"
-            + classification_report(all_labels.numpy(), all_preds.numpy(), digits=4)
-        )
+        txt_report = classification_report(all_labels.numpy(), all_preds.numpy(), digits=4)
+        self.logger.info("\n📊 [MAE Evaluation Report - "
+                         f"{mode.upper()}]:\n{txt_report}")
 
         report = classification_report(
             all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True
@@ -1181,12 +1246,19 @@ class Trainer:
         if self.wandb_logger.is_active:
             self.wandb_logger.log(
                 {
-                    "mae/test_accuracy": report["accuracy"],
-                    "mae/test_macro_avg_f1": report["macro avg"]["f1-score"],
-                    "mae/test_macro_avg_precision": report["macro avg"]["precision"],
-                    "mae/test_macro_avg_recall": report["macro avg"]["recall"],
+                    f"mae/{mode}_test_accuracy": report["accuracy"],
+                    f"mae/{mode}_test_macro_f1": report["macro avg"]["f1-score"],
+                    f"mae/{mode}_test_macro_precision": report["macro avg"]["precision"],
+                    f"mae/{mode}_test_macro_recall": report["macro avg"]["recall"],
                 }
             )
+
+        return report
+
+
+
+
+    
 
     def run_evaluate_mae(
         self,
