@@ -2190,179 +2190,218 @@ class Trainer:
         **kwargs
     ):
         """
-        Evaluation for HuBERT using CTC (WER/PER) with mixed precision (AMP).
+        Linear/MLP evaluation for HuBERT embeddings (classification).
+        - Uses HuBERTBackbone → (B, E) embedding + lengths (samples).
+        - Classification head via ClassificationEvalNet with pooling="none".
+        - Mixed precision (fp16/bf16) + GradScaler, tqdm progress, wandb logging.
         """
+        import torch
+        import torch.nn as nn
+        from torch.nn.utils.rnn import pad_sequence
+        from torch.utils.data import DataLoader
+        from tqdm import tqdm
 
-        model = self.model
-        feature_size = model.config["encoder_embed_dim"]
+        # ---------- Collate (mono → pad → (B,1,T) + lengths) ----------
+        def collate_fn(batch):
+            waves_1d, labels, lengths = [], [], []
+            for item in batch:
+                x = torch.as_tensor(item["audio"], dtype=torch.float32)
 
-        backbone = HuBERTBackbone(model)
+                # Normalize to mono 1D waveform (T,)
+                if x.ndim == 1:
+                    pass
+                elif x.ndim == 2:
+                    if x.shape[1] > x.shape[0]:
+                        x = x.mean(dim=0)   # (C, T) → (T,)
+                    else:
+                        x = x.mean(dim=1)   # (T, C) → (T,)
+                else:
+                    x = x.squeeze()
+                    if x.ndim == 2:
+                        if x.shape[1] > x.shape[0]:
+                            x = x.mean(dim=0)
+                        else:
+                            x = x.mean(dim=1)
+                if x.ndim != 1:
+                    raise ValueError(f"Expected 1D waveform, got {tuple(x.shape)}")
 
-        classifier = CTCEvaluateNet(
-            backbone=backbone,
+                lengths.append(x.shape[0])
+                waves_1d.append(x)
+                labels.append(int(item["label"]))
+
+            lengths = torch.tensor(lengths, dtype=torch.long)
+            labels  = torch.tensor(labels,  dtype=torch.long)
+
+            # Pad → (B, T_max) then add channel → (B, 1, T_max)
+            padded_bt  = pad_sequence(waves_1d, batch_first=True, padding_value=0.0)
+            padded_b1t = padded_bt.unsqueeze(1)
+            return padded_b1t, labels, lengths
+
+        # ---------- Backbone + classifier ----------
+        hubert_backbone = HuBERTBackbone(pretrained_model=self.model, normalize=False)
+
+        # Infer feature size (projection head output dim preferred)
+        def _infer_feature_dim(model) -> int:
+            # Prefer explicit projection dim from projection head
+            head = getattr(model, "projection_head", None)
+            if head is not None:
+                out_dim = getattr(head, "output_dim", None)
+                if isinstance(out_dim, int) and out_dim > 0:
+                    return out_dim
+                # Fallback: last Linear in the head
+                last_linear_out = None
+                for m in head.modules():
+                    if isinstance(m, nn.Linear):
+                        last_linear_out = m.out_features
+                if last_linear_out is not None:
+                    return last_linear_out
+            # Next: model.config["projection_dim"]
+            cfg = getattr(model, "config", {})
+            if isinstance(cfg, dict) and "projection_dim" in cfg:
+                return int(cfg["projection_dim"])
+            raise AttributeError(
+                "Unable to infer HuBERT projection output dimension. "
+                "Ensure `projection_head.output_dim` or `config['projection_dim']` exists."
+            )
+
+        feature_size = _infer_feature_dim(self.model)
+
+        classifier = ClassificationEvalNet(
+            backbone=hubert_backbone,
             feature_size=feature_size,
-            num_classes=num_classes,   # vocab size incl. blank
-            is_linear=freeze_backbone,
+            num_classes=num_classes,
+            is_linear=freeze_backbone,               # linear eval if frozen
+            pooling=kwargs.get("pooling", "none"),   # backbone already outputs (B, E)
+            hidden_dim=kwargs.get("hidden_dim", None),
+            dropout=kwargs.get("dropout", 0.0),
+            norm=kwargs.get("norm", False),
         ).to(self.device)
 
-        optimizer = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, classifier.parameters()),
-            lr=lr,
-            betas=(0.9, 0.98),
-            eps=1e-8,
-            weight_decay=1e-4
+        optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
         )
+        criterion = nn.CrossEntropyLoss()
 
-        criterion = nn.CTCLoss(blank=0, zero_infinity=True)
-
+        # ---------- DataLoaders (perf-friendly) ----------
+        num_workers = int(kwargs.get("num_workers", 4))
+        pin_mem = "cuda" in str(self.device)
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            collate_fn=self.collate_ctc,
-            num_workers=self.num_workers,
-            pin_memory=True,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=pin_mem,
+            persistent_workers=num_workers > 0,
+            prefetch_factor=2 if num_workers > 0 else None,
         )
-
         test_loader = DataLoader(
             test_dataset,
             batch_size=batch_size,
             shuffle=False,
-            collate_fn=self.collate_ctc,
-            num_workers=self.num_workers,
-            pin_memory=True,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=pin_mem,
+            persistent_workers=num_workers > 0,
+            prefetch_factor=2 if num_workers > 0 else None,
         )
 
-        if self.wandb_logger.is_active:
+        if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
 
-        # === AMP setup ===
-        use_amp = (self.device.type == "cuda")
-        scaler = GradScaler(enabled=use_amp)
+        # ---------- AMP/Scaler setup (like EAT/COLA/SimCLR) ----------
+        is_cuda = "cuda" in str(self.device) and torch.cuda.is_available()
+        use_amp_flag = bool(kwargs.get("use_amp", True))
+        amp_dtype_str = kwargs.get("amp_dtype", "fp16").lower()
+        use_autocast = bool(use_amp_flag and (is_cuda or amp_dtype_str == "bf16"))
+        dtype = torch.float16 if amp_dtype_str == "fp16" else torch.bfloat16
+        scaler_enabled = use_autocast and is_cuda and dtype == torch.float16
+        scaler = torch.cuda.amp.GradScaler(enabled=scaler_enabled)
 
-        # === Training loop ===
+        if is_cuda:
+            torch.backends.cudnn.benchmark = True
+
+        # ---------- Train ----------
         classifier.train()
-        if freeze_backbone:
-            classifier.backbone.eval()
-
         for epoch in range(epochs):
-            for batch in tqdm(train_loader, desc=f"[HuBERT-CTC Training] Epoch {epoch+1}"):
-                waveforms = batch["audio"].to(self.device)
-                labels = batch["flat_labels"].to(self.device)       # 1..C-1 (0 is blank)
-                label_lengths = batch["label_lengths"].to(self.device)
-                audio_lengths = batch["audio_lengths"].to(self.device)
-
-                # Forward under autocast
-                with autocast(enabled=use_amp):
-                    log_probs, output_lengths = classifier(waveforms, audio_lengths)
-
-                # Compute CTC loss in fp32 for stability; (T, B, C)
-                loss = criterion(
-                    log_probs.float().permute(1, 0, 2),
-                    labels,
-                    output_lengths,
-                    label_lengths
-                )
-
-                if torch.isnan(loss):
-                    self.logger.error("❌ NaN loss detected!")
-                    self.logger.error(f"log_probs: {log_probs.shape}, "
-                                    f"labels: {labels.shape}, "
-                                    f"input_lengths: {audio_lengths}, "
-                                    f"label_lengths: {label_lengths}")
-                    continue
+            running_loss, num_batches = 0.0, 0
+            pbar = tqdm(train_loader, desc=f"🗣️ [HuBERT] Epoch {epoch+1}/{epochs}", leave=False, dynamic_ncols=True)
+            for waveforms, labels, lengths in pbar:
+                waveforms = waveforms.to(self.device, non_blocking=True)
+                labels    = labels.to(self.device, non_blocking=True)
+                lengths   = lengths.to(self.device, non_blocking=True)
 
                 optimizer.zero_grad(set_to_none=True)
 
-                # AMP backward/step
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
-                scaler.step(optimizer)
-                scaler.update()
+                with torch.cuda.amp.autocast(dtype=dtype, enabled=use_autocast):
+                    logits = classifier(waveforms)   # backbone already pools → (B, E)
+                    loss   = criterion(logits, labels)
 
-            self.logger.info(f"[HuBERT-CTC Eval] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.4f}")
+                if scaler_enabled:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
 
-            if self.wandb_logger.is_active:
+                batch_loss = float(loss.item())
+                running_loss += batch_loss
+                num_batches += 1
+
+                pbar.set_postfix(
+                    batch_loss=f"{batch_loss:.4f}",
+                    lr=f"{optimizer.param_groups[0]['lr']:.2e}",
+                    amp=("on" if use_autocast else "off"),
+                    dtype=("fp16" if dtype == torch.float16 else "bf16" if dtype == torch.bfloat16 else "fp32"),
+                )
+
+            epoch_loss = running_loss / max(1, num_batches)
+            self.logger.info(f"[HuBERT Eval] Epoch {epoch+1}/{epochs} - Epoch loss: {epoch_loss:.4f}")
+
+            if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
                 self.wandb_logger.log({
-                    "hubert/train_loss": loss.item(),
+                    "hubert/train_loss": epoch_loss,
                     "hubert/epoch": epoch + 1,
                     "hubert/lr": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
 
-        # === Evaluation loop ===
+        # ---------- Eval ----------
         classifier.eval()
-        all_refs_tokens, all_hyps_tokens = [], []
+        all_preds, all_labels = [], []
+        with torch.inference_mode():
+            pbar = tqdm(test_loader, desc="🧪 [HuBERT] Evaluating", leave=False, dynamic_ncols=True)
+            for waveforms, labels, lengths in pbar:
+                waveforms = waveforms.to(self.device, non_blocking=True)
+                labels    = labels.to(self.device, non_blocking=True)
+                lengths   = lengths.to(self.device, non_blocking=True)
 
-        idx2label = getattr(train_dataset, "idx2label", None)
-        if idx2label is None:
-            raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
+                with torch.cuda.amp.autocast(dtype=dtype, enabled=use_autocast):
+                    logits = classifier(waveforms)
+                    preds  = torch.argmax(logits, dim=1)
 
-        with torch.no_grad():
-            for batch in tqdm(test_loader, desc="[HuBERT-CTC Evaluation]"):
-                waveforms = batch["audio"].to(self.device)
-                audio_lengths = batch["audio_lengths"].to(self.device)
+                all_preds.append(preds.cpu())
+                all_labels.append(labels.cpu())
 
-                # Padded labels (+1 shift) and true lengths
-                labels_padded = batch["labels"].cpu().tolist()
-                label_lengths = batch["label_lengths"].cpu().tolist()
+        all_preds  = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
 
-                # Inference under autocast (no scaler/backprop)
-                with autocast(enabled=use_amp):
-                    log_probs, out_lengths = classifier(waveforms, audio_lengths)
+        from sklearn.metrics import classification_report
+        self.logger.info(
+            "\n📊 [HuBERT Evaluation Report]:\n" +
+            classification_report(all_labels.numpy(), all_preds.numpy(), digits=4)
+        )
 
-                preds = torch.argmax(log_probs, dim=-1).cpu().tolist()
-                out_lengths = out_lengths.cpu().tolist()
+        report = classification_report(
+            all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True
+        )
 
-                # Greedy CTC decoding with proper trimming/collapse
-                for pred_seq, ref_seq, ref_len, out_len in zip(preds, labels_padded, label_lengths, out_lengths):
-                    pred_seq = pred_seq[:out_len]  # Trim to valid output length
-
-                    # Collapse repeats & remove blanks (blank_id=0)
-                    hyp_ids = []
-                    prev = None
-                    for p in pred_seq:
-                        if p == 0:
-                            prev = p
-                            continue
-                        if p != prev:
-                            hyp_ids.append(p)
-                        prev = p
-
-                    # Map ids→tokens by undoing the +1 shift (ids are >= 1 here)
-                    hyp_tokens = [idx2label[p - 1] for p in hyp_ids]
-                    ref_ids = ref_seq[:ref_len]  # remove right padding zeros
-                    ref_tokens = [idx2label[r - 1] for r in ref_ids]
-
-                    all_hyps_tokens.append(hyp_tokens)
-                    all_refs_tokens.append(ref_tokens)
-
-        # -------- DROP sil + closures before scoring --------
-        DROP_TOKENS = {"sil", "tcl", "kcl", "pcl", "dcl", "gcl", "bcl"}
-
-        def _filter(tokens):
-            return [t for t in tokens if t not in DROP_TOKENS]
-
-        refs_filt = [_filter(r) for r in all_refs_tokens]
-        hyps_filt = [_filter(h) for h in all_hyps_tokens]
-
-        # Token-level WER (phones, post-filter)
-        ref_texts = [" ".join(r) for r in refs_filt]
-        hyp_texts = [" ".join(h) for h in hyps_filt]
-        wer_score = wer(ref_texts, hyp_texts)
-
-        # True PER (post-filter)
-        per_numer = sum(edit_distance(r, h) for r, h in zip(refs_filt, hyps_filt))
-        per_denom = sum(len(r) for r in refs_filt) if refs_filt else 1
-        per_score = per_numer / per_denom
-        # ----------------------------------------------------
-
-        self.logger.info(f"📊 [HuBERT-CTC Evaluation] WER(phones,no_sil)={wer_score:.4f}, PER(no_sil)={per_score:.4f}")
-
-        if self.wandb_logger.is_active:
+        if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
             self.wandb_logger.log({
-                "hubert/test_wer_no_sil": wer_score,
-                "hubert/test_per_no_sil": per_score
+                "hubert/test_accuracy": report["accuracy"],
+                "hubert/test_macro_avg_f1": report["macro avg"]["f1-score"],
+                "hubert/test_macro_avg_precision": report["macro avg"]["precision"],
+                "hubert/test_macro_avg_recall": report["macro avg"]["recall"]
             })
 
 
