@@ -1967,11 +1967,6 @@ class Trainer:
         - Classification head via ClassificationEvalNet with pooling="none".
         - Mixed precision (fp16/bf16) + GradScaler, tqdm progress, wandb logging.
         """
-        import torch
-        import torch.nn as nn
-        from torch.nn.utils.rnn import pad_sequence
-        from torch.utils.data import DataLoader
-        from tqdm import tqdm
 
         # ---------- Collate (mono → pad → (B,1,T) + lengths) ----------
         def collate_fn(batch):
@@ -2195,11 +2190,6 @@ class Trainer:
         - Classification head via ClassificationEvalNet with pooling="none".
         - Mixed precision (fp16/bf16) + GradScaler, tqdm progress, wandb logging.
         """
-        import torch
-        import torch.nn as nn
-        from torch.nn.utils.rnn import pad_sequence
-        from torch.utils.data import DataLoader
-        from tqdm import tqdm
 
         # ---------- Collate (mono → pad → (B,1,T) + lengths) ----------
         def collate_fn(batch):
