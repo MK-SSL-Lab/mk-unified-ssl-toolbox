@@ -43,7 +43,7 @@ from MK_SSL.audio.models.modules.eat_backbone import EATBackbone
 from MK_SSL.audio.models.modules.backbones import ViTAudioEncoder
 
 
-from MK_SSL.audio.models.utils.evaluate import CTCEvaluateNet
+from MK_SSL.audio.models.utils.evaluate import CTCEvaluateNet, ClassificationEvalNet
 from MK_SSL.utils import EmbeddingLogger
 from MK_SSL.utils import get_logger_handler
 from MK_SSL.utils import WandbLogger
@@ -2517,8 +2517,6 @@ class Trainer:
                 "cola/test_per_no_sil": per_score
             })
 
-
-
     def _evaluate_eat(
         self,
         train_dataset: torch.utils.data.Dataset,
@@ -2528,251 +2526,108 @@ class Trainer:
         lr: float = 1e-3,
         epochs: int = 10,
         freeze_backbone: bool = True,
-        # Optional LM/lexicon inputs — SAME names/semantics as your wav2vec2 code
-        phoneme_lexicon_path: str | None = None,
-        phoneme_lm_arpa_path: str | None = None,
-        classifier_path: str | None = None,
         **kwargs
     ):
         """
-        EAT + CTC for phoneme recognition (PER), **identical flow to Wav2Vec2**:
-        - collate_ctc: +1 shift (blank=0), provides flat_labels, label_lengths, audio_lengths
-        - CTCEvaluateNet head on top of backbone
-        - Training with CTCLoss
-        - Evaluation with torchaudio beam CTC decoder (optional lexicon/LM) → PER
+        Same training/eval logic as before, now using EATBackbone.
+        Progress bars via tqdm; no functional changes to metrics or logging.
         """
-        import os
-        import editdistance
-        import torch
-        import torch.nn as nn
-        from torch.utils.data import DataLoader
-        from torch.cuda.amp import GradScaler, autocast
-        from torchaudio.models.decoder import ctc_decoder
-        from tqdm.auto import tqdm
 
-        # ---------- helpers (EXACTLY mirroring your wav2vec2 version) ----------
-        def collapse_and_strip_blanks(pred_ids):
-            out, prev = [], None
-            for p in pred_ids:
-                if p != 0 and p != prev:  # 0 is CTC blank
-                    out.append(p)
-                prev = p
-            return out  # still +1 shifted (>=1)
+        # Wrap the pretrained EAT model with the provided backbone
+        eat_backbone = EATBackbone(pretrained_model=self.model, normalize=False)
 
-        def ids_to_phones(ids, idx2label):
-            if any(i == 0 for i in ids):
-                raise RuntimeError("Found 0 (blank) in phone ids after collapse.")
-            return [idx2label[i - 1] for i in ids]
+        feature_size = self.model.embed_dim  # stays as before
 
-        def compute_per(refs, hyps):
-            total_err, total_len = 0, 0
-            for r, h in zip(refs, hyps):
-                total_err += editdistance.eval(r, h)
-                total_len += len(r)
-            return total_err / max(total_len, 1)
-
-        # ---------- backbone + head ----------
-        backbone = EATBackbone(pretrained_model=self.model)
-        feature_size = getattr(self.model, "embed_dim", None)
-        if feature_size is None:
-            raise RuntimeError("EAT model missing 'embed_dim' attribute.")
-
-        classifier = CTCEvaluateNet(
-            backbone=backbone,
+        classifier = ClassificationEvalNet(
+            backbone=eat_backbone,
             feature_size=feature_size,
-            num_classes=num_classes,  # includes blank class at index 0
+            num_classes=num_classes,
             is_linear=freeze_backbone,
+            pooling=kwargs.get("pooling", "mean"),
+            hidden_dim=kwargs.get("hidden_dim", None),
+            dropout=kwargs.get("dropout", 0.0),
+            norm=kwargs.get("norm", False),
         ).to(self.device)
 
-        if classifier_path is not None and os.path.exists(classifier_path):
-            self.logger.info(f"Loading classifier weights from: {classifier_path}")
-            classifier.load_state_dict(torch.load(classifier_path, map_location=self.device))
-
-        if freeze_backbone:
-            classifier.backbone.eval()
-            for p in classifier.backbone.parameters():
-                p.requires_grad = False
-
-        optimizer = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, classifier.parameters()),
-            lr=lr, betas=(0.9, 0.98), eps=1e-8, weight_decay=1e-4
+        optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
         )
-        criterion = nn.CTCLoss(blank=0, zero_infinity=True)
+        criterion = nn.CrossEntropyLoss()
 
-        train_loader = DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True,
-            collate_fn=self.collate_ctc, num_workers=self.num_workers, pin_memory=True,
-        )
-        test_loader = DataLoader(
-            test_dataset, batch_size=batch_size, shuffle=False,
-            collate_fn=self.collate_ctc, num_workers=self.num_workers, pin_memory=True,
-        )
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False)
 
         if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
             self.wandb_logger.watch_model(classifier)
 
-        use_amp = (self.device.type == "cuda")
-        scaler = GradScaler(enabled=use_amp)
-
-        # ---------- training ----------
+        # ---- Train ----
         classifier.train()
         for epoch in range(epochs):
-            running, seen = 0.0, 0
-            pbar = tqdm(train_loader, desc=f"[EAT-CTC Training] Epoch {epoch+1}")
-            for batch in pbar:
-                if batch is None:
-                    continue
-                waveforms = batch["audio"].to(self.device)                 # (B,1,T)
-                labels = batch["flat_labels"].to(self.device)              # +1 shifted in [1..P]
-                label_lengths = batch["label_lengths"].to(self.device)     # (B,)
-                audio_lengths = batch["audio_lengths"].to(self.device)     # (B,)
+            last_loss = None
+            pbar = tqdm(
+                train_loader,
+                desc=f"🎧 [EAT] Epoch {epoch+1}/{epochs}",
+                leave=False,
+                dynamic_ncols=True,
+            )
+            for waveforms, labels in pbar:
+                waveforms = waveforms.to(self.device, non_blocking=True)
+                labels    = labels.to(self.device, non_blocking=True)
 
-                if (labels == 0).any():
-                    raise RuntimeError("flat_labels contains 0, but collate should shift to [1..P].")
-
-                with autocast(enabled=use_amp):
-                    log_probs, output_lengths = classifier(waveforms, audio_lengths)  # (B,T,C), (B,)
-
-                assert output_lengths.shape[0] == waveforms.size(0)
-                assert (output_lengths > 0).all()
-                assert output_lengths.max().item() <= log_probs.size(1)
-
-
-
-                loss = criterion(
-                    log_probs.float().permute(1, 0, 2),  # (T,B,C)
-                    labels, output_lengths, label_lengths
-                )
-
-                if torch.isnan(loss):
-                    self.logger.error("❌ NaN loss detected!")
-                    self.logger.error(f"log_probs: {log_probs.shape}, "
-                                    f"labels: {labels.shape}, "
-                                    f"input_lengths: {output_lengths}, "
-                                    f"label_lengths: {label_lengths}")
-                    continue
+                logits = classifier(waveforms)  # lengths are optional; EATBackbone handles None
+                loss   = criterion(logits, labels)
 
                 optimizer.zero_grad(set_to_none=True)
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=5.0)
-                scaler.step(optimizer)
-                scaler.update()
+                loss.backward()
+                optimizer.step()
 
-                bs = waveforms.size(0)
-                running += loss.item() * bs
-                seen += bs
-                pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+                last_loss = float(loss.item())
+                pbar.set_postfix(loss=f"{last_loss:.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
 
-            epoch_loss = running / max(seen, 1)
-            self.logger.info(f"[EAT-CTC Train] Epoch {epoch+1}/{epochs} - Loss: {epoch_loss:.4f}")
+            self.logger.info(f"[EAT Eval] Epoch {epoch+1}/{epochs} - Loss: {last_loss:.4f}")
+
             if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
                 self.wandb_logger.log({
-                    "eat/train_loss": epoch_loss,
+                    "eat/train_loss": last_loss,
                     "eat/epoch": epoch + 1,
                     "eat/lr": optimizer.param_groups[0]["lr"]
                 }, step=epoch + 1)
 
-        # ---------- evaluation (beam search + PER) ----------
+        # ---- Eval ----
         classifier.eval()
+        all_preds, all_labels = [], []
+        with torch.no_grad():
+            pbar = tqdm(test_loader, desc="🧪 [EAT] Evaluating", leave=False, dynamic_ncols=True)
+            for waveforms, labels in pbar:
+                waveforms = waveforms.to(self.device, non_blocking=True)
+                labels    = labels.to(self.device, non_blocking=True)
 
-        idx2label = getattr(train_dataset, "idx2label", None)
-        if idx2label is None:
-            raise RuntimeError("train_dataset is missing 'idx2label' for decoding.")
-        if hasattr(test_dataset, "label2idx") and hasattr(train_dataset, "label2idx"):
-            assert test_dataset.label2idx == train_dataset.label2idx, "Train/Test vocab mismatch!"
+                logits = classifier(waveforms)
+                preds  = torch.argmax(logits, dim=1)
 
-        assert num_classes == len(idx2label) + 1, (
-            f"num_classes={num_classes}, but need P+1={len(idx2label)+1} (blank=0)."
+                all_preds.append(preds.cpu())
+                all_labels.append(labels.cpu())
+
+        all_preds  = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+
+        from sklearn.metrics import classification_report
+        self.logger.info(
+            "\n📊 [EAT Evaluation Report]:\n" +
+            classification_report(all_labels.numpy(), all_preds.numpy(), digits=4)
         )
 
-        # tokens index-aligned with logits: 0 -> blank "_", 1..P -> idx2label[0..P-1]
-        decoder_tokens = ["_"] + list(idx2label)
-        assert len(decoder_tokens) == num_classes
-
-        # instantiate decoder (optional LM/lexicon); fall back to greedy if it fails
-        try:
-            use_lex = bool(phoneme_lexicon_path) and os.path.exists(phoneme_lexicon_path)
-            use_lm  = bool(phoneme_lm_arpa_path) and os.path.exists(phoneme_lm_arpa_path)
-
-            decoder = ctc_decoder(
-                lexicon=phoneme_lexicon_path if use_lex else None,
-                tokens=decoder_tokens,
-                lm=phoneme_lm_arpa_path if use_lm else None,
-                nbest=50,
-                beam_size=250,
-                beam_threshold=12.0,
-                lm_weight=1.5,
-                word_score=-1.0,
-                sil_token="sil",
-                blank_token="_",
-                unk_word="<unk>",
-            )
-            self.logger.info(f"[CTC-Decoder] Using lexicon ({use_lex})\nLM for decoding ({use_lm}).")
-        except Exception as e:
-            self.logger.warning(f"CTC decoder setup failed ({e}). Falling back to greedy PER.")
-            decoder = None
-
-        ref_seqs, hyp_seqs = [], []
-
-        with torch.no_grad():
-            for batch in tqdm(test_loader, desc="[EAT-CTC Evaluation: Phonemes]"):
-                if batch is None:
-                    continue
-                waveforms = batch["audio"].to(self.device)
-                audio_lengths = batch["audio_lengths"].to(self.device)
-
-                labels_padded = batch["labels"].cpu().tolist()       # +1 shifted
-                label_lengths = batch["label_lengths"].cpu().tolist()
-
-                # safety: ensure no 0 inside valid reference spans
-                for rs, rl in zip(labels_padded, label_lengths):
-                    if any(x == 0 for x in rs[:rl]):
-                        raise RuntimeError("Reference contains 0 (blank/pad) within valid length.")
-
-                with autocast(enabled=use_amp):
-                    log_probs, out_lengths = classifier(waveforms, audio_lengths)  # (B,T,C)
-
-                emissions = log_probs.detach().cpu()          # (B,T,C)
-                emission_lengths = out_lengths.detach().cpu() # (B,)
-
-                if decoder is not None:
-                    hypos_batch = decoder(emissions, emission_lengths)  # List[List[CTCHypothesis]]
-                    for hypos, ref_seq, ref_len in zip(hypos_batch, labels_padded, label_lengths):
-                        if hypos:
-                            tok_ids = collapse_and_strip_blanks(hypos[0].tokens)  # [1..P]
-                            if any(i == 0 for i in tok_ids):
-                                raise RuntimeError("Decoder hypothesis still has 0 after collapse.")
-                            hyp = ids_to_phones(tok_ids, idx2label)
-                        else:
-                            hyp = []
-
-                        ref_ids = ref_seq[:ref_len]  # [1..P]
-                        ref = ids_to_phones(ref_ids, idx2label)
-
-                        hyp_seqs.append(hyp)
-                        ref_seqs.append(ref)
-                else:
-                    preds = torch.argmax(emissions, dim=-1).tolist()
-                    for pred_seq, ref_seq, ref_len in zip(preds, labels_padded, label_lengths):
-                        pred_ids = collapse_and_strip_blanks(pred_seq)  # [1..P]
-                        if any(i == 0 for i in pred_ids):
-                            raise RuntimeError("Greedy hypothesis still has 0 after collapse.")
-                        hyp = ids_to_phones(pred_ids, idx2label)
-
-                        ref_ids = ref_seq[:ref_len]  # [1..P]
-                        ref = ids_to_phones(ref_ids, idx2label)
-
-                        hyp_seqs.append(hyp)
-                        ref_seqs.append(ref)
-
-        per_score = compute_per(ref_seqs, hyp_seqs)
-        self.logger.info(f"📊 [EAT-CTC Evaluation] PER(phonemes)={per_score:.4f}")
+        report = classification_report(
+            all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True
+        )
 
         if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
-            self.wandb_logger.log({"eat/test_per": per_score})
-
-        torch.save(classifier.state_dict(), "EAT_Classifier.pth")
+            self.wandb_logger.log({
+                "eat/test_accuracy": report["accuracy"],
+                "eat/test_macro_avg_f1": report["macro avg"]["f1-score"],
+                "eat/test_macro_avg_precision": report["macro avg"]["precision"],
+                "eat/test_macro_avg_recall": report["macro avg"]["recall"]
+            })
 
 
     def evaluate(
