@@ -1948,6 +1948,216 @@ class Trainer:
         torch.save(classifier.state_dict(), "Wav2Vec2_Classifier.pth")
 
 
+    def _evaluate_wav2vec2_2(
+        self,
+        train_dataset: torch.utils.data.Dataset,
+        test_dataset: torch.utils.data.Dataset,
+        num_classes: int,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        epochs: int = 10,
+        freeze_backbone: bool = True,
+        **kwargs
+    ):
+        """
+        Linear/MLP evaluation for Wav2Vec2 speech embeddings (mirrors _evaluate_simclr).
+        - Uses Wav2Vec2Backbone that returns (B, E) embeddings from (B,1,T) waveforms.
+        - Classification head via ClassificationEvalNet with pooling="none".
+        - Mixed precision (fp16/bf16) + GradScaler, tqdm progress, wandb logging.
+        """
+
+        # ---------- Collate (mono → pad → (B,1,T) + lengths) ----------
+        def collate_fn(batch):
+            waves_1d, labels, lengths = [], [], []
+            for item in batch:
+                x = torch.as_tensor(item["audio"], dtype=torch.float32)
+
+                # Normalize to mono 1D waveform (T,)
+                if x.ndim == 1:
+                    pass
+                elif x.ndim == 2:
+                    if x.shape[1] > x.shape[0]:
+                        x = x.mean(dim=0)   # (C, T) → (T,)
+                    else:
+                        x = x.mean(dim=1)   # (T, C) → (T,)
+                else:
+                    x = x.squeeze()
+                    if x.ndim == 2:
+                        if x.shape[1] > x.shape[0]:
+                            x = x.mean(dim=0)
+                        else:
+                            x = x.mean(dim=1)
+                if x.ndim != 1:
+                    raise ValueError(f"Expected 1D waveform, got {tuple(x.shape)}")
+
+                lengths.append(x.shape[0])
+                waves_1d.append(x)
+                labels.append(int(item["label"]))
+
+            lengths = torch.tensor(lengths, dtype=torch.long)
+            labels  = torch.tensor(labels,  dtype=torch.long)
+
+            # Pad → (B, T_max) then add channel → (B, 1, T_max)
+            padded_bt  = pad_sequence(waves_1d, batch_first=True, padding_value=0.0)
+            padded_b1t = padded_bt.unsqueeze(1)
+            return padded_b1t, labels, lengths
+
+        # ---------- Backbone + classifier ----------
+        # Expects your wrapper to accept (B,1,T) and output (B,E)
+        wav2vec2_backbone = Wav2Vec2Backbone(pretrained_model=self.model, normalize=False)
+
+        # Try common places for embedding size
+        feature_size = getattr(getattr(self.model, "backbone", None), "embed_dim", None)
+        if feature_size is None:
+            feature_size = getattr(getattr(self.model, "config", None), "hidden_size", None)
+        if feature_size is None and hasattr(self.model, "model_config"):
+            feature_size = self.model.model_config.get("encoder_embed_dim")
+        if feature_size is None:
+            raise AttributeError(
+                "Could not infer feature_size for Wav2Vec2. "
+                "Tried self.model.backbone.embed_dim, self.model.config.hidden_size, "
+                "and self.model.model_config['encoder_embed_dim']."
+            )
+
+        classifier = ClassificationEvalNet(
+            backbone=wav2vec2_backbone,
+            feature_size=feature_size,
+            num_classes=num_classes,
+            is_linear=freeze_backbone,                  # linear eval if frozen
+            pooling=kwargs.get("pooling", "none"),      # backbone already gives (B, E)
+            hidden_dim=kwargs.get("hidden_dim", None),
+            dropout=kwargs.get("dropout", 0.0),
+            norm=kwargs.get("norm", False),
+        ).to(self.device)
+
+        optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
+        )
+        criterion = nn.CrossEntropyLoss()
+
+        # ---------- DataLoaders (perf-friendly) ----------
+        num_workers = int(kwargs.get("num_workers", 4))
+        pin_mem = "cuda" in str(self.device)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=pin_mem,
+            persistent_workers=num_workers > 0,
+            prefetch_factor=2 if num_workers > 0 else None,
+        )
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=pin_mem,
+            persistent_workers=num_workers > 0,
+            prefetch_factor=2 if num_workers > 0 else None,
+        )
+
+        if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
+            self.wandb_logger.watch_model(classifier)
+
+        # ---------- AMP/Scaler setup (same as SimCLR) ----------
+        is_cuda = "cuda" in str(self.device) and torch.cuda.is_available()
+        use_amp_flag = bool(kwargs.get("use_amp", True))
+        amp_dtype_str = kwargs.get("amp_dtype", "fp16").lower()
+        use_autocast = bool(use_amp_flag and (is_cuda or amp_dtype_str == "bf16"))
+        dtype = torch.float16 if amp_dtype_str == "fp16" else torch.bfloat16
+        scaler_enabled = use_autocast and is_cuda and dtype == torch.float16
+        scaler = torch.cuda.amp.GradScaler(enabled=scaler_enabled)
+
+        if is_cuda:
+            torch.backends.cudnn.benchmark = True
+
+        # ---------- Train ----------
+        classifier.train()
+        for epoch in range(epochs):
+            running_loss, num_batches = 0.0, 0
+            pbar = tqdm(train_loader, desc=f"🎙️ [Wav2Vec2] Epoch {epoch+1}/{epochs}", leave=False, dynamic_ncols=True)
+            for waveforms, labels, lengths in pbar:
+                waveforms = waveforms.to(self.device, non_blocking=True)
+                labels    = labels.to(self.device, non_blocking=True)
+                lengths   = lengths.to(self.device, non_blocking=True)
+
+                optimizer.zero_grad(set_to_none=True)
+
+                with torch.cuda.amp.autocast(dtype=dtype, enabled=use_autocast):
+                    logits = classifier(waveforms)   # backbone already pools → (B,E)
+                    loss   = criterion(logits, labels)
+
+                if scaler_enabled:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
+
+                batch_loss = float(loss.item())
+                running_loss += batch_loss
+                num_batches += 1
+
+                pbar.set_postfix(
+                    batch_loss=f"{batch_loss:.4f}",
+                    lr=f"{optimizer.param_groups[0]['lr']:.2e}",
+                    amp=("on" if use_autocast else "off"),
+                    dtype=("fp16" if dtype == torch.float16 else "bf16" if dtype == torch.bfloat16 else "fp32"),
+                )
+
+            epoch_loss = running_loss / max(1, num_batches)
+            self.logger.info(f"[Wav2Vec2 Eval] Epoch {epoch+1}/{epochs} - Epoch loss: {epoch_loss:.4f}")
+
+            if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
+                self.wandb_logger.log({
+                    "wav2vec2/train_loss": epoch_loss,
+                    "wav2vec2/epoch": epoch + 1,
+                    "wav2vec2/lr": optimizer.param_groups[0]["lr"]
+                }, step=epoch + 1)
+
+        # ---------- Eval ----------
+        classifier.eval()
+        all_preds, all_labels = [], []
+        with torch.inference_mode():
+            pbar = tqdm(test_loader, desc="🧪 [Wav2Vec2] Evaluating", leave=False, dynamic_ncols=True)
+            for waveforms, labels, lengths in pbar:
+                waveforms = waveforms.to(self.device, non_blocking=True)
+                labels    = labels.to(self.device, non_blocking=True)
+                lengths   = lengths.to(self.device, non_blocking=True)
+
+                with torch.cuda.amp.autocast(dtype=dtype, enabled=use_autocast):
+                    logits = classifier(waveforms)
+                    preds  = torch.argmax(logits, dim=1)
+
+                all_preds.append(preds.cpu())
+                all_labels.append(labels.cpu())
+
+        all_preds  = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+
+        from sklearn.metrics import classification_report
+        self.logger.info(
+            "\n📊 [Wav2Vec2 Evaluation Report]:\n" +
+            classification_report(all_labels.numpy(), all_preds.numpy(), digits=4)
+        )
+
+        report = classification_report(
+            all_labels.numpy(), all_preds.numpy(), digits=4, output_dict=True
+        )
+
+        if getattr(self, "wandb_logger", None) and self.wandb_logger.is_active:
+            self.wandb_logger.log({
+                "wav2vec2/test_accuracy": report["accuracy"],
+                "wav2vec2/test_macro_avg_f1": report["macro avg"]["f1-score"],
+                "wav2vec2/test_macro_avg_precision": report["macro avg"]["precision"],
+                "wav2vec2/test_macro_avg_recall": report["macro avg"]["recall"]
+            })
+
+
 
 
     def _evaluate_simclr(
@@ -2782,7 +2992,7 @@ class Trainer:
             case "simclr":
                 self._evaluate_simclr(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case "wav2vec2":
-                self._evaluate_wav2vec2(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
+                self._evaluate_wav2vec2_2(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case "eat":
                 self._evaluate_eat(train_dataset, test_dataset, num_classes, batch_size, lr, epochs, freeze_backbone, **kwargs)
             case _:
