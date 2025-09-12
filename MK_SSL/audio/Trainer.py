@@ -1960,13 +1960,20 @@ class Trainer:
         **kwargs
     ):
         """
-        Linear/MLP evaluation for Wav2Vec2 speech embeddings (mirrors _evaluate_simclr).
-        - Uses Wav2Vec2Backbone that returns (B, E) embeddings from (B,1,T) waveforms.
-        - Classification head via ClassificationEvalNet with pooling="none".
-        - Mixed precision (fp16/bf16) + GradScaler, tqdm progress, wandb logging.
+        Linear/MLP evaluation for Wav2Vec2 embeddings (sequence output → pooled).
+        Mirrors _evaluate_simclr, but aligns with a sequence-output backbone:
+        - Wav2Vec2Backbone returns (B, T_out, D) and token lengths.
+        - ClassificationEvalNet pools over time (default: mean) to (B, E) then predicts.
+        - AMP (fp16/bf16), tqdm, and optional wandb logging.
         """
 
-        # ---------- Collate (mono → pad → (B,1,T) + lengths) ----------
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader
+        from torch.nn.utils.rnn import pad_sequence
+        from tqdm.auto import tqdm
+
+        # ---------- Collate (mono → pad → (B,1,T) + raw lengths in samples) ----------
         def collate_fn(batch):
             waves_1d, labels, lengths = [], [], []
             for item in batch:
@@ -1990,7 +1997,7 @@ class Trainer:
                 if x.ndim != 1:
                     raise ValueError(f"Expected 1D waveform, got {tuple(x.shape)}")
 
-                lengths.append(x.shape[0])
+                lengths.append(x.shape[0])          # raw samples
                 waves_1d.append(x)
                 labels.append(int(item["label"]))
 
@@ -2002,33 +2009,38 @@ class Trainer:
             padded_b1t = padded_bt.unsqueeze(1)
             return padded_b1t, labels, lengths
 
-        # ---------- Backbone + classifier ----------
-        # Expects your wrapper to accept (B,1,T) and output (B,E)
-        wav2vec2_backbone = Wav2Vec2Backbone(pretrained_model=self.model, normalize=False)
+        # ---------- Backbone + classifier (sequence → pooled) ----------
+        wav2vec2_backbone = Wav2Vec2Backbone(pretrained_model=self.model)
 
-        # Try common places for embedding size
-        feature_size = getattr(getattr(self.model, "backbone", None), "embed_dim", None)
+        # Infer feature size D (try common places; last resort: model_config)
+        feature_size = getattr(getattr(self.model, "encoder", None), "embed_dim", None)
         if feature_size is None:
-            feature_size = getattr(getattr(self.model, "config", None), "hidden_size", None)
+            cfg = getattr(self.model, "config", None)
+            feature_size = getattr(cfg, "hidden_size", None) if cfg is not None else None
         if feature_size is None and hasattr(self.model, "model_config"):
             feature_size = self.model.model_config.get("encoder_embed_dim")
         if feature_size is None:
             raise AttributeError(
-                "Could not infer feature_size for Wav2Vec2. "
-                "Tried self.model.backbone.embed_dim, self.model.config.hidden_size, "
-                "and self.model.model_config['encoder_embed_dim']."
+                "Could not infer Wav2Vec2 feature size D. "
+                "Tried model.encoder.embed_dim, model.config.hidden_size, "
+                "and model.model_config['encoder_embed_dim']."
             )
 
         classifier = ClassificationEvalNet(
             backbone=wav2vec2_backbone,
             feature_size=feature_size,
             num_classes=num_classes,
-            is_linear=freeze_backbone,                  # linear eval if frozen
-            pooling=kwargs.get("pooling", "none"),      # backbone already gives (B, E)
+            is_linear=freeze_backbone,                       # linear eval if frozen
+            pooling=kwargs.get("pooling", "mean"),           # <- time pooling for (B,T,D)
             hidden_dim=kwargs.get("hidden_dim", None),
             dropout=kwargs.get("dropout", 0.0),
             norm=kwargs.get("norm", False),
         ).to(self.device)
+
+        if freeze_backbone:
+            classifier.backbone.eval()
+            for p in classifier.backbone.parameters():
+                p.requires_grad = False
 
         optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, classifier.parameters()), lr=lr
@@ -2080,14 +2092,16 @@ class Trainer:
             running_loss, num_batches = 0.0, 0
             pbar = tqdm(train_loader, desc=f"🎙️ [Wav2Vec2] Epoch {epoch+1}/{epochs}", leave=False, dynamic_ncols=True)
             for waveforms, labels, lengths in pbar:
-                waveforms = waveforms.to(self.device, non_blocking=True)
+                waveforms = waveforms.to(self.device, non_blocking=True)   # (B,1,T)
                 labels    = labels.to(self.device, non_blocking=True)
-                lengths   = lengths.to(self.device, non_blocking=True)
+                lengths   = lengths.to(self.device, non_blocking=True)     # (B,) raw samples
 
                 optimizer.zero_grad(set_to_none=True)
 
                 with torch.cuda.amp.autocast(dtype=dtype, enabled=use_autocast):
-                    logits = classifier(waveforms)   # backbone already pools → (B,E)
+                    # NOTE: classifier should call backbone(waveforms, lengths) internally,
+                    # produce (B,T,D) → pool → (B,E) → logits (B,C)
+                    logits = classifier(waveforms, lengths)
                     loss   = criterion(logits, labels)
 
                 if scaler_enabled:
@@ -2130,7 +2144,7 @@ class Trainer:
                 lengths   = lengths.to(self.device, non_blocking=True)
 
                 with torch.cuda.amp.autocast(dtype=dtype, enabled=use_autocast):
-                    logits = classifier(waveforms)
+                    logits = classifier(waveforms, lengths)
                     preds  = torch.argmax(logits, dim=1)
 
                 all_preds.append(preds.cpu())
@@ -2156,7 +2170,6 @@ class Trainer:
                 "wav2vec2/test_macro_avg_precision": report["macro avg"]["precision"],
                 "wav2vec2/test_macro_avg_recall": report["macro avg"]["recall"]
             })
-
 
 
 
