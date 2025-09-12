@@ -8,7 +8,7 @@ class HuBERTLoss(nn.Module):
     Expects logits and targets for masked positions only.
     """
 
-    def __init__(self, reduction: str = "mean"):
+    def __init__(self, reduction: str = "mean", **kwargs):
         super().__init__()
         self.reduction = reduction
 
