@@ -27,7 +27,7 @@ from MK_SSL.vision.models.utils import get_method
 from MK_SSL.utils import optimize_hyperparameters
 from MK_SSL.utils import WandbLogger
 from MK_SSL.vision.models.modules import MAEBackbone
-from MK_SSL.utils import EvaluateNet
+from MK_SSL.vision.models.utils import EvaluateNet
 from MK_SSL.utils import EmbeddingLogger
 
 
