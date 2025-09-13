@@ -37,7 +37,7 @@ from MK_SSL.multimodal.models.modules import AudioCLIPAudioBackbone
 from MK_SSL.multimodal.models.modules import Wav2CLIPAudioBackbone
 
 
-from MK_SSL.utils import EvaluateNet
+# from MK_SSL.utils import EvaluateNet
 from MK_SSL.utils import EmbeddingLogger
 from MK_SSL.utils import optimize_hyperparameters
 from MK_SSL.utils import WandbLogger
