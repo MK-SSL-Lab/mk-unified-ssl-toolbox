@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="MK_SSL Logo" width="300"/>
+  <img src="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/blob/main/assets/logo.png" alt="MK_SSL Logo" width="300"/>
 </p>
 
 <h1 align="center">
@@ -197,9 +197,9 @@ MK\_SSL is designed for **reproducible benchmarking** across domains.
 
 Wav2Vec2 pretrained with MK\_SSL.
 
-<img src="assets/libri_wav2vec_pretrained_vs_scratch_UMAP.png" alt="libri_wav2vec2" width="400"/>
-<img src="assets/timit_wav2vec2_pretrained_vs_scratch_UMAP.png" alt="timit_wav2vec2" width="400"/>
-<img src="assets/vctk_wav2vec2_pretrained_vs_scratch_UMAP.png" alt="vctk_wav2vec2" width="400"/>
+<img src="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/blob/main/assets/libri_wav2vec_pretrained_vs_scratch_UMAP.png" alt="libri_wav2vec2" width="400"/>
+<img src="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/blob/main/assets/timit_wav2vec2_pretrained_vs_scratch_UMAP.png" alt="timit_wav2vec2" width="400"/>
+<img src="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/blob/main/assets/vctk_wav2vec2_pretrained_vs_scratch_UMAP.png" alt="vctk_wav2vec2" width="400"/>
 
 
 | Task        | Dataset                                                                 | Model          | Accuracy |
@@ -215,10 +215,10 @@ Wav2Vec2 pretrained with MK\_SSL.
 
 Wav2CLIP learns powerful joint embeddings, enabling intuitive cross-modal retrieval.
 
-<img src="assets/wav2clip_zero_shot.png" alt="wav2clip_zero_shot" width="400"/>
-<img src="assets/wav2clip_dog_prediction.png" alt="wav2clip_dog_prediction" width="400"/>
-<img src="assets/wav2clip_cat_prediction.png" alt="wav2clip_cat_prediction" width="400"/>
-<img src="assets/wav2clip_sim.png" alt="wav2clip_sim" width="400"/>
+<img src="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/blob/main/assets/wav2clip_zero_shot.png" alt="wav2clip_zero_shot" width="400"/>
+<img src="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/blob/main/assets/wav2clip_dog_prediction.png" alt="wav2clip_dog_prediction" width="400"/>
+<img src="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/blob/main/assets/wav2clip_cat_prediction.png" alt="wav2clip_cat_prediction" width="400"/>
+<img src="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/blob/main/assets/wav2clip_sim.png" alt="wav2clip_sim" width="400"/>
 
 
 ---
@@ -232,7 +232,7 @@ MAE pretrained with MK\_SSL yields competitive performance with limited fine-tun
 | Linear Probing | 61.84%    |
 | Fine-tuned     | 87.98%    |
 
-<img src="assets/mae_result.png" alt="MAE Result" width="400"/>
+<img src="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/blob/main/assets/mae_result.png" alt="MAE Result" width="400"/>
 
 ---
 
@@ -240,7 +240,7 @@ MAE pretrained with MK\_SSL yields competitive performance with limited fine-tun
 
 GraphCL learns molecular-level embeddings competitive with supervised baselines.
 
-<img src="assets/graphcl-BBBP.png" alt="GraphCL BBBP" width="400"/>
+<img src="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/blob/main/assets/graphcl-BBBP.png" alt="GraphCL BBBP" width="400"/>
 
 | Dataset | Accuracy           | AUC    |
 |---------|--------------------|--------|
