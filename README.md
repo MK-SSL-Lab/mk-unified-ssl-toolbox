@@ -195,7 +195,7 @@ MK\_SSL is designed for **reproducible benchmarking** across domains.
 
 ### 🎧 Audio (Wav2Vec2 - TESS Emotion Dataset)
 
-Wav2Vec2 pretrained with MK\_SSL achieves robust results on TESS, demonstrating transferability to emotion classification.
+Wav2Vec2 pretrained with MK\_SSL.
 
 <img src="assets/libri_wav2vec_pretrained_vs_scratch_UMAP.png" alt="libri_wav2vec2" width="400"/>
 <img src="assets/timit_wav2vec2_pretrained_vs_scratch_UMAP.png" alt="timit_wav2vec2" width="400"/>
@@ -300,15 +300,15 @@ trainer.fit()
 
 ## 🤝 Collaborators and Advisors
 
-This project was made possible through collaborative research and academic mentorship. The main contributors are:
+This project was made possible through our collaborative research and academic mentorship. The main contributors are:
 
 * [Kianoosh Vadaei](https://github.com/kia-vadaei)
 * [Melika Shirian](https://github.com/MelikaShirian12)
 
-Their combined efforts shaped the design, implementation, and structure of MK\_SSL. The project was further enriched by the guidance of [Dr. Peyman Adibi](https://scholar.google.com/citations?user=u-FQZMkAAAAJ) and [Dr. Hossein Karshenas](https://scholar.google.com/citations?user=BjMFkWEAAAAJ), whose academic mentorship ensured rigor and practical impact.
+Our combined efforts shaped the design, implementation, and structure of **MK\_SSL**. The project was further enriched by the guidance of [Dr. Peyman Adibi](https://scholar.google.com/citations?user=u-FQZMkAAAAJ) and [Dr. Hossein Karshenas](https://scholar.google.com/citations?user=BjMFkWEAAAAJ), whose academic mentorship ensured rigor and practical impact.
 
 ---
 
 ## 📜 License
 
-This project is released under the MIT License.
+We’re keeping things chill with the **MIT License**. In plain English: do whatever you want with this code — use it, remix it, build something wild on top of it. Just don’t sue us if your GPU explodes or your cat walks across your keyboard mid-training and somehow invents AGI. Fair game? Cool. 🚀
