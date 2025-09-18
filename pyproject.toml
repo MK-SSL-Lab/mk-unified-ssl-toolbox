@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mk-ssl"
+dynamic = ["version", "readme"]
+description = "A Self-Supervised Learning Library"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Kianoosh Vadaei", email = "kia.vadaei@gmail.com" },
+  { name = "Melika Shirian" }
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Education",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+  "axial_positional_embedding",
+  "colorlog",
+  "editdistance",
+  "einops",
+  "huggingface_hub",
+  "jiwer",
+  "joblib",
+  "numpy",
+  "opencv-python",
+  "optuna",
+  "pandas",
+  "peft",
+  "Pillow",
+  "plotly",
+  "scikit-learn",
+  "torch",
+  "torch_geometric",
+  "torchaudio",
+  "torcheval",
+  "torchmetrics",
+  "torchvision",
+  "tqdm",
+  "transformers",
+  "wandb",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "ruff", "mypy"]
+
+[project.urls]
+Homepage = "https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox"
+Repository = "https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox"
+Issues = "https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "MK_SSL.__version__" }
+readme = { file = "README.md", content-type = "text/markdown" }
+
+[tool.setuptools.packages.find]
+include = ["MK_SSL*"]
+exclude = ["tests*", "docs*"]

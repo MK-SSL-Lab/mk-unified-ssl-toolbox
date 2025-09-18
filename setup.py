@@ -19,8 +19,8 @@ def load_version() -> str:
 if __name__ == "__main__":
     name = "MK_SSL"
     version = load_version()
-    author = "Audrina Ebrahimi & Kian Majlessi"
-    author_email = "audrina_ebrahimi@outlook.com"
+    author = "Kianoosh Vadaei & Melika Shirian"
+    author_email = "kia.vadaei@gmail.com"
     description = "A Self-Supervised Learning Library"
     with open("README.md", "r", encoding="utf-8") as fh:
         long_description = fh.read()
@@ -28,32 +28,49 @@ if __name__ == "__main__":
     python_requires = ">=3.10"
 
     install_requires = [
-        "numpy",
-        "torch",
-        "torchvision",
-        "torcheval",
-        "tqdm",
-        "tensorboard",
-        "einops",
         "axial_positional_embedding",
+        "colorlog",
+        "editdistance",
+        "einops",
+        "huggingface_hub",
+        "jiwer",
+        "joblib",
+        "numpy",
+        "opencv_python",
+        "optuna",
+        "pandas",
+        "peft",
+        "Pillow",
+        "plotly",
+        "scikit_learn",
+        "setuptools",
+        "torch",
+        "torch_geometric",
+        "torchaudio",
+        "torcheval",
+        "torchmetrics",
+        "torchvision",
+        "tqdm",
+        "transformers",
+        "wandb",
     ]
 
     packages = setuptools.find_packages()
 
     project_urls = {
-        "Github": "https://github.com/audrina-ebrahimi/MK_SSL",
+        "Github": "https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox",
     }
 
     classifiers = [
-        "Development Status :: 3 - Alpha",
-        "Intended Audience :: Education",
-        "Intended Audience :: Science/Research",
-        "Topic :: Scientific/Engineering :: Artificial Intelligence",
-        "Topic :: Scientific/Engineering :: Image Processing",
-        "Topic :: Software Development :: Libraries :: Python Modules",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
-        "License :: OSI Approved :: MIT License",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     ]
 
     setuptools.setup(

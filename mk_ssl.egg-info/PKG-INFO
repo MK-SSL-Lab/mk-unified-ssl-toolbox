@@ -1,0 +1,136 @@
+Metadata-Version: 2.4
+Name: mk-ssl
+Version: 0.1.0
+Summary: A Self-Supervised Learning Library
+Author: Melika Shirian
+Author-email: Kianoosh Vadaei <kia.vadaei@gmail.com>
+License: MIT License
+        
+        Copyright (c) 2025  MK-Unified-SSL-Toolbox
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        
+Project-URL: Homepage, https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox
+Project-URL: Repository, https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox
+Project-URL: Issues, https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/issues
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Science/Research
+Classifier: Intended Audience :: Education
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: axial_positional_embedding
+Requires-Dist: colorlog
+Requires-Dist: editdistance
+Requires-Dist: einops
+Requires-Dist: huggingface_hub
+Requires-Dist: jiwer
+Requires-Dist: joblib
+Requires-Dist: numpy
+Requires-Dist: opencv-python
+Requires-Dist: optuna
+Requires-Dist: pandas
+Requires-Dist: peft
+Requires-Dist: Pillow
+Requires-Dist: plotly
+Requires-Dist: scikit-learn
+Requires-Dist: torch
+Requires-Dist: torch_geometric
+Requires-Dist: torchaudio
+Requires-Dist: torcheval
+Requires-Dist: torchmetrics
+Requires-Dist: torchvision
+Requires-Dist: tqdm
+Requires-Dist: transformers
+Requires-Dist: wandb
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Dynamic: license-file
+Dynamic: requires-python
+
+<p align="center">
+  <img src="logo2.png" alt="Project Logo" width="300"/>
+</p>
+
+# MK-SSL
+
+**MK-SSL** is a modular and extensible Self-Supervised Learning (SSL) toolbox focused on audio and multimodal representation learning.
+
+> 🚧 This project is under active development. More details and documentation coming soon!
+
+## 🔧 Installation
+
+```bash
+# (Coming soon)
+```
+
+## 📂 Project Structure
+
+```
+MK_SSL/
+│
+├── audio/
+│   ├── models/
+│   ├── datasets/
+│   └── ...
+├── vision/
+├── multimodal/
+├── trainer/
+├── configs/
+└── ...
+```
+
+## 📜 License
+
+This project is released under the MIT License.
+
+---
+
+Stay tuned for more updates!
+
+---
+
+## 🧪 Usage Examples (Coming Soon)
+
+```python
+from MK_SSL.audio.models import SimCLRSpeech
+
+model = SimCLRSpeech(variant="base")
+# model.forward(...)
+```
+
+## 📦 Model Zoo (Coming Soon)
+
+Pretrained checkpoints and their benchmarks will be published here.
+
+## 🙌 Contributing
+
+Contributions are welcome! If you'd like to add a new model or feature, please open an issue or pull request.
+
+
+---
