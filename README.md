@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo2.png" alt="MK_SSL Logo" width="50%"/>
+  <img src="assets/logo.png" alt="MK_SSL Logo" width="50%"/>
 </p>
 
 <h1 align="center">
@@ -197,13 +197,17 @@ MK\_SSL is designed for **reproducible benchmarking** across domains.
 
 Wav2Vec2 pretrained with MK\_SSL achieves robust results on TESS, demonstrating transferability to emotion classification.
 
-![plot1](path/to/wav2vec_plot1.png)
-![plot2](path/to/wav2vec_plot2.png)
-![plot3](path/to/wav2vec_plot3.png)
+<img src="assets/libri_wav2vec_pretrained_vs_scratch_UMAP.png" alt="libri_wav2vec2" width="400"/>
+<img src="assets/timit_wav2vec2_pretrained_vs_scratch_UMAP.png" alt="timit_wav2vec2" width="400"/>
+<img src="assets/vctk_wav2vec2_pretrained_vs_scratch_UMAP.png" alt="vctk_wav2vec2" width="400"/>
 
-| Task        | Dataset | Model    | Accuracy |
-| ----------- | ------- | -------- | -------- |
-| Emotion Clf | TESS    | Wav2Vec2 | 92.1%    |
+
+| Task        | Dataset                                                                 | Model          | Accuracy |
+|-------------|-------------------------------------------------------------------------|----------------|----------|
+| Emotion Clf | [Speaker Recognition (2 speakers)](https://www.kaggle.com/datasets/kongaevans/speaker-recognition-dataset) | Speech SimCLR | 72.5%    |
+| Emotion Clf | [TESS](https://www.kaggle.com/datasets/ejlok1/toronto-emotional-speech-set-tess)             | COLA          | 88.39%   |
+| Speaker Clf | [TESS](https://www.kaggle.com/datasets/ejlok1/toronto-emotional-speech-set-tess)             | EAT           | 93.21%   |
+
 
 ---
 
@@ -211,7 +215,11 @@ Wav2Vec2 pretrained with MK\_SSL achieves robust results on TESS, demonstrating 
 
 Wav2CLIP learns powerful joint embeddings, enabling intuitive cross-modal retrieval.
 
-![wav2clip\_plot](path/to/wav2clip_visual.png)
+<img src="assets/wav2clip_zero_shot.png" alt="wav2clip_zero_shot" width="400"/>
+<img src="assets/wav2clip_dog_prediction.png" alt="wav2clip_dog_prediction" width="400"/>
+<img src="assets/wav2clip_cat_prediction.png" alt="wav2clip_cat_prediction" width="400"/>
+<img src="assets/wav2clip_sim.png" alt="wav2clip_sim" width="400"/>
+
 
 ---
 
@@ -221,8 +229,10 @@ MAE pretrained with MK\_SSL yields competitive performance with limited fine-tun
 
 | Setting        | Accuracy |
 | -------------- | -------- |
-| Linear Probing | 79.2%    |
-| Fine-tuned     | 84.6%    |
+| Linear Probing | 61.84%    |
+| Fine-tuned     | 87.98%    |
+
+<img src="assets/mae_result.png" alt="MAE Result" width="400"/>
 
 ---
 
@@ -230,12 +240,26 @@ MAE pretrained with MK\_SSL yields competitive performance with limited fine-tun
 
 GraphCL learns molecular-level embeddings competitive with supervised baselines.
 
-![graph\_plot](path/to/graph_plot.png)
+<img src="assets/graphcl-BBBP.png" alt="GraphCL BBBP" width="400"/>
 
-| Dataset | Accuracy           |
-| ------- | ------------------ |
-| BBBP    | 70.4%              |
-| Tox21   | 12-task avg: 75.8% |
+| Dataset | Accuracy           | AUC    |
+|---------|--------------------|--------|
+| BBBP    | 89.76%             | 92.62% |
+| Tox21   | task0: 96.61%      | –      |
+| Tox21   | task1: 97.25%      | –      |
+| Tox21   | task2: 87.28%      | –      |
+| Tox21   | task3: 91.39%      | –      |
+| Tox21   | task4: 86.73%      | –      |
+| Tox21   | task5: 96.30%      | –      |
+| Tox21   | task6: 96.11%      | –      |
+| Tox21   | task7: 76.65%      | –      |
+| Tox21   | task8: 94.61%      | –      |
+| Tox21   | task9: 91.71%      | –      |
+| Tox21   | task10: 83.11%     | –      |
+| Tox21   | task11: 88.78%     | –      |
+| Tox21   | **12-task avg: 90.54%** | – |
+
+
 
 ---
 
