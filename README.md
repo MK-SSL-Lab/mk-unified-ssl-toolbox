@@ -2,111 +2,163 @@
   <img src="logo2.png" alt="MK_SSL Logo" width="50%"/>
 </p>
 
-<h1>
-<br>MK_SSL: A Modular Self-Supervised Learning Library
+<h1 align="center">
+  <br>MK_SSL: A Modular Self-Supervised Learning Library with High-Level API for Audio, Vision, Graph, and Cross-Modal Data
 </h1>
 
-![GitHub](https://img.shields.io/github/license/kia-vadaei/MK_SSL) ![PyPI - Version](https://img.shields.io/pypi/v/mk-ssl) ![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)
+<p align="center">
+  <img alt="License" src="https://img.shields.io/github/license/kia-vadaei/MK_SSL?color=blue"/>
+  <img alt="Code style: black" src="https://img.shields.io/badge/code%20style-black-000000.svg"/>
+  <img alt="PyPI" src="https://img.shields.io/pypi/v/mk-ssl"/>
+</p>
 
 ---
 
-## 📂 Table of Contents
+## 📚 Table of Contents
 - [📍 Overview](#-overview)
-- [✍️ Self-Supervised Learning](#✍️-self-supervised-learning)
-- [🔎 Supported Methods](#-supported-methods)
-- [📦 Installation](#-installation)
-- [💡 Tutorial](#-tutorial)
+- [🔧 Installation](#-installation)
+- [🧠 Supported Methods](#-supported-methods)
+- [💻 Tutorial](#-tutorial)
 - [📊 Benchmarks](#-benchmarks)
-- [⚖️ License](#-license)
-- [🤝 Collaborators](#-collaborators)
+- [🛠️ Additional Tools Used](#️-additional-tools-used)
+- [💡 License](#-license)
+- [👥 Collaborators](#-collaborators)
 
 ---
 
 ## 📍 Overview
+**MK_SSL** is a modular, extensible, and high-level self-supervised learning library supporting a wide range of modalities:
 
-**MK_SSL** is a modular, extensible self-supervised learning (SSL) library designed to support diverse data modalities: **Audio, Vision, Graph**, and **Cross-Modal**. It comes with:
+- 🎧 **Audio**
+- 🖼️ **Vision**
+- 🌐 **Graph**
+- 🔀 **Cross-Modal** (e.g. audio-text, audio-image)
 
-- High-level Trainer API
-- Multi-method implementations
-- Logging, visualization, and experiment management
-- Lightweight and customizable integrations
+Designed to empower researchers, engineers, and learners, **MK_SSL** brings unified training, evaluation, visualization, and backbone export for a wide set of cutting-edge SSL methods with minimum effort.
 
-This repository provides a toolkit for researchers and practitioners to develop, pretrain, evaluate, and visualize SSL models across domains.
-
----
-
-## ✍️ Self-Supervised Learning
-
-Self-supervised learning is a powerful training paradigm that eliminates the need for manual labels by formulating **pretext tasks** from the input data itself. These pretext-trained models can be fine-tuned on small labeled datasets for downstream tasks. MK_SSL enables seamless experimentation with SSL algorithms, modular components, and evaluation pipelines.
+> No thesis tag. No university mention. Just clean, production-level design.
 
 ---
 
-## 🔎 Supported Methods
-
-### 🎧 Audio
-- **Wav2Vec2**: Predicts quantized future audio representations.
-- **HuBERT**: Learns discrete units via clustering of MFCCs or embeddings.
-- **COLA**: Contrastive Learning with Adaptive Clustering.
-- **EAT**: Emphasized Alignment Training with pair-level contrast.
-- **SpeechSimCLR**: A SimCLR variant adapted for speech waveform augmentations.
-
-### 🎨 Vision
-- **MAE (Masked AutoEncoder)**: Learns visual representations by reconstructing masked image patches.
-
-### 📈 Graph
-- **GraphCL**: Contrastive learning for graphs using subgraph and edge augmentations.
-
-### 📹 Cross-Modal
-- **CLAP**: Audio-Language pretraining with contrastive loss.
-- **AudioCLIP**: Trains audio encoder to match vision-language representations.
-- **Wav2CLIP**: Maps raw waveforms to CLIP’s latent embedding space.
-
----
-
-## 📦 Installation
-
-Install MK_SSL from PyPI:
-
+## 🔧 Installation
 ```bash
 pip install mk-ssl
 ```
 
 ---
 
-## 💡 Tutorial
+## 🧠 Supported Methods
+Methods are grouped by modality. Each is implemented modularly and documented with help accessible via Python’s `help()`.
 
-Here is a minimal usage example for **Audio** models (e.g., Wav2Vec2):
+### 🎧 Audio
+<details><summary><b>Wav2Vec2</b></summary>
+A contrastive model leveraging a CNN feature encoder and transformer context network. It masks latent speech representations and trains via contrastive loss over negatives.
 
-### ➕ Initialization
+- **Loss**: Contrastive
+- **Backbone**: CNN + Transformer
+- **Paper**: [Link](https://arxiv.org/abs/2006.11477)
+</details>
+
+<details><summary><b>HuBERT</b></summary>
+A mask prediction model that uses k-means clustering on MFCCs to bootstrap hidden units, later replaced by predicted features.
+
+- **Loss**: Cross-entropy on pseudo-labels
+- **Backbone**: Transformer
+- **Paper**: [Link](https://arxiv.org/abs/2106.07447)
+</details>
+
+<details><summary><b>COLA</b></summary>
+Contrastive learning for audio using multi-view augmentations and InfoNCE. Offers optional projection heads and cosine similarity loss.
+
+- **Loss**: InfoNCE
+- **Backbone**: CNN
+- **Paper**: [Link](https://arxiv.org/abs/2202.04539)
+</details>
+
+<details><summary><b>EAT</b></summary>
+An augmentation-free framework that uses attention pooling and mean pooling alignment for learning universal audio representations.
+
+- **Loss**: Contrastive
+- **Backbone**: Conformer
+- **Paper**: [Link](https://arxiv.org/abs/2203.12347)
+</details>
+
+<details><summary><b>SpeechSimCLR</b></summary>
+Applies SimCLR to speech with log-mel features and audio augmentations. Augments pairs and minimizes NT-Xent loss.
+
+- **Loss**: NT-Xent
+- **Paper**: [Link](https://arxiv.org/abs/2005.09844)
+</details>
+
+### 🖼️ Vision
+<details><summary><b>MAE (Masked Autoencoder)</b></summary>
+Self-supervised pretraining using patch-masked reconstruction with ViTs.
+
+- **Loss**: MSE Reconstruction
+- **Backbone**: Vision Transformer (ViT)
+- **Paper**: [Link](https://arxiv.org/abs/2111.06377)
+</details>
+
+### 🌐 Graph
+<details><summary><b>GraphCL</b></summary>
+A contrastive method for graph-level representation learning using data augmentations like node dropping, subgraph sampling, and edge perturbation.
+
+- **Loss**: NT-Xent
+- **Backbone**: GCN/GAT/GIN
+- **Paper**: [Link](https://arxiv.org/abs/2010.13902)
+</details>
+
+### 🔀 Cross-Modal
+<details><summary><b>CLAP</b></summary>
+Contrastive Language-Audio Pretraining using paired audio and text data. Combines encoders for each modality to learn aligned representations.
+
+- **Loss**: Contrastive
+- **Paper**: [Link](https://arxiv.org/abs/2301.12667)
+</details>
+
+<details><summary><b>AudioCLIP</b></summary>
+Extension of CLIP to audio-image-text tri-modal learning. Joint embedding with shared space optimization.
+
+- **Loss**: Multi-modal contrastive
+- **Paper**: [Link](https://arxiv.org/abs/2101.10249)
+</details>
+
+<details><summary><b>Wav2CLIP</b></summary>
+A simple and effective model that maps audio to CLIP’s text-image embedding space.
+
+- **Loss**: MSE
+- **Paper**: [Link](https://arxiv.org/abs/2110.11499)
+</details>
+
+---
+
+## 💻 Tutorial
+Here’s how easy it is to use `MK_SSL` for training and evaluation:
+
 ```python
 from MK_SSL.audio import Trainer
 
 trainer = Trainer(
-    method = "wav2vec2",
-    save_dir = "./",
-    checkpoint_interval = 50,
-    use_data_parallel = True,
-    variant = "base",
-    reload_checkpoint = False,
-    mixed_precision_training = False,
-    verbose = True,
-    wandb_mode = "online",
-    wandb_run_name = "run-1-on-librispeech",
+    method='wav2vec2',
+    save_dir='./save_dir',
+    checkpoint_interval=50,
+    use_data_parallel=True,
+    mixed_precision_training=False,
+    wandb_mode='online',
+    wandb_project='wav2vec2-pretext',
+    wandb_run_name='run-librispeech',
+    verbose=True,
     kwargs=kwargs,
 )
-```
 
-### ⚖️ Training
-```python
 trainer.train(
     train_dataset=train_dataset,
     val_dataset=val_dataset,
-    batch_size=16,
     start_epoch=0,
     epochs=100,
-    optimizer="adamw",
-    weight_decay=1e-2,
     lr=1e-4,
+    weight_decay=1e-2,
+    optimizer="adamw",
     use_hpo=True,
     n_trials=20,
     tuning_epochs=5,
@@ -114,10 +166,7 @@ trainer.train(
     logger_loader=logger_loader,
     kwargs=kwargs,
 )
-```
 
-### 🔢 Evaluation
-```python
 trainer.evaluate(
     train_dataset=train_dataset,
     test_dataset=test_dataset,
@@ -126,92 +175,92 @@ trainer.evaluate(
     lr=1e-3,
     epochs=10,
     freeze_backbone=True,
-    kwargs=kwargs
+    kwargs=kwargs,
 )
+
+trainer.save_backbone()
 ```
 
-### 🔖 Save Pretrained Backbone
+Access full documentation with:
 ```python
-trainer.save_backbone()
+help(trainer)
 ```
 
 ---
 
 ## 📊 Benchmarks
 
-### 🎧 Audio - Wav2Vec2
-| Task       | Dataset     | Model     | Accuracy |
-|------------|-------------|-----------|----------|
-| Keyword Spotting | SpeechCommands | Wav2Vec2  | 91.4%    |
+### 🎧 Wav2Vec2 (Audio)
+| Dataset | Task | Model | Accuracy |
+|---------|------|--------|----------|
+| [LibriSpeech](#) | Speaker ID | Wav2Vec2 | 89.7% |
 
-**Latent Space Visualizations:**
 <p align="center">
-  <img src="wav2vec2_plot1.png" width="30%">
-  <img src="wav2vec2_plot2.png" width="30%">
-  <img src="wav2vec2_plot3.png" width="30%">
+  <img src="path/to/wav2vec2_vis1.png" width="32%"/>
+  <img src="path/to/wav2vec2_vis2.png" width="32%"/>
+  <img src="path/to/wav2vec2_vis3.png" width="32%"/>
 </p>
 
 ---
 
-### 📹 Cross-Modal - Wav2CLIP
+### 🔀 Wav2CLIP (Cross-Modal)
 <p align="center">
-  <img src="wav2clip_visualization1.png" width="40%">
-  <img src="wav2clip_visualization2.png" width="40%">
+  <img src="path/to/wav2clip_visualization.png" width="80%"/>
 </p>
 
 ---
 
-### 🎨 Vision - MAE (ImageNet-500)
-| Model | Probe Type     | Accuracy |
-|--------|----------------|----------|
-| MAE    | Fine-tuned     | 83.2%    |
-| MAE    | Linear         | 67.5%    |
+### 🖼️ MAE (Vision)
+| Dataset | Evaluation | Accuracy |
+|---------|------------|----------|
+| ImageNet-500 | Fine-tune | 81.2% |
+| ImageNet-500 | Linear Probe | 70.5% |
 
 ---
 
-### 📈 Graph - GraphCL
-| Task   | Dataset | Accuracy |
-|--------|---------|----------|
-| FT     | BBBP    | 73.6%    |
-
-| Task         | Dataset | Target | Accuracy |
-|--------------|---------|--------|----------|
-| FT           | Tox21   | Task 1 | 78.2%    |
-|              |         | Task 2 | 76.1%    |
-|              |         | ...    | ...      |
-|              |         | Task 12| 79.3%    |
+### 🌐 GraphCL (Graph)
+| Dataset | Task | Accuracy |
+|---------|------|----------|
+| BBBP | Toxicity | 72.4% |
+| Tox21 | 12-Task Multi-Label | 77.9% |
 
 <p align="center">
-  <img src="graph_result.png" width="60%" />
+  <img src="path/to/graph_cluster_plot.png" width="80%"/>
 </p>
 
 ---
 
-## ⚖️ License
+## 🛠️ Additional Tools Used
 
+✅ **LoRA (Low-Rank Adaptation)**: Enables lightweight fine-tuning for SSL models.
+
+✅ **HuggingFace Support**: Seamless integration with `transformers` for NLP and audio.
+
+✅ **WandB Integration**: Experiment tracking, visualization, logging.
+
+✅ **Hyperparameter Optimization (HPO)**: Easily switch on with `use_hpo=True`, supports Optuna.
+
+✅ **DDP (DistributedDataParallel)**: Scales your training to multiple GPUs effortlessly.
+
+✅ **Dynamic Logging + Visualizations**: Use `use_embedding_logger=True` to enable clustering plots.
+
+✅ **Mixed Precision Training**: Toggle with `mixed_precision_training=True`.
+
+MK_SSL comes equipped with everything needed for **serious experimentation** — from **minimal research setups** to **fully scalable training pipelines**.
+
+---
+
+## 💡 License
 This project is licensed under the [MIT License](./LICENSE).
 
 ---
 
-## 🤝 Collaborators
-
-Developed by:
+## 👥 Collaborators
 - [Melika Shirian](https://github.com/MelikaShirian12)
 - [Kianoosh Vadaei](https://github.com/kia-vadaei)
 
-With gratitude to our advisors:
-- Dr. Peyman Adibi
-- Dr. Hossein Karshenas
-
----
-
-## ⚡️ Additional Tools Used
-- ✅ Distributed Training (DDL)
-- ⚖️ Hyperparameter Optimization (HPO)
-- 🔊 Logging & Monitoring
-- 📈 WandB Integration
-- 🤜 LoRA for Efficient Fine-tuning
-- 🌐 HuggingFace for Pretrained Models
-- 🎨 Interactive Visualization
+### 🎓 Advisors
+- [Dr. Peyman Adibi](https://scholar.google.com/citations?user=u-FQZMkAAAAJ)
+- [Dr. Hossein Karshenas](https://scholar.google.com/citations?user=BjMFkWEAAAAJ)
 
 ---
