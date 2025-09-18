@@ -224,7 +224,7 @@ Wav2Vec2 pretrained with MK\_SSL.
 
 Wav2CLIP learns powerful joint embeddings, enabling intuitive cross-modal retrieval.
 
-<img src="https://github.com/user-attachments/assets/474535a2-1e47-4932-8ea5-8997794e7137" alt="wav2clip_zero_shot" width="400"/>
+<img src="https://github.com/user-attachments/assets/bc7a8c0a-5d29-4163-a74f-0c34c7b73f1d" alt="wav2clip_zero_shot" width="400"/>
 <br>
 
 <img src="https://github.com/user-attachments/assets/78bb1dfd-72e1-48d1-8934-93c73dd808c9" alt="wav2clip_dog_prediction" width="400"/>
