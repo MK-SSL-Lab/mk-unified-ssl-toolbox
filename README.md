@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="MK_SSL Logo" width="50%"/>
+  <img src="assets/logo.png" alt="MK_SSL Logo" width="300"/>
 </p>
 
 <h1 align="center">
