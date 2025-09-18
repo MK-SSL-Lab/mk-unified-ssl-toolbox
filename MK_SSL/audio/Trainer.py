@@ -1353,7 +1353,7 @@ class Trainer:
         start_epoch: int = 0,
         epochs: int = 100,
         start_iteration: int = 0,
-        lr: float = 1e-4,
+        learning_rate: float = 1e-4,
         weight_decay: float = 1e-2,
         optimizer: str = "adamw",
         use_hpo: bool = False,
@@ -1372,13 +1372,15 @@ class Trainer:
             start_epoch (int, optional): Epoch to resume training from. Defaults to 0.
             epochs (int, optional): Total number of epochs. Defaults to 100.
             start_iteration (int, optional): Iteration to resume HuBERT training from. Defaults to 0.
-            lr (float, optional): Learning rate. Defaults to 1e-4.
+            learning_rate (float, optional): Learning rate. Defaults to 1e-4.
             weight_decay (float, optional): Weight decay (L2 regularization). Defaults to 1e-2.
             optimizer (str, optional): Optimizer to use ('adam', 'sgd', or 'adamw'). Defaults to 'adamw'.
             **kwargs: Additional keyword arguments passed to optimizer or loss, or HuBERT specific.
         """
         # Initialize W&B run at the very beginning of the main train method
         # This ensures console output is captured from the start and the run is properly set up.
+        lr = learning_rate # shorthand
+        
         if not hasattr(self, "_optuna_trial"):
             self.wandb_logger.init_run()
         else:
