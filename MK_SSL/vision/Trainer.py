@@ -846,6 +846,7 @@ class Trainer:
         learning_rate: float = 1e-3,
         batch_size: int = 256,
         fine_tuning_data_proportion: float = 1,
+        **kwargs,
     ):
         """
         Description:
@@ -966,6 +967,19 @@ class Trainer:
             collate_fn=self.safe_collate,
             worker_init_fn=self.worker_init_fn
         )
+
+        if self.method == 'mae':
+            self._evaluate_mae(
+                train_dataset = train_dataset,
+                test_dataset = test_dataset,
+                batch_size = batch_size,
+                epochs = epochs,
+                lr_head = learning_rate,
+                lr_backbone = learning_rate*0.1,          # used only in finetune
+                optimizer_cls=optimizer_eval,
+                **kwargs
+                )
+            return 0.0 
 
         total_batches_per_eval_epoch = len(
             train_loader_ds
@@ -1259,41 +1273,6 @@ class Trainer:
 
 
     
-
-    def run_evaluate_mae(
-        self,
-        train_dataset: torch.utils.data.Dataset,
-        test_dataset: torch.utils.data.Dataset,
-        num_classes: int,
-        batch_size: int = 64,
-        lr: float = 1e-3,
-        epochs: int = 10,
-        freeze_backbone: bool = True,
-        **kwargs,
-    ):
-        """
-        Evaluate the current model using the correct evaluation method.
-        """
-        if not self.wandb_logger.is_active:
-            self.wandb_logger.init_run("Evaluation")
-
-        self.logger.info(f"🔍 Starting evaluation for method: {self.method}")
-
-        self._evaluate_mae(
-            train_dataset,
-            test_dataset,
-            num_classes,
-            batch_size,
-            lr,
-            epochs,
-            freeze_backbone,
-            **kwargs,
-        )
-
-        self.logger.info(f"✅ Evaluation for '{self.method}' completed.")
-        if self.wandb_logger.is_active:
-            self.wandb_logger.log({f"{self.method}/status": "evaluation_complete"})
-            self.wandb_logger.finish()
 
     def load_checkpoint(self, checkpont_dir: str):
         self.model.load_state_dict(
