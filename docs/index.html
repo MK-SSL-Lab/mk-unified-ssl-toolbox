@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MK Unified SSL Toolbox - Modular Self-Supervised Learning Library</title>
+    <link rel="icon" href="logo.png" type="image/png">
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Scroll Progress Indicator -->
+    <div class="scroll-progress"></div>
+    
+    <!-- Particles Container -->
+    <div class="particles-container"></div>
+    
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <img src="logo.png" alt="MK Unified SSL Toolbox Logo" class="nav-logo-img">
+                <span>MK SSL Toolbox</span>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="#about">About</a></li>
+                <li><a href="#methods">Methods</a></li>
+                <li><a href="#features">Features</a></li>
+                <li><a href="#installation">Install</a></li>
+                <li><a href="#roadmap">Roadmap</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-container">
+            <div class="hero-content">
+                <div class="hero-logo">
+                    <img src="logo.png" alt="MK Unified SSL Toolbox Logo" class="hero-logo-img">
+                </div>
+                <h1 class="hero-title">
+                    MK Unified SSL Toolbox
+                </h1>
+                <p class="hero-subtitle">
+                    A research-driven SSL library with high-level APIs for audio, vision, graph, and cross-modal data — tightly integrated with HuggingFace and PyTorch Lightning.
+                </p>
+                <div class="hero-buttons">
+                    <a href="#installation" class="btn btn-primary">
+                        <i class="fas fa-download"></i>
+                        Get Started
+                    </a>
+                    <a href="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">
+                        <i class="fab fa-github"></i>
+                        View on GitHub
+                    </a>
+                </div>
+            </div>
+            <div class="hero-visual">
+                <div class="floating-card">
+                    <i class="fas fa-eye"></i>
+                    <span>Vision</span>
+                </div>
+                <div class="floating-card">
+                    <i class="fas fa-microphone"></i>
+                    <span>Audio</span>
+                </div>
+                <div class="floating-card">
+                    <i class="fas fa-layer-group"></i>
+                    <span>Multimodal</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- About Section -->
+    <section id="about" class="section">
+        <div class="container">
+            <h2 class="section-title">About the Library</h2>
+            <div class="about-content">
+                <div class="about-text">
+                    <p>
+                        Say hello to MK_SSL — a library born from late-night debugging, too much coffee, and the realization that SSL shouldn’t feel like solving a Rubik’s cube in the dark. It’s a unified playground and command center where you can test state-of-the-art methods, swap modalities with a single line, and keep your sanity intact. Everything is modular, transparent, and reproducible.
+                    </p>
+                    <p>
+                        Whether you’re a student, researcher, or practitioner, MK_SSL has your back. With HuggingFace and PyTorch Lightning baked in—plus distributed training, hyperparameter tuning, and lightweight fine-tuning—you’ll spend less time wrestling with setup and more time exploring ideas. In short: rigor meets playfulness. It also consolidates the earlier AK_SSL project; everything from AK_SSL is now accessible directly from MK_SSL with the same syntax in one unified framework.
+                    </p>
+                </div>
+                <div class="about-stats">
+                    <div class="stat-card">
+                        <div class="stat-number">3</div>
+                        <div class="stat-label">Domains</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">15+</div>
+                        <div class="stat-label">Methods</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">100%</div>
+                        <div class="stat-label">Modular</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Methods Section -->
+    <section id="methods" class="section">
+        <div class="container">
+            <h2 class="section-title">Supported Methods</h2>
+            <div class="methods-grid">
+                <!-- Vision Methods -->
+                <div class="method-category">
+                    <div class="category-header">
+                        <i class="fas fa-eye"></i>
+                        <h3>Vision</h3>
+                    </div>
+                    <div class="method-list">
+                        <div class="method-item">MAE (Masked AutoEncoder)</div>
+                        <div class="method-item">barlowtwins</div>
+                        <div class="method-item">byol</div>
+                        <div class="method-item">dino</div>
+                        <div class="method-item">mocov2</div>
+                        <div class="method-item">mocov3</div>
+                        <div class="method-item">simclr</div>
+                        <div class="method-item">simsiam</div>
+                        <div class="method-item">swav</div>
+                    </div>
+                </div>
+
+                <!-- Audio Methods -->
+                <div class="method-category">
+                    <div class="category-header">
+                        <i class="fas fa-microphone"></i>
+                        <h3>Audio</h3>
+                    </div>
+                    <div class="method-list">
+                        <div class="method-item">Wav2Vec2</div>
+                        <div class="method-item">HuBERT</div>
+                        <div class="method-item">SpeechSimCLR</div>
+                        <div class="method-item">COLA</div>
+                        <div class="method-item">EAT</div>
+                    </div>
+                </div>
+
+                <!-- Multimodal Methods -->
+                <div class="method-category">
+                    <div class="category-header">
+                        <i class="fas fa-layer-group"></i>
+                        <h3>Multimodal</h3>
+                    </div>
+                    <div class="method-list">
+                        <div class="method-item">CLAP</div>
+                        <div class="method-item">AudioCLIP</div>
+                        <div class="method-item">Wav2CLIP</div>
+                        <div class="method-item">clip</div>
+                        <div class="method-item">albef</div>
+                        <div class="method-item">simvlm</div>
+                        <div class="method-item">slip</div>
+                        <div class="method-item">uniter</div>
+                        <div class="method-item">vse</div>
+                    </div>
+                </div>
+
+                <!-- Graph Methods -->
+                <div class="method-category">
+                    <div class="category-header">
+                        <i class="fas fa-project-diagram"></i>
+                        <h3>Graph</h3>
+                    </div>
+                    <div class="method-list">
+                        <div class="method-item">GraphCL</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section id="features" class="section">
+        <div class="container">
+            <h2 class="section-title">Features</h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fas fa-puzzle-piece"></i>
+                    </div>
+                    <h3>High-level APIs</h3>
+                    <p>High-level APIs for rapid experimentation</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fas fa-brain"></i>
+                    </div>
+                    <h3>PyTorch Lightning</h3>
+                    <p>Integrated with PyTorch Lightning</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fab fa-huggingface"></i>
+                    </div>
+                    <h3>HuggingFace</h3>
+                    <p>Compatibility with pretrained transformers & backbones</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fas fa-server"></i>
+                    </div>
+                    <h3>Distributed Training</h3>
+                    <p>Multi-GPU/multi-node deep learning</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fas fa-magic"></i>
+                    </div>
+                    <h3>LoRA Fine-tuning</h3>
+                    <p>Parameter-efficient fine-tuning support</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fas fa-chart-line"></i>
+                    </div>
+                    <h3>Optuna HPO</h3>
+                    <p>Hyperparameter optimization with Optuna</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fas fa-eye"></i>
+                    </div>
+                    <h3>Embedding Visualizations</h3>
+                    <p>Dynamic visualizations for embeddings (text only)</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fas fa-chart-bar"></i>
+                    </div>
+                    <h3>Clean Logging</h3>
+                    <p>Clean, customizable logging system</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fas fa-balance-scale"></i>
+                    </div>
+                    <h3>License</h3>
+                    <p>MIT License</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Trainer Utilities Section -->
+    <section class="section">
+        <div class="container">
+            <h2 class="section-title">Trainer Utilities</h2>
+            <div class="trainer-content">
+                <div class="trainer-text">
+                    <h3>Training API</h3>
+                    <p>Use <code>trainer.train(...)</code> to launch experiments with clear, composable arguments.</p>
+                    
+                    <h3>Parameters at a Glance</h3>
+                    <p>Control datasets, batch size, epochs, optimizer, HPO, and logging from a single call.</p>
+                    
+                    <h3>Results & Logging</h3>
+                    <p>Track runs with WandB and text-based embedding summaries out of the box.</p>
+                </div>
+                <div class="trainer-visual">
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span>Example Usage</span>
+                        </div>
+                        <pre><code>trainer.train(
+    train_dataset=train_dataset,
+    val_dataset=val_dataset,
+    batch_size=16,
+    epochs=100,
+    lr=1e-4,
+    weight_decay=1e-2,
+    optimizer="adamw",
+    use_hpo=True,
+    n_trials=20,
+    tuning_epochs=5,
+    use_embedding_logger=True,
+    logger_loader=logger_loader
+)</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Evaluation Tools Section -->
+    <section class="section">
+        <div class="container">
+            <h2 class="section-title">Evaluation Tools</h2>
+            <div class="evaluation-grid">
+                <div class="eval-card">
+                    <div class="eval-icon">
+                        <i class="fas fa-search"></i>
+                    </div>
+                    <h3>Linear Probing</h3>
+                    <p>Evaluate learned representations with linear classifiers</p>
+                </div>
+
+                <div class="eval-card">
+                    <div class="eval-icon">
+                        <i class="fas fa-cogs"></i>
+                    </div>
+                    <h3>Full Fine-tuning</h3>
+                    <p>Complete model fine-tuning for downstream tasks</p>
+                </div>
+
+                <div class="eval-card">
+                    <div class="eval-icon">
+                        <i class="fas fa-chart-scatter"></i>
+                    </div>
+                    <h3>Embedding Analysis</h3>
+                    <p>Dimensionality reduction for embedding analysis (text summaries only)</p>
+                </div>
+
+                <div class="eval-card">
+                    <div class="eval-icon">
+                        <i class="fas fa-project-diagram"></i>
+                    </div>
+                    <h3>UMAP Projection</h3>
+                    <p>Non-linear dimensionality reduction (text summaries only)</p>
+                </div>
+
+                <div class="eval-card">
+                    <div class="eval-icon">
+                        <i class="fas fa-play-circle"></i>
+                    </div>
+                    <h3>Embedding Summaries</h3>
+                    <p>Dynamic summaries of training progress</p>
+                </div>
+
+                <div class="eval-card">
+                    <div class="eval-icon">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                    <h3>evaluate() Functions</h3>
+                    <p>Standardized evaluation across all domains</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Installation Section -->
+    <section id="installation" class="section">
+        <div class="container">
+            <h2 class="section-title">Installation</h2>
+            <div class="installation-content">
+                <div class="install-methods">
+                    <div class="install-card">
+                        <div class="install-header">
+                            <i class="fab fa-python"></i>
+                            <h3>pip</h3>
+                        </div>
+                        <div class="code-block">
+                            <pre><code>pip install mk-ssl</code></pre>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="source-links">
+                    <a href="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox" class="source-link" target="_blank" rel="noopener noreferrer">
+                        <i class="fab fa-github"></i>
+                        <span>Source Code</span>
+                    </a>
+                    <a href="https://pypi.org/project/mk-ssl/" class="source-link" target="_blank" rel="noopener noreferrer">
+                        <i class="fas fa-download"></i>
+                        <span>Releases</span>
+                    </a>
+                    <a href="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/issues" class="source-link" target="_blank" rel="noopener noreferrer">
+                        <i class="fas fa-bug"></i>
+                        <span>Issues</span>
+                    </a>
+                    <div class="requirements-note">Python ≥ 3.8, PyTorch ≥ 1.12 (CUDA GPU recommended)</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Roadmap Section -->
+    <section id="roadmap" class="section">
+        <div class="container">
+            <h2 class="section-title">Roadmap</h2>
+            <div class="roadmap-timeline">
+                <div class="roadmap-item">
+                    <div class="roadmap-icon">
+                        <i class="fas fa-network-wired"></i>
+                    </div>
+                    <div class="roadmap-content">
+                        <h3>Distributed Training</h3>
+                        <p>DDP and DeepSpeed integration for large-scale training</p>
+                    </div>
+                </div>
+
+                <div class="roadmap-item">
+                    <div class="roadmap-icon">
+                        <i class="fas fa-terminal"></i>
+                    </div>
+                    <div class="roadmap-content">
+                        <h3>CLI Launcher Tools</h3>
+                        <p>Command-line interface for easy experiment management</p>
+                    </div>
+                </div>
+
+                <div class="roadmap-item">
+                    <div class="roadmap-icon">
+                        <i class="fas fa-globe"></i>
+                    </div>
+                    <div class="roadmap-content">
+                        <h3>Web-based Monitoring</h3>
+                        <p>Real-time experiment monitoring dashboard</p>
+                    </div>
+                </div>
+
+                <div class="roadmap-item">
+                    <div class="roadmap-icon">
+                        <i class="fas fa-trophy"></i>
+                    </div>
+                    <div class="roadmap-content">
+                        <h3>More Evaluation Benchmarks</h3>
+                        <p>Comprehensive benchmark suite for SSL methods</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Credits & Acknowledgment Section -->
+    <section class="credits-section">
+        <div class="container">
+            <div class="credits-content">
+                <div class="credits-divider">
+                    <i class="fas fa-heart"></i>
+                </div>
+                <h2 class="credits-title">Credits & Acknowledgment</h2>
+                <div class="credits-grid">
+                    <div class="authors-card">
+                        <div class="authors-header">
+                            <i class="fas fa-users"></i>
+                            <h3>Authors</h3>
+                        </div>
+                        <div class="authors-list">
+                            <div class="author-item">
+                                <i class="fas fa-user-graduate"></i>
+                                <span><a href="https://github.com/kia-vadaei" target="_blank" rel="noopener noreferrer">Kianoosh Vadaei</a></span>
+                            </div>
+                            <div class="author-item">
+                                <i class="fas fa-user-graduate"></i>
+                                <span><a href="https://github.com/MelikaShirian12" target="_blank" rel="noopener noreferrer">Melika Shirian</a></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="acknowledgment-card">
+                        <div class="acknowledgment-header">
+                            <i class="fas fa-handshake"></i>
+                            <h3>Special Thanks</h3>
+                        </div>
+                        <div class="acknowledgment-content">
+                            <p>
+                                Thanks to <strong><a href="https://scholar.google.com/citations?user=u-FQZMkAAAAJ" target="_blank" rel="noopener noreferrer">Dr. Peyman Adibi</a></strong> and <strong><a href="https://scholar.google.com/citations?user=BjMFkWEAAAAJ" target="_blank" rel="noopener noreferrer">Dr. Hossein Karshenas</a></strong> 
+                                for their invaluable guidance and support throughout this project.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <div class="footer-logo">
+                        <img src="logo.png" alt="MK Unified SSL Toolbox Logo" class="footer-logo-img">
+                    </div>
+                    <h3>MK Unified SSL Toolbox</h3>
+                    <p>Advancing self-supervised learning across domains</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Links</h4>
+                    <ul>
+                        <li><a href="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+                        <li><a href="#installation">Installation</a></li>
+                        <li><a href="#methods">Methods</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Community</h4>
+                    <ul>
+                        <li><a href="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/issues" target="_blank" rel="noopener noreferrer">Issues</a></li>
+                        <li><a href="https://github.com/MK-SSL-Lab/mk-unified-ssl-toolbox/pulls" target="_blank" rel="noopener noreferrer">Contributions</a></li>
+                        <li><a href="#roadmap">Roadmap</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 MK Unified SSL Toolbox. Built with ❤️ for the research community.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html> 
