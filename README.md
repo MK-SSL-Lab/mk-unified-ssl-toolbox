@@ -332,6 +332,3 @@ Our combined efforts shaped the design, implementation, and structure of **MK\_S
 
 ---
 
-## 📜 License
-
-We’re keeping things chill with the **MIT License**. In plain English: do whatever you want with this code — use it, remix it, build something wild on top of it. Just don’t sue us if your GPU explodes or your cat walks across your keyboard mid-training and somehow invents AGI. Fair game? Cool. 🚀
