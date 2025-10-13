@@ -1,6 +1,35 @@
-MIT License
+Proprietary License
 
-Copyright (c) 2025  MK-Unified-SSL-Toolbox
+Copyright (c) 2025 MK-Unified-SSL-Toolbox
+All rights reserved.
+
+This software and associated documentation files (the “Software”) are the
+intellectual property of MK-Unified-SSL-Toolbox and may not be copied,
+modified, merged, published, distributed, sublicensed, or sold, in whole or in
+part, without the express written permission of the copyright holder.
+
+The Software is provided solely for internal use by authorized licensees under
+a valid license agreement. Unauthorized use, reproduction, or distribution is
+strictly prohibited.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+---------------------------------------------------------------------------
+Third-Party Components
+---------------------------------------------------------------------------
+
+This product includes code from the following open-source component(s):
+
+Component: AK_SSL
+License: MIT License
+Copyright (c) 2024 Audrina Ebrahimi and Kian Majlessi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
