@@ -4,7 +4,9 @@ import inspect
 from torch import nn
 from dataclasses import dataclass
 from typing import Callable, Optional, Dict, List, Tuple, Any
+from peft import get_peft_model
 
+from MK_SSL.utils.lora_config import LoRAArguments
 
 # =========================
 # Utilities
@@ -133,7 +135,16 @@ class GenericSSLTrainer:
         view_loss_reduction: str = "mean",           # "mean" | "sum"
         num_views: int = 2,                          # used by the default build_views
         clone_views: bool = True,                    # clone tensors to avoid in-place cross-talk
-        loss_adapter: Callable = default_loss_adapter
+        loss_adapter: Callable = default_loss_adapter,
+
+        #loRA
+        use_lora: bool = False,
+        r=8,                      
+        lora_alpha=32,
+        target_modules=["query", "key", "value"],  
+        lora_dropout=0.1,
+        bias="none",
+        task_type="FEATURE_EXTRACTION",
     ):
         """
         Trainer class for generic (self-)supervised training.
@@ -178,6 +189,21 @@ class GenericSSLTrainer:
         self.num_views = max(1, int(num_views))
         self.clone_views = bool(clone_views)
         self.build_views_fn = build_views_fn or self._default_build_views
+
+
+        self.use_lora = use_lora
+        if self.use_lora:
+            lora_args = LoRAArguments(
+                r=8,                       # a bit larger than default
+                lora_alpha=32,
+                target_modules=["query", "key", "value"],  # typical for BERT attention
+                lora_dropout=0.1,
+                bias="none",
+                task_type="FEATURE_EXTRACTION",
+            )
+            peft_config = lora_args.to_peft_config()
+            self.model = get_peft_model(self.model, peft_config)
+
 
     # ---------------------
     # Training loop

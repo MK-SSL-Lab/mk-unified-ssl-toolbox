@@ -1,6 +1,7 @@
 import torch
-import copy
 import torch.nn as nn
+import torchvision.models as models
+import copy
 
 from MK_SSL.vision.models.modules.heads import BYOLPredictionHead, BYOLProjectionHead
 from MK_SSL.vision.models.modules.losses import BYOLLoss
@@ -9,79 +10,100 @@ from MK_SSL.vision.models.utils import register_method
 
 
 class BYOL(nn.Module):
-    """
-    BYOL: Bootstrap your own latent: A new approach to self-supervised Learning
-    Link: https://arxiv.org/abs/2006.07733
-    Implementation: https://github.com/deepmind/deepmind-research/tree/master/byol
+    """BYOL: Bootstrap Your Own Latent - A New Approach to Self-Supervised Learning.
+
+    Reference:
+        - Paper: https://arxiv.org/abs/2006.07733
+        - Code: https://github.com/deepmind/deepmind-research/tree/master/byol
+
+    Args:
+        backbone (nn.Module, optional): Encoder backbone. Defaults to ResNet-50.
+        feature_size (int, optional): Feature dimension of backbone output. Defaults to 2048.
+        projection_dim (int): Output dimension of the projection head. Defaults to 256.
+        hidden_dim (int): Hidden layer size in projection/prediction heads. Defaults to 4096.
+        moving_average_decay (float): EMA decay for the target encoder. Defaults to 0.99.
+        **kwargs: Additional arguments.
     """
 
     def __init__(
         self,
-        backbone: nn.Module,
-        feature_size: int,
+        backbone: nn.Module = None,
+        feature_size: int = 2048,
         projection_dim: int = 256,
         hidden_dim: int = 4096,
         moving_average_decay: float = 0.99,
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
-        self.backbone = backbone
-        self.feature_size = feature_size
-        self.projection_dim = projection_dim
+
+        if backbone is None:
+            base_model = models.resnet50(weights=None)
+            backbone = nn.Sequential(*list(base_model.children())[:-1])
+            feature_size = 2048
+
+        self.encoder_backbone = backbone
+        self.feat_dim = feature_size
+        self.proj_dim = projection_dim
         self.hidden_dim = hidden_dim
-        self.moving_average_decay = moving_average_decay
-        self.projection_head = BYOLProjectionHead(
-            feature_size, hidden_dim, projection_dim
-        )
-        self.prediction_head = BYOLPredictionHead(
-            projection_dim, hidden_dim, projection_dim
-        )
+        self.momentum = moving_average_decay
 
-        self.online_encoder = self.encoder = nn.Sequential(
-            self.backbone, self.projection_head
-        )
+        # Online network
+        self.projector = BYOLProjectionHead(self.feat_dim, self.hidden_dim, self.proj_dim)
+        self.predictor = BYOLPredictionHead(self.proj_dim, self.hidden_dim, self.proj_dim)
+        self.online_encoder = nn.Sequential(self.encoder_backbone, self.projector)
 
-        self.target_encoder = copy.deepcopy(
-            self.online_encoder
-        )  # target must be a deepcopy of online, since we will use the backbone trained by online
-
-        self._init_target_encoder()
-
-    def _init_target_encoder(self):
-        for param_o, param_t in zip(
-            self.online_encoder.parameters(), self.target_encoder.parameters()
-        ):
-            param_t.data.copy_(param_o.data)
-            param_t.requires_grad = False
+        # Target network
+        self.target_encoder = copy.deepcopy(self.online_encoder)
+        self._initialize_target_encoder()
 
     @torch.no_grad()
-    def _momentum_update_target_encoder(self):
-        for param_o, param_t in zip(
+    def _initialize_target_encoder(self):
+        """Initializes target encoder weights from online encoder."""
+        for param_online, param_target in zip(
             self.online_encoder.parameters(), self.target_encoder.parameters()
         ):
-            param_t.data = self.moving_average_decay * param_t.data + (1.0 - self.moving_average_decay) * param_o.data
+            param_target.data.copy_(param_online.data)
+            param_target.requires_grad = False
 
-    def forward(self, x0: torch.Tensor, x1: torch.Tensor):
-        z0_o, z1_o = self.online_encoder(x0), self.online_encoder(x1)
-        p0_o, p1_o = self.prediction_head(z0_o), self.prediction_head(z1_o)
+    @torch.no_grad()
+    def _update_target_encoder(self):
+        """Momentum update for the target encoder."""
+        for param_online, param_target in zip(
+            self.online_encoder.parameters(), self.target_encoder.parameters()
+        ):
+            param_target.data = (
+                self.momentum * param_target.data
+                + (1.0 - self.momentum) * param_online.data
+            )
+
+    def forward(self, view_1: torch.Tensor, view_2: torch.Tensor):
+        """Forward pass for both views through online and target encoders."""
+        # Online pathway
+        proj_1_online = self.online_encoder(view_1)
+        proj_2_online = self.online_encoder(view_2)
+        pred_1_online = self.predictor(proj_1_online)
+        pred_2_online = self.predictor(proj_2_online)
+
+        # Target pathway (no gradient updates)
         with torch.no_grad():
-            self._momentum_update_target_encoder()
-            z0_t, z1_t = self.target_encoder(x0), self.target_encoder(x1)
+            self._update_target_encoder()
+            proj_1_target = self.target_encoder(view_1)
+            proj_2_target = self.target_encoder(view_2)
 
-        return (p0_o, z0_t), (p1_o, z1_t)
+        return (pred_1_online, proj_1_target), (pred_2_online, proj_2_target)
 
 
 register_method(
-    name= "byol",
-    model_cls= BYOL,
-    loss= BYOLLoss,
-    transformation= SimCLRViewTransform,
-    logs=lambda model, loss: (
+    name="byol",
+    model_cls=BYOL,
+    loss=BYOLLoss,
+    transformation=SimCLRViewTransform,
+    logs=lambda model, loss_fn: (
         "\n"
         "---------------- BYOL Configuration ----------------\n"
-        f"Projection Dimension         : {model.projection_dim}\n"
+        f"Projection Dimension         : {model.proj_dim}\n"
         f"Projection Hidden Dimension  : {model.hidden_dim}\n"
-        f"Moving average decay         : {model.moving_average_decay}\n"
+        f"Moving average decay         : {model.momentum}\n"
         "Loss                         : BYOL Loss\n"
         "Transformation               : SimCLRViewTransform\n"
         "Transformation prime         : SimCLRViewTransform"
