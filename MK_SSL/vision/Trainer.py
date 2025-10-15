@@ -44,8 +44,8 @@ class Trainer:
     def __init__(
         self,
         method: str,
-        backbone: nn.Module,
-        image_size: int,
+        backbone: nn.Module = None,
+        image_size: int = 224,
         save_dir: str = ".",
         feature_size: Optional[int] = None,
         checkpoint_interval: int = 10,
@@ -518,9 +518,7 @@ class Trainer:
                 self.logger.info("Embedding animation logged to Weights & Biases.")
 
         self.logger.info("MAE training complete.")
-
-
-
+        return epoch_loss
 
     def __del__(self):
         pass  # No need for TensorBoard writer close if not used
@@ -528,7 +526,7 @@ class Trainer:
     def get_backbone(self):
         return self.model.backbone
 
-    def train_one_epoch(
+    def _train_one_epoch(
         self, tepoch, optimizer, epoch_idx, total_batches_per_epoch
     ):  # Added epoch_idx, total_batches_per_epoch
         loss_hist_train = 0.0
@@ -595,6 +593,92 @@ class Trainer:
             tepoch.set_postfix(loss=loss.item())
 
         return loss_hist_train
+
+
+    def _train_common(
+        self,
+        train_loader: torch.utils.data.DataLoader,
+        optimizer: torch.optim.Optimizer,
+        epochs: int,
+        start_epoch: int,
+        use_embedding_logger: Optional[bool] = True,   # kept for symmetry with _train_mae
+        logger_loader: Optional[torch.utils.data.DataLoader] = None,
+    ):
+        """
+        Runs the full pretext training loop (non-MAE methods).
+
+        Returns:
+            final_epoch_loss_avg (float): Average loss of the final completed epoch.
+            last_epoch_idx (int): 1-indexed epoch number of the final completed epoch.
+        """
+        total_batches_per_epoch = len(train_loader)
+        self.model.train()
+
+        # Optionally reload latest checkpoint and continue
+        if self.reload_checkpoint:
+            start_epoch = self._reload_latest_checkpoint() + 1
+
+        final_epoch_loss_avg = None
+        last_epoch_idx = start_epoch - 1
+
+        for epoch in tqdm(
+            range(start_epoch - 1, epochs),
+            unit="epoch",
+            desc="Pretext Task Model Training",
+            leave=True,
+        ):
+            with tqdm(train_loader, unit="batch", leave=False) as tepoch:
+                tepoch.set_description(f"Epoch {epoch + 1}")
+                loss_sum = self._train_one_epoch(
+                    tepoch=tepoch,
+                    optimizer=optimizer,
+                    epoch_idx=epoch,
+                    total_batches_per_epoch=total_batches_per_epoch,
+                )
+
+            # Optuna support (if active)
+            if hasattr(self, "_optuna_trial"):
+                self._optuna_trial.report(loss_sum, epoch)
+                if self._optuna_trial.should_prune():
+                    raise optuna.TrialPruned()
+
+            # Epoch-complete logging
+            epoch_step = (epoch + 1) * len(train_loader)
+            final_epoch_loss_avg = loss_sum / len(train_loader)
+            last_epoch_idx = epoch + 1
+
+            if self.wandb_logger.is_active:
+                self.wandb_logger.log(
+                    {
+                        f"{self.method.upper()}/Train/Epoch_Loss": final_epoch_loss_avg,
+                        f"{self.method.upper()}/Train/LR": optimizer.param_groups[0]["lr"],
+                        "epoch": epoch + 1,
+                    },
+                    step=epoch_step,
+                )
+
+            # Periodic checkpoints (+ W&B artifact)
+            if (epoch + 1) % self.checkpoint_interval == 0:
+                model_path = (
+                    self.checkpoint_path
+                    + f"/{self.method}_model_{self.timestamp}_epoch{epoch + 1}.pth"
+                )
+                torch.save(self.model.state_dict(), model_path)
+                self.logger.info(f"Model checkpoint saved: {model_path}")
+                if self.wandb_logger.is_active:
+                    self.wandb_logger.save_artifact(
+                        model_path,
+                        name=f"{self.method}-model-epoch-{epoch + 1}",
+                        type="model",
+                        metadata={
+                            "epoch": epoch + 1,
+                            "loss": final_epoch_loss_avg,
+                        },
+                    )
+
+        return final_epoch_loss_avg, last_epoch_idx
+
+
 
     def train(
         self,
@@ -726,7 +810,7 @@ class Trainer:
 
         if self.method == "mae":
             
-            self._train_mae(
+            final_epoch_loss_avg = self._train_mae(
                 train_loader=train_loader,
                 optimizer=optimizer,
                 epochs=epochs,
@@ -736,71 +820,15 @@ class Trainer:
             )
 
         else:
-            total_batches_per_epoch = len(
-                train_loader
-            )  # Used for global step calculation
+            final_epoch_loss_avg, _ = self._train_common(
+                train_loader=train_loader,
+                optimizer=optimizer,
+                epochs=epochs,
+                start_epoch=start_epoch,
+                use_embedding_logger=use_embedding_logger,
+                logger_loader=logger_loader,
+            )
 
-            self.model.train()
-
-            if self.reload_checkpoint:
-                start_epoch = self._reload_latest_checkpoint() + 1
-
-            for (
-                epoch
-            ) in tqdm(  # epoch is 0-indexed loop variable (range(start-1, epochs))
-                range(start_epoch - 1, epochs),
-                unit="epoch",
-                desc="Pretext Task Model Training",
-                leave=True,
-            ):
-                with tqdm(train_loader, unit="batch", leave=False) as tepoch:
-                    tepoch.set_description(f"Epoch {epoch + 1}")
-                    loss_per_epoch = self.train_one_epoch(
-                        tepoch, optimizer, epoch, total_batches_per_epoch
-                    )  # Pass epoch_idx, total_batches_per_epoch
-
-                # To stop from full training for optuna
-                if hasattr(self, "_optuna_trial"):
-                    self._optuna_trial.report(loss_per_epoch, epoch)
-                    if self._optuna_trial.should_prune():
-                        raise optuna.TrialPruned()
-
-                epoch_step = (epoch + 1) * len(train_loader)        
-
-                # Log epoch-level metrics to W&B
-                if self.wandb_logger.is_active:
-                    self.wandb_logger.log(
-                        {
-                            f"{self.method.upper()}/Train/Epoch_Loss": loss_per_epoch
-                            / len(train_loader),
-                            f"{self.method.upper()}/Train/LR": optimizer.param_groups[
-                                0
-                            ]["lr"],
-                            "epoch": epoch + 1,  
-                        },
-                        step=epoch_step
-                    )  # Use epoch + 1 for 1-indexed epoch step
-
-                if (epoch + 1) % self.checkpoint_interval == 0:
-                    model_path = (
-                        self.checkpoint_path
-                        + "/{}_model_{}_epoch{}.pth".format(  # Added / for path joining
-                            self.method, self.timestamp, epoch + 1
-                        )
-                    )
-                    torch.save(self.model.state_dict(), model_path)
-                    self.logger.info(f"Model checkpoint saved: {model_path}")
-                    # Save model checkpoint as W&B artifact
-                    if self.wandb_logger.is_active:
-                        self.wandb_logger.save_artifact(
-                            model_path,
-                            name=f"{self.method}-model-epoch-{epoch+1}",
-                            type="model",
-                            metadata={
-                                "epoch": epoch + 1,
-                                "loss": loss_per_epoch / len(train_loader),
-                            },
-                        )
 
         # Save final model after all epochs
         # Note: 'epoch' here will be the last value from the loop, which is `epochs - 1` (0-indexed)
@@ -821,7 +849,7 @@ class Trainer:
                 type="model",
                 metadata={
                     "epochs_trained": epochs,
-                    "final_loss": loss_per_epoch / len(train_loader),
+                    "final_loss": final_epoch_loss_avg,
                 },  # Use final epoch's loss
             )
 
