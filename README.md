@@ -10,7 +10,7 @@ MK_SSL: A Modular Self-Supervised Learning Library for Audio, Vision, Graph, and
 </h1>
 
 <p align="center">
-  <em>A research-driven library with high-level APIs, tightly integrated with HuggingFace, PyTorch Lightning, and state-of-the-art tools for self-supervised learning.</em>
+  <em>A research-driven library with high-level APIs, tightly integrated with HuggingFace, and state-of-the-art tools for self-supervised learning.</em>
 </p>
 
 <p align="center">
